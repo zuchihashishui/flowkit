@@ -1,0 +1,16 @@
+{
+  "name": "flowkit-studio",
+  "version": "0.3.1",
+  "private": true,
+  "description": "Flowkit desktop studio",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check main.cjs && node --check preload.cjs && node --check ui/app.js && node --check ui/storyboard.js",
+    "test": "node --test tests/*.test.cjs"
+  },
+  "devDependencies": {
+    "electron": "^40.0.0",
+    "jsdom": "^30.1.1"
+  }
+}

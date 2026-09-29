@@ -1,0 +1,7 @@
+1
+00:00:00,000 --> 00:00:08,400
+A paper boat rests on the surface of a quiet pond.
+
+2
+00:00:08,400 --> 00:00:15,200
+A light breeze carries it toward the opposite bank.
