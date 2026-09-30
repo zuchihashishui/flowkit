@@ -1,6 +1,7 @@
 """Durable desktop jobs. No automatic resubmission of uncertain generations."""
 import asyncio
 import json
+import logging
 import sqlite3
 import time
 import uuid
@@ -19,6 +20,8 @@ from agent.config import OUTPUT_DIR, BASE_DIR
 from agent.api import flow, tts
 from agent.services.flow_client import get_flow_client
 from agent.services.omni_flash import extract_omni_workflows
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/desktop", tags=["desktop"])
 ROOT = OUTPUT_DIR / "desktop"
@@ -302,10 +305,10 @@ async def import_voice(name: str = Form(...), text: str = Form(...), consent: bo
         raise HTTPException(400, "Provide the sample transcript and confirm voice usage permission.")
     if name in tts._load_templates_meta():
         raise HTTPException(409, "A voice with this name already exists.")
-    tts.TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
     temp = tts.TEMPLATES_DIR / (str(uuid.uuid4()) + ".upload")
     dest = tts.TEMPLATES_DIR / (name + "_" + uuid.uuid4().hex[:8] + ".wav")
     try:
+        tts.TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
         size = 0
         with temp.open("wb") as out:
             while chunk := await audio.read(262144):
@@ -324,12 +327,28 @@ async def import_voice(name: str = Form(...), text: str = Form(...), consent: bo
         tts._save_templates_meta(meta)
         return meta[name]
     except Exception as exc:
-        dest.unlink(missing_ok=True)
+        logger.exception("Voice import failed: %s", name)
+        try:
+            dest.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Cannot remove failed voice file: %s", dest)
         if isinstance(exc, HTTPException):
             raise
-        raise HTTPException(400, "Cannot import audio. Check the file and FFmpeg installation.") from exc
+        if isinstance(exc, subprocess.CalledProcessError):
+            detail = (exc.stderr or b"").decode("utf-8", errors="replace")[-1200:]
+            raise HTTPException(400, f"FFmpeg could not decode this audio: {detail}") from exc
+        if isinstance(exc, subprocess.TimeoutExpired):
+            raise HTTPException(408, "Audio conversion or validation timed out. Try a short 3-10 second sample.") from exc
+        if isinstance(exc, FileNotFoundError):
+            raise HTTPException(500, f"Required file or executable not found: {exc}. Check FFmpeg and FFprobe in the backend PATH.") from exc
+        if isinstance(exc, OSError):
+            raise HTTPException(500, f"Cannot write voice files in {tts.TEMPLATES_DIR}: {exc}") from exc
+        raise HTTPException(400, f"Cannot import audio: {exc}") from exc
     finally:
-        temp.unlink(missing_ok=True)
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Cannot remove temporary upload: %s", temp)
 
 
 @router.get("/diagnostics")

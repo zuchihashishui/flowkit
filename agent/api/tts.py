@@ -2,6 +2,8 @@
 import asyncio
 import json
 import logging
+import os
+import tempfile
 import re
 from pathlib import Path
 
@@ -295,14 +297,41 @@ async def delete_voice_template(name: str):
 
 
 def _load_templates_meta() -> dict:
-    if TEMPLATES_META.exists():
-        return json.loads(TEMPLATES_META.read_text())
-    return {}
+    try:
+        if not TEMPLATES_META.exists():
+            return {}
+        content = TEMPLATES_META.read_text(encoding="utf-8-sig").strip()
+        if not content:
+            logger.warning("templates.json is empty, initializing as {}")
+            _save_templates_meta({})
+            return {}
+        meta = json.loads(content)
+        if not isinstance(meta, dict) or any(not isinstance(v, dict) for v in meta.values()):
+            raise ValueError("Expected an object containing voice templates")
+        return meta
+    except (OSError, ValueError) as exc:
+        logger.exception("Cannot read voice templates: %s", TEMPLATES_META)
+        raise HTTPException(500, f"Cannot read voice templates at {TEMPLATES_META}: {exc}. Preserve this file and check its JSON/UTF-8 encoding and permissions.") from exc
 
 
 def _save_templates_meta(meta: dict):
-    TEMPLATES_META.parent.mkdir(parents=True, exist_ok=True)
-    TEMPLATES_META.write_text(json.dumps(meta, indent=2, ensure_ascii=False))
+    temp_path = None
+    try:
+        TEMPLATES_META.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=TEMPLATES_META.parent,
+                                         suffix=".tmp", delete=False) as handle:
+            temp_path = Path(handle.name)
+            json.dump(meta, handle, indent=2, ensure_ascii=False)
+        os.replace(temp_path, TEMPLATES_META)
+    except (OSError, ValueError) as exc:
+        logger.exception("Cannot save voice templates: %s", TEMPLATES_META)
+        raise HTTPException(500, f"Cannot save voice templates at {TEMPLATES_META}: {exc}. Check folder permissions and available disk space.") from exc
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Cannot remove temporary metadata file: %s", temp_path)
 
 
 def _wav_duration(path: str) -> float | None:

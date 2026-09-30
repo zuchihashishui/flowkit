@@ -19,7 +19,10 @@ function show(page) {
 }
 async function action(fn, control) {
   if (control) control.disabled = true;
-  try { return await fn(); } catch (e) { notice(e.message, true); }
+  try { return await fn(); } catch (e) { 
+    console.error('[Action Error]', e);
+    notice(e.message, true); 
+  }
   finally { if (control) control.disabled = false; }
 }
 function option(value, text) { const e = document.createElement('option'); e.value = value; e.textContent = text; return e; }

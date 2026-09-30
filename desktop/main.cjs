@@ -9,12 +9,24 @@ let win, backend, settings = {}, backendLog;
 const entry = pathToFileURL(path.join(__dirname, 'ui/index.html')).href;
 const storyboardAllowed = /^\/api\/storyboard\/(providers|videos\/[a-zA-Z0-9_-]+(?:\/(segments|generate-concepts|cancel-concepts|generate-media))?|segments\/[a-zA-Z0-9_-]+(?:\/concepts)?|concepts\/[a-zA-Z0-9_-]+\/select)$/;
 const allowed = /^\/(health|api\/(projects(?:\/[a-zA-Z0-9_-]+)?|videos|scenes(?:\/[a-zA-Z0-9_-]+)?|models|materials|flow\/status|tts\/templates(?:\/[a-zA-Z0-9_-]+)?|desktop\/(jobs(?:\/cancel|\/[a-f0-9-]+\/resume)?|pause|diagnostics)))(\?[^#]*)?$/;
+async function readBackendResponse(response, route) {
+  const text = await response.text();
+  let data;
+  try { data = JSON.parse(text); } catch {
+    const summary = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
+    console.error(`[Backend Error] ${response.status} on ${route}: ${summary}`);
+    throw Error(`Backend HTTP ${response.status} on ${route}: ${summary || 'Empty response'}. Check backend.log for details.`);
+  }
+  if (!response.ok) {
+    const detail = typeof data?.detail === 'string' ? data.detail : JSON.stringify(data?.detail || data);
+    console.error(`[Backend Error] ${response.status} on ${route}: ${detail}`);
+    throw Error(`Backend HTTP ${response.status} on ${route}: ${detail}`);
+  }
+  return data;
+}
 async function request(method, route, body) {
   const response = await fetch(BASE + route, {method, headers:body ? {'Content-Type':'application/json'} : {}, body: body ? JSON.stringify(body) : undefined, signal:AbortSignal.timeout(120000)});
-  const text = await response.text(); let data;
-  try { data=JSON.parse(text); } catch { throw Error('Backend returned invalid JSON'); }
-  if(!response.ok) throw Error(typeof data.detail==='string' ? data.detail : JSON.stringify(data.detail || data));
-  return data;
+  return readBackendResponse(response, route);
 }
 function handle(name, fn) { ipcMain.handle(name, async (event,...args) => {
   if(event.sender !== win.webContents || event.senderFrame.url !== entry) throw Error('Untrusted caller');
@@ -37,6 +49,12 @@ async function startBackend(){
   backendLog=await fs.open(path.join(app.getPath('userData'),'backend.log'),'a');
   backend=spawn(python,['-m','agent.main'],{cwd:ROOT,env:{...process.env,PYTHONUNBUFFERED:'1',API_HOST:'127.0.0.1',API_PORT:'8100',WS_HOST:'127.0.0.1',WS_PORT:'9222',TTS_PYTHON_BIN:process.env.TTS_PYTHON_BIN || python},stdio:['ignore',backendLog.fd,backendLog.fd],windowsHide:true,detached:process.platform!=='win32'});
   backend.on('error',err=>console.error('Backend:',err.message));
+  // Wait for backend ready
+  for(let i=0; i<30; i++) {
+    await new Promise(r=>setTimeout(r,1000));
+    try { await request('GET','/health'); console.log('[Backend] Ready after',i+1,'seconds'); return; } catch {}
+  }
+  console.warn('[Backend] Health check timed out after 30s');
 }
 async function jobById(id){
   if(!/^[a-f0-9-]{36}$/.test(id)) throw Error('Invalid job ID');
@@ -46,8 +64,13 @@ async function jobById(id){
   return job;
 }
 async function media(id,index){
-  const response=await fetch(`${BASE}/api/desktop/jobs/${id}/files/${index}`,{signal:AbortSignal.timeout(300000)});
-  if(!response.ok) throw Error('Cannot read generated file');
+  const route = `/api/desktop/jobs/${id}/files/${index}`;
+  const response=await fetch(`${BASE}${route}`,{signal:AbortSignal.timeout(300000)});
+  if(!response.ok) {
+    const text = await response.text();
+    console.error(`[Media Error] ${response.status} on ${route}: ${text.slice(0, 200)}`);
+    throw Error(`Cannot read generated file: HTTP ${response.status}`);
+  }
   return response;
 }
 app.whenReady().then(async()=>{
@@ -86,16 +109,22 @@ app.whenReady().then(async()=>{
     if(r.canceled)return null;
     if((await fs.stat(r.filePaths[0])).size>512*1024*1024)throw Error('Audio must be under 512 MiB');
     const form=new FormData();form.append('audio',new Blob([await fs.readFile(r.filePaths[0])]),path.basename(r.filePaths[0]));
-    const response=await fetch(BASE+'/api/storyboard/videos/'+videoId+'/audio',{method:'POST',body:form,signal:AbortSignal.timeout(300000)});
-    const data=await response.json();if(!response.ok)throw Error(typeof data.detail==='string'?data.detail:'Audio import failed');return data;
+    const route = '/api/storyboard/videos/'+videoId+'/audio';
+    const response=await fetch(BASE+route,{method:'POST',body:form,signal:AbortSignal.timeout(300000)});
+    return readBackendResponse(response, route);
   });
   handle('import-prompts',async()=>{const r=await dialog.showOpenDialog(win,{properties:['openFile'],filters:[{name:'Scene prompts',extensions:['txt','json']}]});if(r.canceled)return null;const st=await fs.stat(r.filePaths[0]);if(st.size>1024*1024)throw Error('Prompt file must be under 1 MiB');const text=await fs.readFile(r.filePaths[0],'utf8');return{text,name:path.basename(r.filePaths[0])};});
   handle('import-voice',async(name,text,consent)=>{
     if(!consent)throw Error('Confirm permission to use this voice');
     const r=await dialog.showOpenDialog(win,{properties:['openFile'],filters:[{name:'Reference audio',extensions:['wav','mp3','m4a','flac','ogg']}]});
     if(r.canceled)return null;const st=await fs.stat(r.filePaths[0]);if(st.size>25*1024*1024)throw Error('Reference audio must be under 25 MiB');
-    const form=new FormData();form.append('name',name);form.append('text',text);form.append('consent','true');form.append('audio',new Blob([await fs.readFile(r.filePaths[0])]),path.basename(r.filePaths[0]));
-    const response=await fetch(BASE+'/api/desktop/voices/import',{method:'POST',body:form,signal:AbortSignal.timeout(120000)});const data=await response.json();if(!response.ok)throw Error(data.detail||'Import failed');return data;
+    const ext=path.extname(r.filePaths[0]).toLowerCase();
+    const mimeMap={'.wav':'audio/wav','.mp3':'audio/mpeg','.m4a':'audio/mp4','.flac':'audio/flac','.ogg':'audio/ogg'};
+    const mime=mimeMap[ext]||'application/octet-stream';
+    const form=new FormData();form.append('name',name);form.append('text',text);form.append('consent','true');form.append('audio',new Blob([await fs.readFile(r.filePaths[0])],{type:mime}),path.basename(r.filePaths[0]));
+    const route = '/api/desktop/voices/import';
+    const response=await fetch(BASE+route,{method:'POST',body:form,signal:AbortSignal.timeout(120000)});
+    return readBackendResponse(response, route);
   });
   handle('export-job',async id=>{
     const job=await jobById(id);const folder=path.join(settings.output,id);await fs.mkdir(folder,{recursive:true});

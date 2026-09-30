@@ -17,13 +17,16 @@ PYTHON_BIN = os.environ.get("TTS_PYTHON_BIN", sys.executable)
 
 # Inline script template for TTS generation via subprocess
 _TTS_SCRIPT = """
-import sys, json, torch, torchaudio
+import sys, json, torch
+import soundfile as sf
 import numpy as np
 
 args = json.loads(sys.argv[1])
 from omnivoice import OmniVoice
 
-model = OmniVoice.from_pretrained(args["model"], device_map="cpu", dtype=torch.float32)
+device = "cuda" if torch.cuda.is_available() else "cpu"
+dtype = torch.float16 if device == "cuda" else torch.float32
+model = OmniVoice.from_pretrained(args["model"], device_map=device, dtype=dtype)
 
 kwargs = {"text": args["text"]}
 if args.get("ref_audio") and args.get("ref_text"):
@@ -37,27 +40,29 @@ if args.get("speed") and args["speed"] != 1.0:
 audio = model.generate(**kwargs)
 # Handle both numpy array and torch tensor
 audio_data = audio[0] if isinstance(audio, (list, tuple)) else audio
-if isinstance(audio_data, np.ndarray):
-    audio_tensor = torch.from_numpy(audio_data)
+if isinstance(audio_data, torch.Tensor):
+    audio_np = audio_data.detach().cpu().numpy()
 else:
-    audio_tensor = audio_data
-# Ensure audio is 2D (channels, samples) for torchaudio.save
-if audio_tensor.ndim == 1:
-    audio_tensor = audio_tensor.unsqueeze(0)  # Add channel dimension
-torchaudio.save(args["output"], audio_tensor, args["sample_rate"])
+    audio_np = audio_data
+# soundfile expects (samples,) or (samples, channels) — squeeze any leading channel dim
+audio_np = np.squeeze(audio_np)
+sf.write(args["output"], audio_np, args["sample_rate"])
 print(json.dumps({"ok": True, "path": args["output"]}))
 """
 
 # Batch script — loads model once, generates for multiple texts
 _TTS_BATCH_SCRIPT = """
-import sys, json, torch, torchaudio
+import sys, json, torch
+import soundfile as sf
 import numpy as np
 from pathlib import Path
 
 args = json.loads(sys.argv[1])
 from omnivoice import OmniVoice
 
-model = OmniVoice.from_pretrained(args["model"], device_map="cpu", dtype=torch.float32)
+device = "cuda" if torch.cuda.is_available() else "cpu"
+dtype = torch.float16 if device == "cuda" else torch.float32
+model = OmniVoice.from_pretrained(args["model"], device_map=device, dtype=dtype)
 
 results = []
 for item in args["items"]:
@@ -73,20 +78,18 @@ for item in args["items"]:
 
         audio = model.generate(**kwargs)
         Path(item["output"]).parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Handle both numpy array and torch tensor
         audio_data = audio[0] if isinstance(audio, (list, tuple)) else audio
-        if isinstance(audio_data, np.ndarray):
-            audio_tensor = torch.from_numpy(audio_data)
+        if isinstance(audio_data, torch.Tensor):
+            audio_np = audio_data.detach().cpu().numpy()
         else:
-            audio_tensor = audio_data
-        # Ensure audio is 2D (channels, samples) for torchaudio.save
-        if audio_tensor.ndim == 1:
-            audio_tensor = audio_tensor.unsqueeze(0)  # Add channel dimension
-        torchaudio.save(item["output"], audio_tensor, args["sample_rate"])
+            audio_np = audio_data
+        audio_np = np.squeeze(audio_np)
+        sf.write(item["output"], audio_np, args["sample_rate"])
 
-        info = torchaudio.info(item["output"])
-        duration = info.num_frames / info.sample_rate
+        info = sf.info(item["output"])
+        duration = info.frames / info.samplerate
         results.append({"id": item["id"], "ok": True, "path": item["output"], "duration": duration})
     except Exception as e:
         results.append({"id": item["id"], "ok": False, "error": str(e)})
@@ -131,11 +134,20 @@ async def generate_speech(
 
 
 def _run_tts_subprocess(args: dict) -> dict:
-    """Run TTS subprocess."""
-    proc = subprocess.run(
-        [PYTHON_BIN, "-c", _TTS_SCRIPT, json.dumps(args)],
-        capture_output=True, text=True, timeout=300,  # 5 minutes for first-time model download
-    )
+    """Run TTS subprocess.
+
+    Model reload (~200s on CPU, no warm cache between calls) + generation time for
+    long text can exceed a fixed timeout, so scale by text length.
+    """
+    text_len = len(args.get("text", ""))
+    timeout = 300 + (text_len * 2) // 3  # ~240s model load + ~2s per 3 chars of speech, with buffer
+    try:
+        proc = subprocess.run(
+            [PYTHON_BIN, "-c", _TTS_SCRIPT, json.dumps(args)],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"TTS timed out after {timeout}s (text length {text_len} chars). Try shorter text per request."}
     if proc.returncode != 0:
         return {"ok": False, "error": proc.stderr[-500:] if proc.stderr else "unknown error"}
     try:

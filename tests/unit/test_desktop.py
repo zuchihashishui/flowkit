@@ -183,7 +183,7 @@ def test_voice_import_http(tmp_path, monkeypatch):
         wav.setframerate(16000)
         wav.writeframes(b"\0\0" * 1600)
     with TestClient(app) as client:
-        data = {"name": "test_voice", "text": "Test transcript", "consent": "true"}
+        data = {"name": "test_voice", "text": "Xin chào, こんにちは", "consent": "true"}
         response = client.post("/api/desktop/voices/import", data=data, files={"audio": ("sample.wav", buf.getvalue(), "audio/wav")})
         assert response.status_code == 200, response.text
         assert response.json()["name"] == "test_voice"
@@ -222,3 +222,59 @@ async def test_scene_database_narration(tmp_path, monkeypatch):
         assert saved["video_prompt"] is None
     finally:
         await schema.close_db()
+
+
+def test_template_metadata_unicode_bom_and_atomic_failure(tmp_path, monkeypatch):
+    from agent.api import tts
+    path = tmp_path / "templates.json"
+    monkeypatch.setattr(tts, "TEMPLATES_META", path)
+    meta = {"narrator": {"name": "narrator", "text": "Xin chào, こんにちは"}}
+    tts._save_templates_meta(meta)
+    assert json.loads(path.read_text(encoding="utf-8")) == meta
+    path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8-sig")
+    assert tts._load_templates_meta() == meta
+    original = path.read_bytes()
+    def denied(*args):
+        raise PermissionError("File is locked")
+    monkeypatch.setattr(tts.os, "replace", denied)
+    with pytest.raises(HTTPException, match="Cannot save voice templates"):
+        tts._save_templates_meta({})
+    assert path.read_bytes() == original
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+@pytest.mark.parametrize("content", ['{broken', '[]'])
+def test_voice_import_bad_metadata_returns_actionable_json(tmp_path, monkeypatch, content):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    path = tmp_path / "templates.json"
+    path.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(d.tts, "TEMPLATES_META", path)
+    monkeypatch.setattr(d.tts, "TEMPLATES_DIR", tmp_path)
+    app = FastAPI()
+    app.include_router(d.router, prefix="/api")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post("/api/desktop/voices/import",
+            data={"name": "narrator", "text": "Hello", "consent": "true"},
+            files={"audio": ("sample.mp3", b"unused", "audio/mpeg")})
+    assert response.status_code == 500
+    assert "Cannot read voice templates" in response.json()["detail"]
+    assert path.read_text(encoding="utf-8") == content
+
+
+def test_voice_import_unwritable_directory_returns_json(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    folder = tmp_path / "not_a_directory"
+    folder.write_text("keep")
+    monkeypatch.setattr(d.tts, "TEMPLATES_DIR", folder)
+    monkeypatch.setattr(d.tts, "TEMPLATES_META", tmp_path / "missing.json")
+    app = FastAPI()
+    app.include_router(d.router, prefix="/api")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post("/api/desktop/voices/import",
+            data={"name": "narrator", "text": "Hello", "consent": "true"},
+            files={"audio": ("sample.mp3", b"unused", "audio/mpeg")})
+    assert response.status_code == 500
+    assert "Cannot write voice files" in response.json()["detail"]
+    assert folder.read_text() == "keep"

@@ -6,7 +6,7 @@ const os = require('node:os');
 const vm = require('node:vm');
 const {pathToFileURL} = require('node:url');
 
-async function mainProcess(folder) {
+async function mainProcess(folder, reply) {
   const handlers = new Map(), requests = [];
   let win, ready;
   const loaded = new Promise(resolve => {ready=resolve;});
@@ -16,13 +16,13 @@ async function mainProcess(folder) {
   }
   const electron = {
     app:{whenReady:()=>Promise.resolve(),getPath:()=>folder,on(){}},
-    BrowserWindow:Window,ipcMain:{handle:(name,fn)=>handlers.set(name,fn)},dialog:{},shell:{}
+    BrowserWindow:Window,ipcMain:{handle:(name,fn)=>handlers.set(name,fn)},dialog:{showOpenDialog:async()=>({canceled:false,filePaths:[path.join(folder,'sample.mp3')]})},shell:{}
   };
   const root=path.resolve(__dirname,'..');
   const source=await fs.readFile(path.join(root,'main.cjs'),'utf8');
   vm.runInNewContext(source, {
-    require: name=>name==='electron'?electron:require(name),__dirname:root,process,console,AbortSignal,
-    fetch:async(url,options)=>{requests.push({url,options});return {ok:true,text:async()=>'{"ok":true}'};}
+    require: name=>name==='electron'?electron:require(name),__dirname:root,process,console,AbortSignal,FormData,Blob,
+    fetch:async(url,options)=>{requests.push({url,options});return reply && !url.endsWith('/health') ? reply : {ok:true,text:async()=>'{"ok":true}'};}
   });
   await loaded;
   const event={sender:win.webContents,senderFrame:{url:pathToFileURL(path.join(root,'ui/index.html')).href}};
@@ -56,3 +56,18 @@ test('auto-export preference is written by IPC and restored after main-process r
     await assert.rejects(restarted.invoke('update-settings',{autoExport:true,output:'/unauthorized'}),/Invalid preferences/);
   }finally{await fs.rm(folder,{recursive:true,force:true});}
 });
+
+for (const [label, response, expected] of [
+  ['plain-text server error', {ok:false,status:500,text:async()=> 'Internal Server Error'}, /Backend HTTP 500: Internal Server Error/],
+  ['JSON error detail', {ok:false,status:409,text:async()=> '{"detail":"Voice already exists"}'}, /Voice already exists/],
+  ['empty server error', {ok:false,status:502,text:async()=> ''}, /Backend HTTP 502: Empty response/],
+]) {
+  test(`voice import displays ${label} without a JSON parsing exception`, async()=>{
+    const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-voice-'));
+    try {
+      await fs.writeFile(path.join(folder,'sample.mp3'),'upload fixture');
+      const main=await mainProcess(folder,response);
+      await assert.rejects(main.invoke('import-voice','narrator','Sample transcript',true),expected);
+    } finally {await fs.rm(folder,{recursive:true,force:true});}
+  });
+}
