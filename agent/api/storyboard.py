@@ -119,7 +119,9 @@ def parse_segments(body):
 
 @router.get('/providers')
 async def providers():
-    return {'providers': [{'id': name, 'installed': bool(shutil.which(name))} for name in ('codex', 'claude', 'agy')]}
+    from agent.services.chatgpt_gateway import status
+    info = await status()
+    return {'providers': [{'id': name, 'installed': bool(shutil.which(name))} for name in ('codex', 'claude', 'agy')] + [{'id':'chatgpt-web','installed':info.get('available') and info.get('extensionConnected'),'status':'needs review' if info.get('needsReview') else 'connected (use Test Connection)' if info.get('extensionConnected') else 'disconnected'}]}
 
 
 @router.put('/videos/{video_id}')
@@ -230,14 +232,19 @@ async def select_concept(concept_id: str):
 
 class GenerateBody(BaseModel):
     segment_ids: list[str] = Field(min_length=1, max_length=100)
-    provider: Literal['codex','claude','agy'] = 'codex'
+    provider: Literal['codex','claude','agy','chatgpt-web'] = 'codex'
     model: str | None = Field(default=None, max_length=100, pattern=r'^[^-\s][^\r\n]*$')
     regenerate: bool = False
 
 
 @router.post('/videos/{video_id}/generate-concepts')
 async def generate_concepts(video_id: str, body: GenerateBody):
-    if not shutil.which(body.provider):
+    if body.provider == 'chatgpt-web':
+        from agent.services.chatgpt_gateway import status
+        info = await status()
+        if not info.get('available') or not info.get('extensionConnected') or info.get('needsReview'):
+            raise HTTPException(503, 'Connect ChatGPT Web and resolve pending review in Settings first.')
+    elif not shutil.which(body.provider):
         raise HTTPException(503, f'{body.provider} CLI is not installed or not on PATH. Install and sign in to it before creating concepts.')
     ids, skipped = [], []
     async with transaction() as db:
@@ -284,8 +291,10 @@ async def process_concept(job):
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        from agent.services.chatgpt_gateway import GatewayReviewRequired
+        state = 'NEEDS_REVIEW' if isinstance(exc, GatewayReviewRequired) else 'FAILED'
         async with transaction() as db:
-            await db.execute("UPDATE concept_job SET state='FAILED',error=? WHERE id=?", (str(exc)[:1500], job['id']))
+            await db.execute("UPDATE concept_job SET state=?,error=? WHERE id=?", (state, str(exc)[:1500], job['id']))
 
 
 async def run():
@@ -294,7 +303,14 @@ async def run():
     while True:
         pending = await query("SELECT * FROM concept_job WHERE state='QUEUED' ORDER BY created LIMIT 1")
         if pending:
-            await process_concept(pending[0])
+            payload = json.loads(pending[0]['payload'])
+            ready = True
+            if payload.get('provider') == 'chatgpt-web':
+                from agent.services.chatgpt_gateway import status
+                info = await status()
+                ready = info.get('available') and info.get('extensionConnected') and not info.get('needsReview') and not info.get('busy')
+            if ready:
+                await process_concept(pending[0])
         await asyncio.sleep(2)
 
 

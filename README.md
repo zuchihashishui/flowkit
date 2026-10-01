@@ -1,3 +1,11 @@
+> **Studio 0.4.6:** Browser extensions are grouped in `extensions/googleflow/` and `extensions/chatgpt/`. See [extension installation and migration](extensions/README.md).
+
+> **Studio 0.4.4:** Open **ChatGPT** in the Desktop sidebar to send a prompt and read/copy its response. Setup instructions: [ChatGPT Web](docs/CHATGPT_WEB.md).
+
+> **Studio 0.4.1:** ChatGPT side panel and persistent ON/OFF. See [extension setup](docs/CHATGPT_WEB.md) and [folder layout](docs/PROJECT_LAYOUT.md).
+
+> **Flowkit Studio 0.4 — ChatGPT Web integration:** See [setup and usage](docs/CHATGPT_WEB.md). Keep the Flow extension in `extensions/googleflow/` and load the separate ChatGPT extension from `extensions/chatgpt/`.
+
 <p align="center">
   <img src="docs/images/flowkit_banner.svg" width="720" alt="FLOW KIT" />
 </p>
@@ -220,7 +228,7 @@ pip install -r requirements.txt
 ### Run
 
 ```bash
-# 1. Load Chrome extension: chrome://extensions → Developer mode → Load unpacked → extension/
+# 1. Load Chrome extension: chrome://extensions → Developer mode → Load unpacked → extensions/googleflow/
 # 2. Open https://flow.google.com/ and sign in — leave the tab open
 # 3. Create a project in the Flow UI and copy its uuid out of the URL
 export FLOW_PROJECT_ID=<that uuid>
@@ -762,7 +770,7 @@ agent/
 └── worker/
     └── processor.py     # Queue processor + poller
 
-extension/               # Chrome MV3 extension
+extensions/googleflow/               # Chrome MV3 extension
 skills/                  # AI agent workflow recipes (CLI-agnostic)
 youtube/
 ├── auth.py              # OAuth2 multi-channel auth

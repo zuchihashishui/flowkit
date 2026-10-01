@@ -27,7 +27,7 @@ from agent.worker.processor import get_worker_controller
 from agent.services.flow_client import get_flow_client
 from agent.services.event_bus import event_bus
 from agent.sdk import init_sdk
-from agent.api import desktop, storyboard
+from agent.api import desktop, storyboard, chatgpt
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -162,6 +162,7 @@ app.include_router(providers_router)
 app.include_router(active_project_router)
 app.include_router(desktop.router, prefix="/api")
 app.include_router(storyboard.router, prefix="/api")
+app.include_router(chatgpt.router, prefix="/api")
 
 
 import secrets as _secrets
@@ -199,6 +200,7 @@ async def health():
     return {
         "status": "ok",
         "version": app.version,
+        "studio_api": 1,
         "extension_connected": client.connected,
         "ws": client.ws_stats,
     }

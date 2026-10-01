@@ -5,6 +5,7 @@ const {spawn} = require('node:child_process');
 const {pathToFileURL} = require('node:url');
 const ROOT = path.resolve(__dirname, '..');
 const BASE = 'http://127.0.0.1:8100';
+const gateway = require(path.join(__dirname,'chatgpt-process.cjs'))(app, ROOT);
 let win, backend, settings = {}, backendLog;
 const entry = pathToFileURL(path.join(__dirname, 'ui/index.html')).href;
 const storyboardAllowed = /^\/api\/storyboard\/(providers|videos\/[a-zA-Z0-9_-]+(?:\/(segments|generate-concepts|cancel-concepts|generate-media))?|segments\/[a-zA-Z0-9_-]+(?:\/concepts)?|concepts\/[a-zA-Z0-9_-]+\/select)$/;
@@ -25,7 +26,7 @@ async function readBackendResponse(response, route) {
   return data;
 }
 async function request(method, route, body) {
-  const response = await fetch(BASE + route, {method, headers:body ? {'Content-Type':'application/json'} : {}, body: body ? JSON.stringify(body) : undefined, signal:AbortSignal.timeout(120000)});
+  const response = await fetch(BASE + route, {method, headers:body ? {'Content-Type':'application/json'} : {}, body: body ? JSON.stringify(body) : undefined, signal:AbortSignal.timeout(route.startsWith('/api/chatgpt/')?620000:120000)});
   return readBackendResponse(response, route);
 }
 function handle(name, fn) { ipcMain.handle(name, async (event,...args) => {
@@ -43,7 +44,11 @@ function saveSettings(){
   return settingsWrite;
 }
 async function startBackend(){
-  try { await request('GET','/health'); return; } catch {}
+  try {
+    const health=await request('GET','/health');
+    if(health.studio_api!==1)dialog.showErrorBox?.('Backend update required','An older backend is already using port 8100. Stop that backend and restart Flowkit before using ChatGPT Web.');
+    return;
+  } catch {}
   const python = process.env.FLOWKIT_PYTHON || path.join(ROOT,'.venv',process.platform==='win32'?'Scripts/python.exe':'bin/python');
   try {await fs.access(python);} catch {return;}
   backendLog=await fs.open(path.join(app.getPath('userData'),'backend.log'),'a');
@@ -77,14 +82,15 @@ app.whenReady().then(async()=>{
   try {settings=JSON.parse(await fs.readFile(path.join(app.getPath('userData'),'settings.json'),'utf8'));}catch{}
   settings.output ||= path.join(app.getPath('videos'),'Flowkit');
   await startBackend();
+  await gateway.start();
   win=new BrowserWindow({width:1280,height:900,minWidth:920,minHeight:650,title:'Flowkit Studio',backgroundColor:'#11151e',webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',e=>e.preventDefault());
   handle('api',(method,route,body)=>{
-    if(!['GET','POST','PATCH','PUT'].includes(method)||typeof route!=='string'||!(allowed.test(route)||storyboardAllowed.test(route))||route.includes('..')||route.includes('\\')) throw Error('Unsupported API operation');
+    if(!['GET','POST','PATCH','PUT'].includes(method)||typeof route!=='string'||!(allowed.test(route)||storyboardAllowed.test(route)||/^\/api\/chatgpt\/(status|history|test|resume|message)$/.test(route))||route.includes('..')||route.includes('\\')) throw Error('Unsupported API operation');
     return request(method,route,body);
   });
-  handle('settings',()=>({...settings,extension:path.join(ROOT,'extension')}));
+  handle('settings',()=>({...settings,extension:path.join(ROOT,'extensions','googleflow')}));
   handle('update-settings',async change=>{
     if(!change || Object.keys(change).some(k=>k!=='autoExport') || typeof change.autoExport!=='boolean')throw Error('Invalid preferences');
     const previous=settings.autoExport;
@@ -94,8 +100,15 @@ app.whenReady().then(async()=>{
   });
   handle('choose-output',async()=>{const r=await dialog.showOpenDialog(win,{properties:['openDirectory','createDirectory']});if(!r.canceled){settings.output=r.filePaths[0];await saveSettings();}return settings;});
   handle('open-output',async()=>{await fs.mkdir(settings.output,{recursive:true});const error=await shell.openPath(settings.output);if(error)throw Error(error);});
+  handle('chatgpt-action',async action=>{
+    if(action==='open')return shell.openExternal('https://chatgpt.com/');
+    if(action==='extension')return shell.openPath(path.join(ROOT,'extensions/chatgpt'));
+    if(action==='logs')return shell.openPath(app.getPath('userData'));
+    if(action==='startup-error')return gateway.getError();
+    throw Error('Unsupported ChatGPT action');
+  });
   handle('open-flow',()=>shell.openExternal('https://flow.google.com/'));
-  handle('open-extension',()=>shell.openPath(path.join(ROOT,'extension')));
+  handle('open-extension',()=>shell.openPath(path.join(ROOT,'extensions','googleflow')));
   handle('import-script-source',async kind=>{
     if(!['script','segments'].includes(kind))throw Error('Invalid source type');
     const r=await dialog.showOpenDialog(win,{properties:['openFile'],filters:[{name:'Source text',extensions:kind==='script'?['txt']:['srt','json']}]});
@@ -140,6 +153,7 @@ app.whenReady().then(async()=>{
 });
 app.on('window-all-closed',()=>app.quit());
 app.on('before-quit',()=>{
+  gateway.stop();
   if(!backend?.pid || backend.exitCode!==null)return;
   if(process.platform==='win32')spawn('taskkill',['/PID',String(backend.pid),'/T','/F'],{windowsHide:true});
   else {try{process.kill(-backend.pid,'SIGTERM');}catch{backend.kill();}}

@@ -21,7 +21,7 @@ async function mainProcess(folder, reply) {
   const root=path.resolve(__dirname,'..');
   const source=await fs.readFile(path.join(root,'main.cjs'),'utf8');
   vm.runInNewContext(source, {
-    require: name=>name==='electron'?electron:require(name),__dirname:root,process,console,AbortSignal,FormData,Blob,
+    require: name=>name==='electron'?electron:name.endsWith('chatgpt-process.cjs')?()=>({start:async()=>{},stop(){},getError(){return '';}}):require(name),__dirname:root,process,console,AbortSignal,FormData,Blob,
     fetch:async(url,options)=>{requests.push({url,options});return reply && !url.endsWith('/health') ? reply : {ok:true,text:async()=>'{"ok":true}'};}
   });
   await loaded;
@@ -35,6 +35,8 @@ test('actual main-process IPC supports scene edits and queue cancellation, rejec
     const main=await mainProcess(folder);
     await main.invoke('api','PATCH','/api/scenes/scene-123',{narrator_text:'Edited'});
     await main.invoke('api','POST','/api/desktop/jobs/cancel',{ids:['job']});
+    await main.invoke('api','POST','/api/chatgpt/message',{prompt:'Hello'});
+    assert(main.requests.some(r=>r.url.endsWith('/api/chatgpt/message') && JSON.parse(r.options.body).prompt==='Hello'));
     await main.invoke('api','PUT','/api/storyboard/videos/video-123',{script_text:'Script'});
     await main.invoke('api','POST','/api/storyboard/videos/video-123/generate-media',{segment_ids:['segment'],kind:'image'});
     assert(main.requests.some(r=>r.url.endsWith('/api/storyboard/videos/video-123')&&r.options.method==='PUT'));
@@ -58,9 +60,9 @@ test('auto-export preference is written by IPC and restored after main-process r
 });
 
 for (const [label, response, expected] of [
-  ['plain-text server error', {ok:false,status:500,text:async()=> 'Internal Server Error'}, /Backend HTTP 500: Internal Server Error/],
+  ['plain-text server error', {ok:false,status:500,text:async()=> 'Internal Server Error'}, /Backend HTTP 500.*Internal Server Error/],
   ['JSON error detail', {ok:false,status:409,text:async()=> '{"detail":"Voice already exists"}'}, /Voice already exists/],
-  ['empty server error', {ok:false,status:502,text:async()=> ''}, /Backend HTTP 502: Empty response/],
+  ['empty server error', {ok:false,status:502,text:async()=> ''}, /Backend HTTP 502.*Empty response/],
 ]) {
   test(`voice import displays ${label} without a JSON parsing exception`, async()=>{
     const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-voice-'));

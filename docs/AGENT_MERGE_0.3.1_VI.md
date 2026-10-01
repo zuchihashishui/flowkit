@@ -17,7 +17,7 @@ Không chép cache Python hoặc `models.json.backup` vào bản chạy.
 | `agent/db/crud.py`, `agent/models/scene.py`, `agent/sdk/persistence/sqlite_repository.py` | Studio có thêm `narrator_text` | Giữ phần mở rộng Studio |
 | `agent/db/schema.py` | Studio khởi tạo thêm schema storyboard | Giữ phần mở rộng Studio |
 | `agent/main.py` | Studio có router/worker desktop, storyboard và xử lý shutdown | Giữ phần mở rộng Studio |
-| `extension/background.js` | Không có trong ZIP | Chưa thể đối chiếu |
+| `extensions/googleflow/background.js` | Không có trong ZIP | Chưa thể đối chiếu |
 
 Ngoài các file được liệt kê là khác ở trên, những file source chung giữa hai
 thư mục agent không có khác biệt nội dung sau chuẩn hóa xuống dòng/BOM.
@@ -62,5 +62,5 @@ gói này, giữ lại extension đang chạy tốt của bạn; thư mục exte
 database và dữ liệu hiện có. Đóng ứng dụng trước khi cập nhật rồi chạy lại bằng
 `start_desktop.bat` (chạy `setup_desktop.bat` nếu đây là lần cài đặt đầu tiên).
 
-Để hoàn tất đối chiếu, cần gửi thêm `extension/background.js` hoặc cả
+Để hoàn tất đối chiếu, cần gửi thêm `extensions/googleflow/background.js` hoặc cả
 `extension.zip` của phiên bản đang tạo ảnh/video thành công.

@@ -222,3 +222,16 @@ async def test_storyboard_http_contract(document):
         assert result.status_code==200
         media=await client.post('/api/storyboard/videos/'+document+'/generate-media',json={'segment_ids':[sid],'kind':'image'})
         assert media.status_code==200 and len(media.json()['ids'])==1
+
+@pytest.mark.asyncio
+async def test_chatgpt_concept_failure_requires_review(document, monkeypatch):
+    from agent.services import chatgpt_gateway as g
+    monkeypatch.setattr(g, 'status', AsyncMock(return_value={'available':True,'extensionConnected':True}))
+    segments = await s.query('SELECT * FROM script_segment ORDER BY ordinal')
+    result = await s.generate_concepts(document,s.GenerateBody(segment_ids=[segments[0]['id']],provider='chatgpt-web'))
+    job = (await s.query('SELECT * FROM concept_job WHERE id=?',(result['ids'][0],)))[0]
+    monkeypatch.setattr(s,'write_concept',AsyncMock(side_effect=g.GatewayReviewRequired('Check original response')))
+    await s.process_concept(job)
+    stored = (await s.query('SELECT * FROM concept_job WHERE id=?',(job['id'],)))[0]
+    assert stored['state']=='NEEDS_REVIEW'
+    assert not await s.query('SELECT * FROM scene_concept')

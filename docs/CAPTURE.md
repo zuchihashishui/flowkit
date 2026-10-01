@@ -26,7 +26,7 @@ Missing, and each blocked behind a capture: **video upscale**, **r2v**,
 
 ## Recording one
 
-1. Add to `extension/background.js`, temporarily:
+1. Add to `extensions/googleflow/background.js`, temporarily:
 
 ```js
 const NETLOG_HOSTS = ['https://flow.google.com/_/*'];

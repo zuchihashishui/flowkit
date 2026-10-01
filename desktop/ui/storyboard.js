@@ -145,7 +145,7 @@
   });};
   $('sb-refresh').onclick=()=>action(()=>open());
   $('sb-check-provider').onclick=()=>run(async()=>{
-    const result=await api('GET','/api/storyboard/providers');$('sb-provider-status').textContent=result.providers.map(p=>p.id+': '+(p.installed?'installed (sign-in not verified)':'not on PATH')).join(' · ');
+    const result=await api('GET','/api/storyboard/providers');$('sb-provider-status').textContent=result.providers.map(p=>p.id+': '+(p.status || (p.installed?'installed (sign-in not verified)':'not on PATH'))).join(' · ');
   });
   $('sb-select-all').onclick=()=>{(data?.segments||[]).forEach(s=>checked.add(s.id));selectionChanged();};
   $('sb-select-none').onclick=()=>{checked.clear();selectionChanged();};

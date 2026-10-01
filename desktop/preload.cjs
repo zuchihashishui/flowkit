@@ -1,5 +1,6 @@
 const {contextBridge, ipcRenderer} = require('electron');
 contextBridge.exposeInMainWorld('studio', Object.freeze({
+  chatgptAction: action => ipcRenderer.invoke('chatgpt-action', action),
   api: (method, path, body) => ipcRenderer.invoke('api', method, path, body),
   settings: () => ipcRenderer.invoke('settings'),
   updateSettings: change => ipcRenderer.invoke('update-settings', change),
