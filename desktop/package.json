@@ -1,16 +1,19 @@
 {
   "name": "flowkit-studio",
-  "version": "0.4.7",
+  "version": "0.7.23",
   "private": true,
   "description": "Flowkit desktop studio",
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
-    "check": "node --check main.cjs && node --check preload.cjs && node --check ui/app.js && node --check ui/storyboard.js && node --check ui/chatgpt.js && node --check chatgpt-process.cjs && node --check ../extensions/chatgpt/content.js && node --check ../extensions/chatgpt/background.js && node --check ../extensions/chatgpt/panel.js && node --check ui/chatgpt-chat.js",
+    "check": "node --check main.cjs && node --check backend-compatibility.cjs && node --check backend-runtime.cjs && node --check preload.cjs && node --check ui/app.js && node --check ui/storyboard.js && node --check ui/chatgpt.js && node --check chatgpt-process.cjs && node --check ../extensions/chatgpt/content.js && node --check ../extensions/chatgpt/background.js && node --check ../extensions/chatgpt/panel.js && node --check ui/chatgpt-model.js && node --check ui/chatgpt-chat.js && node --check ui/chatgpt-queue.js && node --check ../integrations/chatgpt-gateway/server.mjs && node --check ui/elevenlabs.js && node --check ui/flow-progress.js && node --check ../extensions/elevenlabs/background.js && node --check ../extensions/elevenlabs/content.js && node --check ../extensions/elevenlabs/panel.js && node --check ../extensions/googleflow/background.js && node --check ../extensions/googleflow/progress.js && node --check ../extensions/googleflow/popup.js && node --check ../extensions/googleflow/side_panel.js",
     "test": "node --test tests/*.test.cjs"
   },
   "devDependencies": {
     "electron": "^40.0.0",
-    "jsdom": "^30.1.1"
+    "jsdom": "^30.1.1",
+    "prosemirror-model": "^1.25.12",
+    "prosemirror-state": "^1.4.4",
+    "prosemirror-view": "^1.42.6"
   }
 }

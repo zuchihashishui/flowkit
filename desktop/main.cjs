@@ -1,15 +1,20 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const {spawn} = require('node:child_process');
 const {pathToFileURL} = require('node:url');
 const ROOT = path.resolve(__dirname, '..');
 const BASE = 'http://127.0.0.1:8100';
+const backendProblem = require('./backend-compatibility.cjs');
 const gateway = require(path.join(__dirname,'chatgpt-process.cjs'))(app, ROOT);
-let win, backend, settings = {}, backendLog;
+let win, settings = {};
+let runtime;
 const entry = pathToFileURL(path.join(__dirname, 'ui/index.html')).href;
 const storyboardAllowed = /^\/api\/storyboard\/(providers|videos\/[a-zA-Z0-9_-]+(?:\/(segments|generate-concepts|cancel-concepts|generate-media))?|segments\/[a-zA-Z0-9_-]+(?:\/concepts)?|concepts\/[a-zA-Z0-9_-]+\/select)$/;
-const allowed = /^\/(health|api\/(projects(?:\/[a-zA-Z0-9_-]+)?|videos|scenes(?:\/[a-zA-Z0-9_-]+)?|models|materials|flow\/status|tts\/templates(?:\/[a-zA-Z0-9_-]+)?|desktop\/(jobs(?:\/cancel|\/[a-f0-9-]+\/resume)?|pause|diagnostics)))(\?[^#]*)?$/;
+const allowed = /^\/(health|api\/(projects(?:\/[a-zA-Z0-9_-]+)?|videos|scenes(?:\/[a-zA-Z0-9_-]+)?|models|materials|flow\/status|tts\/templates(?:\/[a-zA-Z0-9_-]+)?|desktop\/(jobs(?:\/cancel|\/[a-f0-9-]+\/resume)?|pause|diagnostics|flow-progress)))(\?[^#]*)?$/;
+function elevenlabsAllowed(method, route) {
+  return method === 'GET' && /^\/api\/elevenlabs\/(status|jobs(?:\/[a-f0-9-]{36})?)$/.test(route)
+    || method === 'POST' && /^\/api\/elevenlabs\/(preview|jobs|probe|control|jobs\/[a-f0-9-]{36}\/(cancel|retry|recover))$/.test(route);
+}
 async function readBackendResponse(response, route) {
   const text = await response.text();
   let data;
@@ -25,8 +30,8 @@ async function readBackendResponse(response, route) {
   }
   return data;
 }
-async function request(method, route, body) {
-  const response = await fetch(BASE + route, {method, headers:body ? {'Content-Type':'application/json'} : {}, body: body ? JSON.stringify(body) : undefined, signal:AbortSignal.timeout(route.startsWith('/api/chatgpt/')?620000:120000)});
+async function request(method, route, body, timeoutMs) {
+  const response = await fetch(BASE + route, {method, headers:body ? {'Content-Type':'application/json'} : {}, body: body ? JSON.stringify(body) : undefined, signal:AbortSignal.timeout(timeoutMs ?? (route.startsWith('/api/chatgpt/')?720000:120000))});
   return readBackendResponse(response, route);
 }
 function handle(name, fn) { ipcMain.handle(name, async (event,...args) => {
@@ -42,24 +47,6 @@ function saveSettings(){
     await fs.rename(target+'.tmp',target);
   });
   return settingsWrite;
-}
-async function startBackend(){
-  try {
-    const health=await request('GET','/health');
-    if(health.studio_api!==1)dialog.showErrorBox?.('Backend update required','An older backend is already using port 8100. Stop that backend and restart Flowkit before using ChatGPT Web.');
-    return;
-  } catch {}
-  const python = process.env.FLOWKIT_PYTHON || path.join(ROOT,'.venv',process.platform==='win32'?'Scripts/python.exe':'bin/python');
-  try {await fs.access(python);} catch {return;}
-  backendLog=await fs.open(path.join(app.getPath('userData'),'backend.log'),'a');
-  backend=spawn(python,['-m','agent.main'],{cwd:ROOT,env:{...process.env,PYTHONUNBUFFERED:'1',API_HOST:'127.0.0.1',API_PORT:'8100',WS_HOST:'127.0.0.1',WS_PORT:'9222',TTS_PYTHON_BIN:process.env.TTS_PYTHON_BIN || python},stdio:['ignore',backendLog.fd,backendLog.fd],windowsHide:true,detached:process.platform!=='win32'});
-  backend.on('error',err=>console.error('Backend:',err.message));
-  // Wait for backend ready
-  for(let i=0; i<30; i++) {
-    await new Promise(r=>setTimeout(r,1000));
-    try { await request('GET','/health'); console.log('[Backend] Ready after',i+1,'seconds'); return; } catch {}
-  }
-  console.warn('[Backend] Health check timed out after 30s');
 }
 async function jobById(id){
   if(!/^[a-f0-9-]{36}$/.test(id)) throw Error('Invalid job ID');
@@ -78,17 +65,55 @@ async function media(id,index){
   }
   return response;
 }
+async function elevenlabsJob(id) {
+  if(typeof id!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id))throw Error('Invalid ElevenLabs job ID');
+  return request('GET','/api/elevenlabs/jobs/'+id);
+}
+function elevenlabsIndex(job,index) {
+  if(index==='merged') { if(!job.merged_url)throw Error('Joined audio is not ready'); return; }
+  if(!Number.isInteger(index)||index<1||index>10000)throw Error('Invalid ElevenLabs chunk index');
+  if(!job.chunks?.some(c=>c.index===index&&c.state==='COMPLETED'&&c.audio_url))throw Error('Chunk audio is not ready');
+}
+async function elevenlabsMedia(id,index) {
+  const response=await fetch(`${BASE}/api/elevenlabs/audio/${id}/${index}`,{signal:AbortSignal.timeout(300000)});
+  if(!response.ok)throw Error(`Cannot read ElevenLabs audio: HTTP ${response.status}`);
+  const mime=(response.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
+  const ext=({'audio/mpeg':'mp3','audio/mp3':'mp3','audio/wav':'wav','audio/x-wav':'wav','audio/ogg':'ogg','audio/flac':'flac','audio/mp4':'m4a','audio/x-m4a':'m4a'})[mime];
+  if(!ext)throw Error('Backend did not return a supported audio file');
+  return {response,mime,ext};
+}
+async function saveAudioResponse(response,target) {
+  const {pipeline}=require('node:stream/promises'),{Readable}=require('node:stream'),{createWriteStream}=require('node:fs');
+  const part=target+'.part';
+  try {await pipeline(Readable.fromWeb(response.body),createWriteStream(part));await fs.rename(part,target);}
+  finally {await fs.rm(part,{force:true});}
+}
 app.whenReady().then(async()=>{
   try {settings=JSON.parse(await fs.readFile(path.join(app.getPath('userData'),'settings.json'),'utf8'));}catch{}
   settings.output ||= path.join(app.getPath('videos'),'Flowkit');
-  await startBackend();
+  runtime = require('./backend-runtime.cjs')({root:ROOT,logDirectory:app.getPath('userData'),request});
+  try {await runtime.start();} catch(error) {console.error('[Backend startup]',error.message);}
   await gateway.start();
   win=new BrowserWindow({width:1280,height:900,minWidth:920,minHeight:650,title:'Flowkit Studio',backgroundColor:'#11151e',webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',e=>e.preventDefault());
-  handle('api',(method,route,body)=>{
-    if(!['GET','POST','PATCH','PUT'].includes(method)||typeof route!=='string'||!(allowed.test(route)||storyboardAllowed.test(route)||/^\/api\/chatgpt\/(status|history|test|resume|message)$/.test(route))||route.includes('..')||route.includes('\\')) throw Error('Unsupported API operation');
+  handle('api',async(method,route,body)=>{
+    if(!['GET','POST','PATCH','PUT'].includes(method)||typeof route!=='string'||!(elevenlabsAllowed(method,route)||allowed.test(route)||storyboardAllowed.test(route)||/^\/api\/chatgpt\/(status|history|test|resume|message|queue|config|cancel|retry|preflight|models)$/.test(route))||route.includes('..')||route.includes('\\')) throw Error('Unsupported API operation');
+    if (method !== 'GET' && runtime.isRestarting()) throw Error('The backend is restarting. Wait for it to become ready.');
+    if(route.startsWith('/api/elevenlabs/')) {
+      let issue = '', health;
+      try { health = await request('GET','/health',undefined,5000); issue = backendProblem(health); }
+      catch { issue = 'Cannot verify the running backend. Restart Flowkit Studio and check backend.log before generating speech.'; }
+      if(method !== 'GET' && issue) throw Error(issue);
+      const result = await request(method,route,body);
+      return route === '/api/elevenlabs/status' ? {...result,compatibilityError:issue,backendDiagnostics:issue ? await runtime.diagnostics(health) : {compatible:true}} : result;
+    }
     return request(method,route,body);
+  });
+  handle('backend-action',async action=>{
+    if(action==='status')return {backendDiagnostics:await runtime.diagnostics(undefined,true)};
+    if(action==='restart')return runtime.restart();
+    throw Error('Unsupported backend action');
   });
   handle('settings',()=>({...settings,extension:path.join(ROOT,'extensions','googleflow')}));
   handle('update-settings',async change=>{
@@ -100,6 +125,44 @@ app.whenReady().then(async()=>{
   });
   handle('choose-output',async()=>{const r=await dialog.showOpenDialog(win,{properties:['openDirectory','createDirectory']});if(!r.canceled){settings.output=r.filePaths[0];await saveSettings();}return settings;});
   handle('open-output',async()=>{await fs.mkdir(settings.output,{recursive:true});const error=await shell.openPath(settings.output);if(error)throw Error(error);});
+  handle('save-chat-results',async ids=>{
+    if(!Array.isArray(ids)||!ids.length||ids.length>200||ids.some(id=>typeof id!=='string'))throw Error('Select 1–200 jobs');
+    const result=await request('GET','/api/chatgpt/queue');
+    const jobs=result.jobs.filter(j=>ids.includes(j.id));
+    const dest=await dialog.showSaveDialog(win,{title:'Export ChatGPT results',defaultPath:'chatgpt-results.json',filters:[{name:'JSON',extensions:['json']}]});
+    if(dest.canceled||!dest.filePath)return {canceled:true};
+    await fs.writeFile(dest.filePath,JSON.stringify(jobs,null,2),'utf8');return {canceled:false};
+  });
+  handle('elevenlabs-action',async action=>{
+    if(action==='open')return shell.openExternal('https://elevenlabs.io/app/speech-synthesis/text-to-speech');
+    if(action==='extension'){const error=await shell.openPath(path.join(ROOT,'extensions','elevenlabs'));if(error)throw Error(error);return;}
+    throw Error('Unsupported ElevenLabs action');
+  });
+  handle('elevenlabs-audio',async(id,index,action)=>{
+    if(!['preview','save'].includes(action))throw Error('Unsupported audio action');
+    const job=await elevenlabsJob(id);elevenlabsIndex(job,index);
+    const {response,mime,ext}=await elevenlabsMedia(id,index);
+    if(action==='preview'){
+      if(Number(response.headers.get('content-length'))>100*1024*1024){await response.body.cancel();throw Error('Preview exceeds 100 MiB. Save the audio to play locally.');}
+      const bytes=await response.arrayBuffer();if(bytes.byteLength>100*1024*1024)throw Error('Preview exceeds 100 MiB. Save the audio to play locally.');
+      return {bytes,mime};
+    }
+    const name=index==='merged'?'narration':String(index).padStart(3,'0');
+    const dest=await dialog.showSaveDialog(win,{title:'Save ElevenLabs audio',defaultPath:`elevenlabs-${id}-${name}.${ext}`,filters:[{name:'Audio',extensions:[ext]}]});
+    if(dest.canceled||!dest.filePath){await response.body.cancel();return {canceled:true};}
+    await saveAudioResponse(response,dest.filePath);return {canceled:false,path:dest.filePath};
+  });
+  handle('elevenlabs-export',async id=>{
+    const job=await elevenlabsJob(id),indices=(job.chunks||[]).filter(c=>c.state==='COMPLETED'&&c.audio_url).map(c=>c.index);
+    if(job.merged_url)indices.push('merged');
+    if(!indices.length)throw Error('No completed audio to export');
+    const folder=path.join(settings.output,'elevenlabs',id);await fs.mkdir(folder,{recursive:true});
+    for(const index of indices){
+      elevenlabsIndex(job,index);const {response,ext}=await elevenlabsMedia(id,index);
+      const name=index==='merged'?'narration':String(index).padStart(3,'0');await saveAudioResponse(response,path.join(folder,name+'.'+ext));
+    }
+    return {path:folder,count:indices.length};
+  });
   handle('chatgpt-action',async action=>{
     if(action==='open')return shell.openExternal('https://chatgpt.com/');
     if(action==='extension')return shell.openPath(path.join(ROOT,'extensions/chatgpt'));
@@ -154,7 +217,5 @@ app.whenReady().then(async()=>{
 app.on('window-all-closed',()=>app.quit());
 app.on('before-quit',()=>{
   gateway.stop();
-  if(!backend?.pid || backend.exitCode!==null)return;
-  if(process.platform==='win32')spawn('taskkill',['/PID',String(backend.pid),'/T','/F'],{windowsHide:true});
-  else {try{process.kill(-backend.pid,'SIGTERM');}catch{backend.kill();}}
+  runtime?.stop();
 });

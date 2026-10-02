@@ -72,9 +72,79 @@
   }
 
   function isStreaming() {
-    return !!document.querySelector(
-      'button[aria-label="Stop"], button[aria-label="Stop streaming"], [data-testid="stop-button"], button[aria-label*="Stop"]'
-    );
+    return [...document.querySelectorAll('button[aria-label="Stop"], button[aria-label="Stop streaming"], [data-testid="stop-button"], button[aria-label*="Stop"]')].some(hasVisibleState);
+  }
+
+  function visible(el) {
+    return el && el.offsetParent !== null && !el.closest('[hidden], [aria-hidden="true"]');
+  }
+
+  function composerButton(mode) {
+    return [...document.querySelectorAll('[role="group"][aria-label="Composer mode"] button')]
+      .find(el => visible(el) && (el.textContent || '').trim().toLowerCase() === mode);
+  }
+
+  function checkComposerStillSelected(mode) {
+    // Temporary Chat can hide the switch. If it remains visible, reject any reset.
+    const button = composerButton(mode);
+    if (button && button.getAttribute('aria-pressed') !== 'true') {
+      throw new Error('The composer mode changed during setup. No prompt was sent. Check Chat / Work and Temporary Chat settings.');
+    }
+  }
+
+  async function selectComposerMode(mode) {
+    if (!['chat', 'work'].includes(mode)) throw new Error('Invalid composer mode. Choose Chat or Work.');
+    // Re-query after each render; ChatGPT may replace the entire mode group.
+    let clicked = false;
+    for (let i = 0; i < 20; i++) {
+      const button = composerButton(mode);
+      if (button?.getAttribute('aria-pressed') === 'true') return;
+      if (button && !button.disabled && button.getAttribute('aria-disabled') !== 'true' && !clicked) {
+        button.click(); clicked = true;
+      }
+      await sleep(500);
+    }
+    throw new Error(`Cannot verify ${mode === 'chat' ? 'Chat' : 'Work'} composer mode. No prompt was sent. Check the Composer mode buttons in the worker tab.`);
+  }
+
+  function temporaryEnabled() {
+    const toggles = document.querySelectorAll('button[aria-label="Temporary chat"]');
+    if ([...toggles].some(el => visible(el) && (el.getAttribute('aria-pressed') === 'true' || el.getAttribute('data-state') === 'on'))) return true;
+    // Positive UI evidence only; the existence of the entry button is not proof.
+    return [...document.querySelectorAll('button, [role="switch"], h1, h2, [role="heading"]')].some(el => {
+      if (!visible(el)) return false;
+      const label = (el.getAttribute('aria-label') || el.textContent || '').trim().toLowerCase();
+      if (/^(exit temporary chat|turn off temporary chat|temporary chat is on)$/.test(label)) return true;
+      return /^(H1|H2)$/.test(el.tagName) && /^temporary chat$/.test(label);
+    });
+  }
+
+  async function enableTemporaryChat() {
+    if (temporaryEnabled()) return;
+    const button = [...document.querySelectorAll('button[aria-label="Temporary chat"]')].find(visible);
+    if (!button || button.disabled) throw new Error('Temporary Chat button not found. No prompt was sent. Choose Chat in the extension, or explicitly choose Regular chat in Studio if Work has no Temporary Chat support.');
+    button.click();
+    let choseUnpersonalized = false;
+    for (let i = 0; i < 20; i++) {
+      await sleep(500);
+      // Some versions offer a personalization choice before entering the chat.
+      const option = [...document.querySelectorAll('button, [role="option"], [role="menuitem"]')]
+        .find(el => visible(el) && /^Unpersonalized$/i.test((el.textContent || '').trim()));
+      if (option && !choseUnpersonalized) { option.click(); choseUnpersonalized = true; continue; }
+      if (temporaryEnabled()) return;
+    }
+    throw new Error('Cannot verify Temporary Chat is active. No prompt was sent. Check the tab and share the HTML after enabling Temporary Chat.');
+  }
+
+  function pageFailure() {
+    const alerts = [...document.querySelectorAll('[role="alert"], [role="dialog"]')].filter(visible);
+    const text = alerts.map(el => el.textContent || '').join(' ');
+    if (/usage limit|message limit|too many requests|rate limit|reached.{0,40}limit/i.test(text)) {
+      const error = new Error('ChatGPT usage limit: ' + text.slice(0,400)); error.code = 'RATE_LIMIT'; return error;
+    }
+    if (/something went wrong|network error|generation failed|response interrupted|unable to load conversation/i.test(text))return new Error('ChatGPT page error: '+text.slice(0,400));
+    if (/sign in.{0,30}continue|log in.{0,30}continue/i.test(text)) return new Error('ChatGPT requires sign-in. Check the worker tab.');
+    return null;
   }
 
   // ── Actions ──────────────────────────────────────────────
@@ -99,44 +169,191 @@
     await sleep(2500);
   }
 
-  async function selectModel(modelSlug) {
-    if (!modelSlug || modelSlug === "auto") return;
-
-    // Try clicking the model picker
-    const pickerSelectors = [
-      '[data-testid="model-switcher"]',
-      'button[aria-haspopup="listbox"]',
-      'button[aria-haspopup="menu"]',
-    ];
-
-    let picker = null;
-    for (const sel of pickerSelectors) {
-      picker = document.querySelector(sel);
-      if (picker) break;
+  const modelPickerSelector = 'button[aria-label="Select ChatGPT model"], button[data-codex-intelligence-trigger="true"], button[data-testid="model-switcher"], button[data-testid="model-switcher-dropdown-button"]';
+  const normalizeLabel = text => (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const effortLabels = {none:'None',minimal:'Minimal',low:'Light',medium:'Medium',high:'High',xhigh:'Extra High',max:'Max',ultra:'Ultra',persistent:'Persistent'};
+  function cleanLabel(el) {
+    const clone=el.cloneNode(true);
+    clone.querySelectorAll('svg, [aria-hidden="true"], [hidden], .sr-only').forEach(n=>n.remove());
+    return (clone.textContent || '').replace(/\s+/g,' ').trim();
+  }
+  function modelPicker() { return [...document.querySelectorAll(modelPickerSelector)].find(visible); }
+  function modelSelection() {
+    const picker=modelPicker();
+    if(!picker)return {model:'',effort:''};
+    const effort=picker.getAttribute('data-selected-reasoning-effort') || '';
+    const name=picker.querySelector('[class*="ModelPickerTriggerModelText-"], [data-selected-model-name]');
+    return {model:name?cleanLabel(name):cleanLabel(picker),effort};
+  }
+  function parseModelSelection(value) {
+    if(!value || ['auto','current'].includes(value))return null;
+    const parts=value.split('::').map(s=>s.trim());
+    if(parts.length>2 || !parts[0])throw Error('Use an exact model name, optionally followed by :: High.');
+    const effort=parts[1] || '';
+    const effortKey=Object.keys(effortLabels).find(k=>normalizeLabel(k)===normalizeLabel(effort)||normalizeLabel(effortLabels[k])===normalizeLabel(effort));
+    if(effort&&!effortKey)throw Error('Unknown reasoning effort: '+effort);
+    return {model:parts[0],effort:effortKey || ''};
+  }
+  function modelMatches(target) {return normalizeLabel(modelSelection().model)===normalizeLabel(target.model);}
+  function effortMatches(target) {return !target.effort || modelSelection().effort===target.effort;}
+  function checkModelSelection(target) {
+    if(target && (!modelMatches(target)||!effortMatches(target)))throw Error('Requested model / reasoning effort could not be verified. No prompt was sent.');
+  }
+  async function selectModel(value) {
+    const target=parseModelSelection(value);
+    if(!target)return null; // No opening menus, no model or effort changes.
+    if(modelMatches(target)&&effortMatches(target))return target;
+    const picker=modelPicker();
+    if(!picker || picker.disabled || picker.getAttribute('aria-disabled')==='true')throw Error('Cannot find an enabled Select ChatGPT model button. No prompt was sent.');
+    const previousMenus=new Set([...document.querySelectorAll('[role="menu"], [role="listbox"]')].filter(visible));
+    let ticks=0;
+    const wait=async()=>{if(ticks++>=20)throw Error('Model selection timed out. No prompt was sent.');await sleep(500);};
+    const menus=()=>{
+      const trigger=modelPicker(),controlled=trigger?.getAttribute('aria-controls');
+      return [...document.querySelectorAll('[role="menu"], [role="listbox"]')].filter(el=>visible(el)&&(el.id===controlled||!previousMenus.has(el)));
+    };
+    const options=()=>[...new Set(menus().flatMap(menu=>[...menu.querySelectorAll('[role="option"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="menuitem"], button')]))]
+      .filter(el=>visible(el)&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&!el.hasAttribute('data-disabled'));
+    function exactOption(label) {
+      const normalized=normalizeLabel(label);
+      const matches=options().filter(el=>normalizeLabel(el.getAttribute('aria-label'))===normalized||normalizeLabel(cleanLabel(el))===normalized||
+        [...el.querySelectorAll('span, div')].some(child=>visible(child)&&normalizeLabel(cleanLabel(child))===normalized));
+      // Prefer the innermost actionable element; refuse two distinct exact choices.
+      const leaves=matches.filter(el=>!matches.some(other=>other!==el&&el.contains(other)));
+      if(leaves.length>1)throw Error('Multiple matching model options. No prompt was sent.');
+      return leaves[0];
     }
-
-    if (!picker) throw new Error("Cannot find model picker. Select the model manually and use auto.");
-
-    picker.click();
-    await sleep(800);
-
-    // Find model option
-    const options = document.querySelectorAll(
-      '[role="option"], [role="menuitemradio"], [role="menuitem"]'
-    );
-    const slug = modelSlug.toLowerCase();
-    for (const opt of options) {
-      const text = (opt.textContent || "").toLowerCase();
-      if (text.includes(slug) || text.includes(slug.replace(/-/g, " "))) {
-        opt.click();
-        await sleep(500);
-        return;
+    async function open(){const p=modelPicker();if(p?.getAttribute('aria-expanded')!=='true'){p?.click();await wait();}}
+    async function choose(label,verified,submenus) {
+      await open();let clicked=false,opened=new Set();
+      while(ticks<20){
+        if(verified())return;
+        const option=exactOption(label);
+        if(option&&!clicked){option.click();clicked=true;}
+        else if(!clicked){
+          const submenu=options().find(el=>el.getAttribute('aria-haspopup')==='menu'&&submenus.includes(normalizeLabel(cleanLabel(el)))&&!opened.has(el));
+          if(submenu){opened.add(submenu);submenu.click();}
+        }
+        await wait();
       }
+      throw Error('Requested option "'+label+'" was not found or did not activate. No prompt was sent.');
     }
-    // Close picker if model not found
-    document.body.click();
-    await sleep(300);
-    throw new Error("Requested model was not found. Select it manually and use auto.");
+    try{
+      if(!modelMatches(target))await choose(target.model,()=>modelMatches(target),['model','models']);
+      if(!effortMatches(target))await choose(effortLabels[target.effort],()=>effortMatches(target),['reasoning effort','effort','thinking effort']);
+      checkModelSelection(target);
+      return target;
+    }finally{
+      // Close only this picker, not an unrelated menu on the page.
+      const p=modelPicker();if(p?.getAttribute('aria-expanded')==='true')p.click();
+    }
+  }
+
+  let activeRequest = null;
+  function progress(phase, extra={}) {
+    if(!activeRequest)return;
+    try{chrome.runtime.sendMessage({type:'jobProgress',requestId:activeRequest,phase,...extra})?.catch(()=>{});}catch{}
+  }
+  function hasVisibleState(el) {
+    return !el.closest('[hidden], [aria-hidden="true"]') && getComputedStyle(el).display!=='none' && getComputedStyle(el).visibility!=='hidden';
+  }
+  function generationPhase(latest) {
+    const scope=latest?.closest('[data-turn-key], article[data-testid^="conversation-turn"], [data-message-author-role="assistant"]') || document;
+    const status=[...scope.querySelectorAll('[role="status"], [data-testid="thinking-indicator"]')].filter(hasVisibleState).map(el=>el.textContent||'').join(' ');
+    if(/\b(thinking|reasoning)\b/i.test(status))return 'THINKING';
+    if(/\b(searching|running|working|using tools)\b/i.test(status))return 'USING_TOOLS';
+    if([...scope.querySelectorAll('[aria-busy="true"], [data-is-streaming="true"]')].some(hasVisibleState))return 'WORKING';
+    if(isStreaming())return 'GENERATING';
+    return null;
+  }
+  function completionEvidence(latest) {
+    if(latest.closest('[data-local-conversation-final-assistant="true"]'))return 'final-assistant-marker';
+    const scope=latest.closest('article[data-testid^="conversation-turn"], [data-testid^="conversation-turn-"], [data-message-author-role="assistant"]');
+    if(scope && [...scope.querySelectorAll('[data-testid="copy-turn-action-button"], button[aria-label="Copy response"], button[aria-label="Good response"], button[aria-label="Bad response"]')].some(hasVisibleState))return 'response-actions';
+    return '';
+  }
+  async function discoverModels() {
+    if(activeRequest||isStreaming())throw Error('Wait for the active response before inspecting models.');
+    const picker=modelPicker();
+    if(!picker)throw Error('Model picker not found in this tab.');
+    const initial=modelSelection(),wasOpen=picker.getAttribute('aria-expanded')==='true';
+    const oldMenus=new Set([...document.querySelectorAll('[role="menu"], [role="listbox"]')].filter(visible));
+    const models=new Set(initial.model?[initial.model]:[]),efforts=new Set(),visited=new Set();
+    let menuFound=false;
+    try{
+      if(!wasOpen)picker.click();
+      for(let i=0;i<12;i++){
+        await sleep(250);
+        const controlled=modelPicker()?.getAttribute('aria-controls');
+        const menus=[...document.querySelectorAll('[role="menu"], [role="listbox"]')].filter(el=>visible(el)&&(el.id===controlled||!oldMenus.has(el)));
+        if(!menus.length)continue;menuFound=true;
+        const options=[...new Set(menus.flatMap(menu=>[...menu.querySelectorAll('[role="option"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="menuitem"], button')]))].filter(el=>visible(el)&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&!el.hasAttribute('data-disabled'));
+        for(const el of options){
+          const label=(el.getAttribute('aria-label') || cleanLabel(el.querySelector('[data-model-name]') || el.querySelector('span') || el)).trim();
+          const key=Object.keys(effortLabels).find(k=>normalizeLabel(label)===normalizeLabel(effortLabels[k]));
+          if(key){efforts.add(key);continue;}
+          // Known model-shaped labels only; never present account/menu actions as models.
+          if(label.length<=70 && (/^(GPT[- ]|ChatGPT\b|o[1-9](?:\b|-))/i.test(label)||el.hasAttribute('data-model-id')||el.hasAttribute('data-model-name')))models.add(label);
+        }
+        const submenu=options.find(el=>el.getAttribute('aria-haspopup')==='menu'&&['model','models','reasoning effort','effort','thinking effort','more models','legacy models'].includes(normalizeLabel(cleanLabel(el)))&&!visited.has(el));
+        if(submenu){visited.add(submenu);submenu.click();continue;}
+        // Allow lazy menu population before concluding the scan.
+      }
+      if(modelSelection().model!==initial.model||modelSelection().effort!==initial.effort)throw Error('Model changed during inspection. Review the tab before submitting.');
+      return {models:[...models],efforts:[...efforts],current:initial,partial:true,menuFound,
+        note:menuFound?'Observed options only; submenus and account availability may differ. Custom names remain supported.':'Menu could not be read; only the current model is shown. Refresh the tab or provide the open-menu HTML.',checkedAt:Date.now()};
+    }finally{const p=modelPicker();if(!wasOpen&&p?.getAttribute('aria-expanded')==='true')p.click();}
+  }
+  async function preflight(msg) {
+    const checks=[],add=(name,ok,detail)=>checks.push({name,ok:!!ok,detail});
+    const failure=pageFailure();add('Page access',!failure,failure?.message||'No sign-in or usage-limit alert found');
+    add('Idle page',!isStreaming()&&!activeRequest,'No active generation');
+    const input=findInput();add('Input editor',!!input,'Visible input editor required');
+    const mode=composerButton(msg.composerMode||'chat');add('Composer mode',!!mode&&!mode.disabled&&mode.getAttribute('aria-disabled')!=='true','Requested Chat / Work button must be available; this check does not switch modes');
+    add('Send control',[...document.querySelectorAll('button[aria-label="Send"], [data-testid="send-button"], #composer-submit-button, button[aria-label="Send prompt"]')].some(hasVisibleState),'May be disabled while the editor is empty');
+    if(msg.temporary)add('Temporary Chat',temporaryEnabled()||[...document.querySelectorAll('button[aria-label="Temporary chat"]')].some(el=>visible(el)&&!el.disabled),'Availability only; activation is verified again before sending');
+    let catalog=null;
+    const target=parseModelSelection(msg.model);
+    if(target&&!activeRequest&&!isStreaming()){
+      try{catalog=await discoverModels();add('Model',catalog.models.some(name=>normalizeLabel(name)===normalizeLabel(target.model)),'Requested model must be observed in this tab');
+        if(target.effort)add('Reasoning effort',catalog.current.effort===target.effort||catalog.efforts.includes(target.effort),'Requested effort must be observed');
+      }catch(e){add('Model menu',false,e.message);}
+    }
+    return {passed:checks.every(c=>c.ok),checks,catalog,current:modelSelection(),checkedAt:Date.now(),note:'No prompt sent. The actual job verifies all settings again after opening its new conversation.'};
+  }
+
+  function normalizedPrompt(text) {
+    return String(text || '').replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ').normalize('NFC').trim();
+  }
+
+  function editorText(input) {
+    if (!input) return '';
+    if (input.getAttribute('contenteditable') !== 'true') return input.value || '';
+    // Read ProseMirror paragraphs as lines; textContent alone joins adjacent
+    // paragraphs and cannot verify a multiline prompt reliably.
+    const block = node => node?.nodeType === 1 && /^(P|DIV|LI|PRE|BLOCKQUOTE)$/.test(node.tagName);
+    const read = node => {
+      if (node.nodeType === 3) return node.nodeValue || '';
+      if (node.nodeType !== 1) return '';
+      if (node.tagName === 'BR') return '\n';
+      let value = '', previous = null;
+      for (const child of node.childNodes) {
+        const part = read(child);
+        if (value && (block(previous) || block(child)) && !value.endsWith('\n') && !part.startsWith('\n')) value += '\n';
+        value += part;
+        previous = child;
+      }
+      return value;
+    };
+    return read(input);
+  }
+
+  function checkEnteredPrompt(text) {
+    const entered = normalizedPrompt(editorText(findInput()));
+    const expected = normalizedPrompt(text);
+    if (!expected || entered !== expected) {
+      throw new Error(`ChatGPT did not retain the complete prompt (expected ${expected.length} characters, found ${entered.length}). No prompt was sent. Refresh the worker tab before retrying.`);
+    }
   }
 
   async function typeMessage(text) {
@@ -146,56 +363,38 @@
     input.focus();
     await sleep(200);
 
-    // Select all existing content and delete it
-    document.execCommand("selectAll");
-    document.execCommand("delete");
-    await sleep(100);
-
-    // Insert text — execCommand works with both textarea and contenteditable
-    // For long texts, chunk it to avoid issues
-    if (text.length > 4000) {
-      // For very long text, set directly and dispatch events
-      if (input.getAttribute("contenteditable") === "true") {
-        // ProseMirror/contenteditable
-        const p = document.createElement("p");
-        p.textContent = text;
-        input.innerHTML = "";
-        input.appendChild(p);
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-      } else {
-        input.value = text;
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-      }
+    // Scope selection to this editor, then use the same browser editing command
+    // for short and long prompts. Direct DOM assignment can leave React /
+    // ProseMirror's internal document unchanged despite visible text.
+    if (input.getAttribute('contenteditable') === 'true') {
+      const range = document.createRange();
+      range.selectNodeContents(input);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
     } else {
-      document.execCommand("insertText", false, text);
+      input.select();
     }
+    document.execCommand('insertText', false, text);
 
-    await sleep(400);
-
-    // Verify text was entered
-    const currentText =
-      input.getAttribute("contenteditable") === "true"
-        ? (input.textContent || "").trim()
-        : (input.value || "").trim();
-
-    if (!currentText) {
-      // Retry with direct assignment
-      if (input.getAttribute("contenteditable") === "true") {
-        input.textContent = text;
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-      } else {
-        input.value = text;
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-      }
-      await sleep(400);
+    let stable = 0;
+    for (let i = 0; i < 12; i++) {
+      await sleep(250);
+      // Re-query after editor renders; never trust the detached node we typed into.
+      if (normalizedPrompt(editorText(findInput())) === normalizedPrompt(text)) {
+        if (++stable >= 2) { checkEnteredPrompt(text); return; }
+      } else stable = 0;
     }
+    checkEnteredPrompt(text);
+    throw new Error('ChatGPT input did not stabilize. No prompt was sent. Refresh the worker tab before retrying.');
   }
 
-  async function clickSend() {
+  async function clickSend(text) {
     // Wait a moment for the send button to become enabled
     for (let i = 0; i < 10; i++) {
       const btn = findSendButton();
       if (btn && !btn.disabled) {
+        checkEnteredPrompt(text);
         btn.click();
         return;
       }
@@ -208,16 +407,21 @@
     let lastText = "";
     let stableCount = 0;
     let lastKey = null;
+    let lastChange = Date.now();
 
     for (let elapsed = 0; elapsed < timeout; elapsed += POLL_INTERVAL) {
       await sleep(POLL_INTERVAL);
 
+      const failure = pageFailure(); if (failure) throw failure;
       const candidates = assistantMessages().filter(el => !beforeMessages.has(messageKey(el)));
       const latest = candidates[candidates.length - 1];
-      if (!latest) { stableCount = 0; continue; }
+      if (!latest) { stableCount = 0; progress(generationPhase(null)||'WAITING_RESPONSE'); continue; }
       const key = messageKey(latest);
       const text = assistantText(latest);
-      if (isStreaming() || !text) {
+      const phase=generationPhase(latest),evidence=completionEvidence(latest);
+      if(text!==lastText || key!==lastKey)lastChange=Date.now();
+      progress(phase || (evidence?'VERIFYING_COMPLETION':'WAITING_COMPLETION'),{chars:text.length,lastChange,completionEvidence:evidence});
+      if (phase || !text || !evidence) {
         stableCount = 0;
       } else if (text !== lastText || key !== lastKey) {
         stableCount = 0;
@@ -229,37 +433,57 @@
     }
 
     // Partial text must never be accepted as a completed answer.
-    throw new Error("Timeout: no response from ChatGPT");
+    throw new Error("Timeout: no verified completed response from ChatGPT; review the tab before retrying");
   }
 
   // ── Message handler ──────────────────────────────────────
 
   async function handleChatRequest(msg) {
+    if(activeRequest)return {ok:false,error:'This tab already has an active request'};
+    activeRequest=msg.requestId || 'local-request';
     try {
       if (isStreaming()) throw new Error("ChatGPT is already generating. Wait before submitting.");
 
       // Start new conversation if requested
       if (msg.newConversation !== false) {
         await startNewChat();
-        await selectModel(msg.model);
       }
 
-      if (msg.selectModel) await selectModel(msg.model);
+      const composerMode = msg.composerMode ?? 'chat';
+      progress('SELECTING_MODE');
+      await selectComposerMode(composerMode);
+      if (msg.temporary){progress('ENABLING_TEMPORARY');await enableTemporaryChat();}
+      progress('SELECTING_MODEL');
+      const selectedModel = await selectModel(msg.model);
+      checkComposerStillSelected(composerMode);
+      checkModelSelection(selectedModel);
       const beforeMessages = new Set(assistantMessages().map(messageKey));
+      const failure=pageFailure();if(failure)throw failure;
+      progress('TYPING');
       await typeMessage(msg.userMessage);
-      await clickSend();
+      if (msg.temporary && !temporaryEnabled()) throw new Error("Temporary Chat is no longer confirmed. No prompt was sent.");
+      checkComposerStillSelected(composerMode);
+      checkModelSelection(selectedModel);
+      progress('SENDING');
+      await clickSend(msg.userMessage);
 
       const response = await waitForNewResponse(beforeMessages, msg.timeout);
 
       return { ok: true, content: response, conversation_url: window.location.href };
     } catch (err) {
-      return { ok: false, error: err.message };
-    }
+      return { ok: false, error: err.message, code: err.code };
+    } finally { activeRequest=null; }
   }
 
   // ── Listen for messages from background script ───────────
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type === 'discoverModels' || msg.type === 'preflight') {
+      (msg.type==='discoverModels'?discoverModels():preflight(msg)).then(data=>sendResponse({ok:true,data})).catch(e=>sendResponse({ok:false,error:e.message}));return true;
+    }
+    if (msg.type === "probe") {
+      sendResponse({ok:true, streaming:isStreaming(), temporary:temporaryEnabled()}); return;
+    }
     if (msg.type === "ping") {
       sendResponse({ ok: true, url: window.location.href });
       return;

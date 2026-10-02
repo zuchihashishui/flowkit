@@ -1,5 +1,10 @@
 const {contextBridge, ipcRenderer} = require('electron');
 contextBridge.exposeInMainWorld('studio', Object.freeze({
+  backendAction: action => ipcRenderer.invoke('backend-action', action),
+  elevenlabsAction: action => ipcRenderer.invoke('elevenlabs-action', action),
+  elevenlabsAudio: (id, index, action) => ipcRenderer.invoke('elevenlabs-audio', id, index, action),
+  elevenlabsExport: id => ipcRenderer.invoke('elevenlabs-export', id),
+  saveChatResults: ids => ipcRenderer.invoke('save-chat-results',ids),
   chatgptAction: action => ipcRenderer.invoke('chatgpt-action', action),
   api: (method, path, body) => ipcRenderer.invoke('api', method, path, body),
   settings: () => ipcRenderer.invoke('settings'),

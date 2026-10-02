@@ -96,8 +96,8 @@ function updateStatus(data) {
       chrome.runtime.sendMessage({ type: 'REFRESH_TOKEN' });
     }
   } else {
-    tokenEl.textContent = 'no token';
-    tokenEl.className = 'bad';
+    tokenEl.textContent = 'Page session (no bearer required)';
+    tokenEl.className = 'ok';
   }
 
   // Metrics
@@ -132,7 +132,7 @@ function updateRequestLog(entries) {
 
     let badgeHtml;
     if (status === 'COMPLETED' || status === 'success') {
-      badgeHtml = '<span class="badge badge-ok">&#10003; done</span>';
+      badgeHtml = '<span class="badge badge-ok">&#10003; returned</span>';
     } else if (status === 'FAILED' || status === 'failed' || (typeof status === 'number' && status >= 400)) {
       badgeHtml = '<span class="badge badge-fail">&#10007; fail</span>';
     } else if (status === 'PROCESSING') {
@@ -199,6 +199,8 @@ function showRequestDetail(reqId) {
     ['Type', formatType(entry.type || entry.method)],
     ['Time', formatTime(entry.time || entry.timestamp || entry.createdAt)],
     ['Status', entry.status || entry.state || 'pending'],
+    ['Stage', entry.stage || '—'],
+    ['Elapsed', entry.startedAt ? `${Math.max(0, Math.round(((entry.finishedAt || Date.now()) - entry.startedAt) / 1000))}s` : '—'],
     ['HTTP', entry.httpStatus || '—'],
     ['URL', entry.url || '—'],
     ['Payload', entry.payloadSummary || '—'],

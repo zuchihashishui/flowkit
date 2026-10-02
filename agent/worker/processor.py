@@ -434,6 +434,15 @@ async def _handle_failure(rid: str, req: dict, result: dict, retry_after: dict =
     if isinstance(error_msg, dict):
         error_msg = json.dumps(error_msg)[:200]
 
+    # The browser may have accepted a write before its response was lost.
+    # Keep this ahead of generic transport/not-found retries to avoid charging
+    # for the same generation again after a disconnect or deadline.
+    if "submission_uncertain" in str(error_msg).lower():
+        await crud.update_request(rid, status="FAILED", error_message=str(error_msg))
+        await _mark_scene_failed(req)
+        logger.error("Request %s requires manual review of Flow before retry: %s", rid[:8], error_msg)
+        return
+
     # Auto-recover expired media by re-uploading
     if "not found" in str(error_msg).lower():
         recovered = await _recover_entity_not_found(req)

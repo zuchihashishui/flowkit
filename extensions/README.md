@@ -6,7 +6,7 @@ Each provider has its own independently loaded Chrome extension.
 | --- | --- | --- |
 | `googleflow/` | Google Flow | Implemented |
 | `chatgpt/` | ChatGPT | Implemented |
-| `elevenlabs/` | ElevenLabs | Reserved for future implementation; not included yet |
+| `elevenlabs/` | ElevenLabs | Implemented: Text to Speech, Eleven v4, one tab with sequential chunks |
 
 In chrome://extensions, use Load unpacked for each provider folder containing a manifest.json. Do not load the extensions parent folder.
 

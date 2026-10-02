@@ -44,7 +44,7 @@ function escHtml(str) {
 
 function badgeHtml(status) {
   if (status === 'COMPLETED' || status === 'success') {
-    return '<span class="badge badge-ok">&#10003; done</span>';
+    return '<span class="badge badge-ok">&#10003; returned</span>';
   } else if (status === 'FAILED' || status === 'failed' || (typeof status === 'number' && status >= 400)) {
     return '<span class="badge badge-fail">&#10007; fail</span>';
   } else if (status === 'PROCESSING') {

@@ -1,101 +1,251 @@
-# ChatGPT Web — Flowkit Studio 0.4.1
+# ChatGPT Web — Flowkit Studio 0.6.0
 
-Based on the user's working Flowkit commit 680adb3. Existing Flow extension and
-TTS changes are preserved. This integrates Draivix's extension architecture,
-with adaptations described in integrations/chatgpt-gateway/UPSTREAM.md.
+This release adds a fixed pool of up to three Chrome tabs, verified Temporary Chat,
+and a durable Desktop batch queue. Google Flow and TTS implementations are preserved.
 
-## Windows setup
+## Upgrade and setup
 
-1. Close Electron and any separately started backend. Back up the project and
-   copy this complete release into it, preserving .venv, output and databases.
-2. Run setup_desktop.bat once to install the additional local gateway dependency.
-3. Run start_desktop.bat. Electron starts the backend and ChatGPT gateway.
-4. Keep the existing Flow extension loaded from `extensions/googleflow/`.
-5. In chrome://extensions choose Load unpacked AGAIN and select
-   `extensions/chatgpt/`. These are TWO different extensions.
-6. Open ChatGPT, sign in manually, and click the Flowkit ChatGPT Gateway toolbar icon.
-   Select your tab and click **Use selected tab**. Keep that dedicated tab open; do not type
-   into it during jobs. Select it again if you close/recreate the tab.
-7. In Settings → ChatGPT Web, Refresh status and Test Connection. The test sends
-   one real prompt. Connected alone only confirms the extension's socket.
-8. In Script & Scenes select ChatGPT Web, select segments, Create Concepts.
-   Leave Model blank/auto to use the model selected on ChatGPT. Optional model
-   names are matched through the web model picker and may fail if it changes.
+1. Back up databases and output. Close the Desktop app, old Python backend and any
+   separately launched ChatGPT gateway. Protocol 2 requires the new backend,
+   gateway and ChatGPT extension together. Install all 0.6.0 components; older
+   protocol-2 processes do not provide the new inspection endpoints.
+2. Copy this source, preserving your `.venv`, output and databases. Run
+   `setup_desktop.bat` if gateway dependencies have not been installed, then
+   `start_desktop.bat`. No new Python or npm dependencies are required for 0.6.0.
+3. Reload **Flowkit ChatGPT Gateway 1.5.0** from `extensions/chatgpt/` in Chrome.
+   Refresh any already-open ChatGPT tabs. Google Flow remains a separate extension
+   in `extensions/googleflow/`.
+4. Click the ChatGPT extension toolbar icon to open its side panel. Click
+   **Prepare 3 tabs**, or choose 1–3 existing ChatGPT tabs and **Assign selected tabs**.
+   Prepare reuses assigned tabs and creates only the missing tabs, up to three.
+5. Ensure ChatGPT is usable in those tabs; sign in manually if required. Keep
+   them open and do not manually chat in them during jobs. Turn the bridge ON.
+6. In Desktop → **ChatGPT**, choose 1, 2 or 3 workers, response timeout and
+   conversation mode, then **Save settings**. Defaults: 3 workers, 180 seconds,
+   verified Temporary Chat. Begin with one small job before a large batch.
 
-## Workflow and recovery
+## Chat / Work composer mode
 
-Up to 100 selected segments are queued in the existing concept_job table. One
-request per segment is processed serially; this release does not add parallel
-ChatGPT workers or multi-scene prompts. Each request starts a new chat in the
-selected tab. Conversation history can be saved by ChatGPT; temporary mode is
-not implemented. New chats include script context, adjacent segments and style.
+In the extension side panel, choose **Composer mode → Chat (default)** or **Work**.
+The choice is saved automatically across extension restarts and applies to all
+worker tabs when a new job starts. Pause the queue in Studio and wait for active
+requests before changing it; changes are rejected while requests are running.
+Refresh existing ChatGPT tabs after reloading the extension.
 
-The existing versioned scene_concept table receives strictly validated JSON.
-Source edits during generation produce a STALE concept retained in history.
-The local chatgpt_jobs.db audit stores prompts, raw responses (including returned
-conversation URL and request ID), errors and timestamps. Settings shows the last
-100 records. Records contain your script text and should be treated as project data.
+Before enabling Temporary Chat, selecting a model or typing, the extension finds
+`[role="group"][aria-label="Composer mode"]`, clicks the visible button whose text
+matches Chat or Work, and verifies `aria-pressed="true"`. It waits up to 10 seconds
+for the selector/state. Missing, disabled or unconfirmed modes fail before typing.
+This setting is distinct from Studio's Temporary / Regular conversation setting.
+Work does not silently disable Temporary Chat. If the page cannot confirm Temporary
+Chat in Work, choose Chat or explicitly select Regular chat in Studio.
 
-A failed/uncertain request or invalid concept JSON pauses subsequent ChatGPT
-work. Review the tab and Request History; manually save a recovered concept if
-appropriate. Stop any still-running browser generation, then click Resume After
-Review. This releases queued work but NEVER automatically resends the uncertain
-job. To retry that segment, explicitly select it and create a new concept job.
-Requests left RUNNING after a crash also require review on the next launch.
-Cancel queued concepts remains available. Disconnected extensions leave queued
-jobs waiting. A paused ChatGPT job at the head can delay later CLI concept jobs.
+Selector behavior is covered by DOM tests, not a live Chrome end-to-end test.
 
-The gateway uses DOM input and reads DOM response text. Completion is inferred
-from stable text plus absence of a Stop button; it is NOT a server completion
-event. A changed website can break this inference. A timeout never returns partial
-text as success. Settings records uncertainty; do not blindly retry batch jobs.
-No actual account quota, parallelism or speed guarantee is made.
+## Optional model and reasoning selection
 
-## Services
+Desktop → ChatGPT has three choices, shared by **Send** and **Add to queue**:
 
-- Flowkit API: 127.0.0.1:8100; Flow extension WebSocket: 9222 (unchanged).
-- ChatGPT gateway HTTP/WebSocket: 127.0.0.1:18790. Do not run upstream gateway on
-  that port simultaneously. Electron checks gateway service/protocol identity.
-- Electron stops only the gateway it started. An externally started gateway stays
-  running. View Logs opens Electron's userData folder (backend.log and
-  chatgpt-gateway.log). An old backend on 8100 triggers a startup warning.
-- Linux/macOS: install backend requirements, npm ci in desktop AND
-  integrations/chatgpt-gateway, then launch Electron from desktop.
+- **Use current model** (default): does not open or change the model/effort picker.
+  It uses whatever the website shows after the worker opens its new conversation
+  and applies Chat / Work and Temporary / Regular settings. Different tabs may
+  have different current models; this is not a pinned model.
+- **Choose a model**: enter the exact model label from your account's menu,
+  for example `GPT-6 Astra`. Select **High** separately under **Reasoning effort**
+  to request both. Leave **Keep current effort** to avoid explicitly changing effort;
+  the website may choose its own effort when changing model.
+- **Use extension preference**: use the saved **Model preference** from the extension
+  side panel. That panel defaults to **Use current model** too. Save a custom choice
+  with **Save model preference**. Desktop's current/custom choices override this
+  preference, so an old saved extension choice cannot silently change a default job.
 
-## Verification
+Extension preferences persist; Desktop choices apply to the prompts submitted from
+that window. Queued custom choices are stored with each job. Extension preferences
+are resolved when each job starts; pause the queue before changing them. Changing
+preferences is rejected while worker requests are active.
 
-Automated tests cover real local HTTP/WebSocket relay using a fake extension,
-request serialization, disconnect/review/recovery, DOM fixtures for completion
-and partial timeouts, UI actions, JSON concept validation, database auditing and
-NEEDS_REVIEW state. They do not prove live ChatGPT or Google Flow generation.
-A signed-in Chrome integration test on the user's Windows machine remains needed.
+The UI accepts arbitrary exact model names; its Astra suggestion comes from the
+supplied HTML, not an account-wide availability list. The effort labels also come
+from that trigger's attributes; not every model/account supports every effort.
+API callers can pass `model: "auto"` to keep the website selection,
+`model: "extension"` to use the saved preference, or
+`model: "GPT-6 Astra :: high"` to request a model and effort. Model strings are
+limited to 100 characters. Existing concept model fields can use the same syntax
+when ChatGPT Web is the provider.
 
-## Extension controls (0.4.1)
+Selection targets the observed `button[aria-label="Select ChatGPT model"]`
+(`data-codex-intelligence-trigger`), not a generic menu button. The extension
+separates the current model label from `data-selected-reasoning-effort`; hidden
+animated labels such as Ultra do not prove that Ultra is selected. It searches
+visible menu options for an exact label and verifies the updated trigger before
+sending. Missing, ambiguous, disabled or unconfirmed choices fail before submission.
+Model selection runs after Temporary Chat setup to avoid a setup reset, with a
+10-second selection budget. No unavailable-model fallback is sent automatically.
 
-Click the Flowkit ChatGPT Gateway toolbar icon to open its persistent side panel alongside the page. Both views share controls and state: ON/OFF, gateway status, worker status, tab picker, open/focus tab, reconnect, last request/error, completed count and activity log. The visual theme matches Flow Kit.
+The uploaded page contained a closed trigger and no open menu markup. Tests cover
+that actual trigger with simulated menu options, settings forwarding and batch
+requests. Live menu compatibility is not yet confirmed. If selection fails, supply
+the HTML after opening the model menu (and the effort submenu if present).
 
-ON/OFF is saved across Chrome restarts. OFF lets an active request finish, then disconnects; subsequent queue work waits. It does not cancel a generation already submitted to ChatGPT. Reconnect and changing tabs are disabled while busy. Activity logs and counters are session-local, while Studio retains the request audit database.
+## Refresh models and check worker tabs
 
-## Selector update (0.4.2)
+Both Desktop and the extension expose **Refresh models** and an **Observed models**
+dropdown. Discovery opens the first assigned worker's model menu without selecting
+a model or sending a prompt. It reads enabled model-shaped options and supported
+model attributes, explores recognized Model / Effort submenus, and restores the
+picker's closed state if it opened it. The current model is included. Results are
+explicitly partial: arbitrary layouts, collapsed submenus and account differences
+may hide choices. Custom exact-name entry remains available. A missing menu reports
+that only the current model was detected; this is not a complete account catalog.
+Reasoning options are observed for the current menu, not guaranteed for every model.
 
-Prioritizes the supplied ProseMirror textbox with data-composer-markdown and Work with ChatGPT label, submit button labeled Send, and generation button labeled Stop. Previous selectors remain as fallbacks. Disabled or aria-disabled Send buttons are not clicked. Tests cover the supplied DOM shape, long prompts, disabled sending and unfinished responses. Live signed-in Chrome verification remains pending.
+**Check worker tabs** inspects assigned tabs without navigating, typing, changing
+Chat / Work or sending a prompt. It checks visible input and Send controls, page
+alerts, generation state, composer-mode availability, Temporary Chat availability
+when requested, and the requested model/effort when one is specified. A disabled
+Send button is expected on an empty editor. Reports show pass/fail per check/tab.
+Desktop uses saved Studio conversation settings and the current model form. The
+extension check uses its saved model preference and its **Require Temporary Chat**
+checkbox. Make sure settings are saved before checking.
 
-Load Google Flow from `extensions/googleflow/` and ChatGPT separately from `extensions/chatgpt/`. Reload the ChatGPT extension and refresh its browser tab after updating.
+These are availability checks on the current page, not proof that the next job
+will succeed. The actual job navigates to a new chat and verifies all settings again.
+For mode-specific models, open that mode in the tabs before running the check.
 
-## Chat and Work input support (0.4.3)
+Desktop's **Check worker tabs before adding this batch** is enabled by default.
+A failed check preserves the pasted prompts and does not enqueue them. Pause and
+wait for active jobs, and review held workers before inspection. To append to a
+running queue without inspection, explicitly uncheck that option. Direct API queue
+calls and storyboard submissions do not automatically invoke preflight; their jobs
+still perform the normal per-job verification. API clients may call
+`POST /api/chatgpt/preflight` with a model first; discovery is
+`POST /api/chatgpt/models`.
 
-Explicit selectors support both `Ask ChatGPT` and `Work with ChatGPT`. Hidden editors are skipped, including duplicate matching editors. DOM tests exercise both supplied editor variants with short/long prompts, disabled Send, Stop still present and a hidden duplicate editor. This verifies input handling with fixtures, not live account or complete Work-mode response compatibility. Refresh the ChatGPT tab after reloading the extension.
+Inspection temporarily blocks dispatch in both gateway and extension. A race rejected
+before submission is returned as known-not-submitted, so queued jobs remain queued.
+Each tab inspection has a 5-second deadline; gateway control allows 20 seconds.
 
-## Desktop prompt and response (0.4.4)
+## Worker progress and completion checks
 
-Open **ChatGPT** in the Desktop sidebar, enter a message and click **Send to ChatGPT**. A full response is displayed as plain text and can be copied. **Clear** resets the form and displayed answer, not the saved request audit. Requests share the gateway with concept generation. A busy gateway or review pause is shown as an error. No automatic retry occurs. Each send starts a new chat without previous-message context; this screen does not stream partial answers. Both prompt and response are retained in Settings → ChatGPT Web → View Request History. The prompt limit is 20,000 characters.
+Side panel and Desktop display phases such as OPENING TAB, SELECTING MODE,
+ENABLING TEMPORARY, SELECTING MODEL, TYPING, SENDING, THINKING, USING TOOLS,
+GENERATING, WAITING COMPLETION, VERIFYING COMPLETION and AWAITING SAVE. The website
+must expose recognizable status indicators to distinguish Thinking / tool activity;
+otherwise the extension reports the broader Generating or Waiting state.
+Desktop also shows character count and time since the last text change. Progress
+contains metadata only; no partial answer is displayed as a completed result.
+Updates are correlated by request ID and sending tab ID. Late/wrong-tab updates
+cannot overwrite another worker's progress. The UI refreshes every three seconds.
 
-## Opening the correct panel (0.4.5)
+A stable string alone is no longer accepted as completion. A new assistant message
+must have a final-assistant marker or recognized response action controls in its
+own response container. Stop, busy, Thinking or tool activity blocks completion,
+then four stable polling checks are required. Hidden Stop controls do not block.
+Errors shown in supported page alerts stop the job. Missing completion evidence
+leads to timeout and review, never an automatic partial-success result or resend.
+These are conservative DOM heuristics, not a server-issued completion event.
 
-In chrome://extensions, load or reload **Flowkit ChatGPT Gateway** from `extensions/chatgpt/` (extension version 1.3.0). Refresh the ChatGPT tab. Pin this extension through Chrome's Extensions menu and click its icon: Chrome opens the ChatGPT panel directly, with no popup step. The heading must read **FLOW KIT / ChatGPT**. A panel titled **Flow Kit Extension** with Refresh Token belongs to Google Flow. Keep that extension loaded separately from `extensions/googleflow/`. Chrome 116 or later is required.
+## Temporary Chat
 
-This release also includes the Desktop **ChatGPT** prompt/response screen from 0.4.4. Restart the Desktop app and backend after updating.
+The supplied `button[aria-label="Temporary chat"]` is clicked BEFORE typing.
+The extension then requires positive evidence: an active toggle (`aria-pressed=true`
+/ `data-state=on`), an explicit exit/turn-off label, or a visible Temporary Chat
+heading. Where offered, it selects Unpersonalized. The button's presence alone
+and a URL parameter are NOT confirmation. The state is rechecked before Send.
 
-## Response markup update (0.4.7)
+If confirmation is missing, no prompt is sent and that worker requires review.
+Share the HTML AFTER enabling Temporary Chat if your layout has different active
+indicators. Work mode may not expose this feature; do not assume that it does.
+You may explicitly select Regular chat in Desktop; that mode keeps normal history.
+There is no automatic fallback to Regular and no automatic deletion in this release.
+Temporary chats must not be explicitly saved on the website if you want them to
+stay out of history. Local Flowkit audit and results are stored independently.
 
-Supports assistant-message markdown roots in the provided Chat/Work HTML, with the legacy assistant-role selector retained. Message IDs distinguish newly rendered answers even when virtualized history removes older turns. User bubbles and controls are excluded; paragraph breaks are preserved. Completion still uses DOM stability and the absence of Stop, not a server completion event. Tests cover the uploaded conversation fixture, old messages, a new message replacing a virtualized old one, and an unfinished response. Reload ChatGPT extension 1.3.1 and refresh its tab.
+## Batch prompts
+
+Paste either a JSON array of prompt strings, or separate multiline prompts with
+a line containing only `---`. Click **Add batch to queue**. Each batch accepts
+1–200 prompts, each up to 20,000 characters. After the optional preflight passes,
+prompt/model data is saved;
+worker count, timeout and mode are taken from current settings when a job starts.
+
+Example:
+
+```text
+Write an image concept for a rainy Tokyo street.
+---
+Write an image concept for a sunrise over Mount Fuji.
+```
+
+The worker that finishes first takes the next eligible job. Results stay attached
+to batch/ordinal/job IDs even when responses finish out of order. The UI shows the
+latest 1,000 jobs, worker status and elapsed time, counts, full prompt/answer/error,
+selection, cancel queued jobs, explicit retry and JSON export of up to 200 selected
+jobs. Older rows remain in the database. View Request History shows the last 500
+audit records, including direct messages and storyboard requests.
+
+The single-message form also uses this pool and may report Busy if no tab is free.
+It displays the full completed answer, not partial streaming. Each job starts a
+new conversation; previous jobs are not conversational context.
+
+## Script & Scenes
+
+ChatGPT Web concept generation accepts up to 200 selected segments. Its existing
+concept queue and the Desktop prompt queue share the same three-tab capacity.
+Concept responses are validated before acknowledging the worker. Image/video
+submission limits and the Google Flow worker are unchanged. CLI concept providers
+remain available.
+
+## Persistence and recovery
+
+`chatgpt_jobs.db` retains the existing audit table and adds settings and a batch
+queue without deleting old data. The backend stores raw responses and completed
+answers transactionally BEFORE the gateway sends a save acknowledgement to the
+extension. A worker stays AWAITING_SAVE until acknowledged; its tab cannot be
+navigated to a new job prematurely. If acknowledgement fails, the saved result
+remains COMPLETED and the worker stays held for review. Never resend it merely
+because release failed.
+
+- Pause stops new dispatch; active jobs finish and save.
+- One uncertain worker is quarantined; other idle workers may continue.
+- A detected account usage-limit alert pauses dispatch for the whole gateway.
+  Detection depends on visible page alerts and is not a quota guarantee.
+- Timeouts/disconnections do not automatically resubmit jobs or press Stop.
+- Check uncertain tabs and stop any generation manually. Then **Release workers
+  after review**. Active requests must finish first. Release does not retry jobs.
+- If a worker tab was closed, replace its assignment in the side panel after
+  reviewing the old job, then release reviewed workers in Desktop.
+- Backend restart changes interrupted jobs to NEEDS_REVIEW and pauses the queue.
+  Extension restart similarly preserves uncertain worker state. Queued jobs stay
+  queued. Review, release, then Resume queue. Use Retry selected only deliberately;
+  it creates a new job, preserving the original attempt.
+
+## Time limits and protocol
+
+- Response polling: every 1.5 seconds; positive completion evidence, no active
+  generation/tool indicators and four stable checks are required. This remains a
+  DOM heuristic, not a server completion event.
+- Response timeout: configurable 30–600 seconds, default 180.
+- Tab ready wait: up to 30 seconds; Temporary Chat verification: up to 10 seconds.
+- Gateway deadline: configured response timeout + 65 seconds for preparation.
+- Backend HTTP deadline: response timeout + 90 seconds; Desktop: 720 seconds.
+- One extension WebSocket, up to three correlated in-flight requests. Request ID
+  and worker ID must match. Errors hold the affected worker; wrong/late IDs are ignored.
+- Services: backend 127.0.0.1:8100; Google Flow bridge 9222; ChatGPT gateway 18790.
+  Gateway protocol is 2. The Desktop checks service identity before reuse.
+
+## Verification limits
+
+Automated tests use the real local HTTP/WebSocket gateway with a fake extension,
+actual content/background scripts with browser mocks, and supplied DOM fixtures.
+The 150-request tests verify three-worker capacity, response correlation and
+save-before-reuse. Python tests cover database persistence, explicit retries,
+crash recovery and capacity rejection; UI tests cover batch submission/export.
+Release 0.6.0 checks: 81 Desktop/extension tests, 4 gateway tests and 13 targeted
+Python tests pass. These include inspection/dispatch exclusion, model discovery
+without selection, failed preflight preserving prompts, progress correlation,
+partial-only output, delayed final markers, Thinking/tool indicators and resumed
+streaming. No new test is a live browser/account test.
+These do not prove live ChatGPT concurrency, Temporary Chat DOM behavior on every
+account, account quota, response quality, or Windows Electron execution.
+No live three-tab ChatGPT success is claimed. Google Flow code was not modified.

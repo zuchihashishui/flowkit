@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Flow Kit</title>
+  <title>Flowkit Google Flow Bridge</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -486,13 +486,14 @@
       color: var(--text);
     }
   </style>
+  <link rel="stylesheet" href="progress.css">
 </head>
 <body>
 
   <!-- Header -->
   <header>
     <div id="conn-dot"></div>
-    <div class="header-title"><span>Flow Kit</span> Extension</div>
+    <div class="header-title"><span>FLOW KIT</span> / Google Flow</div>
     <div class="toggle-wrap">
       <span class="toggle-label" id="toggle-label">OFF</span>
       <label class="toggle">
@@ -503,6 +504,8 @@
     </div>
   </header>
 
+  <section id="flow-progress" aria-live="polite">Loading Desktop progress…</section>
+
   <!-- Metrics -->
   <div class="metrics">
     <div class="metric-card">
@@ -511,7 +514,7 @@
     </div>
     <div class="metric-card">
       <div class="metric-value green" id="m-success">0</div>
-      <div class="metric-label">Success</div>
+      <div class="metric-label">RPC returned</div>
     </div>
     <div class="metric-card">
       <div class="metric-value red" id="m-failed">0</div>
@@ -577,5 +580,6 @@
   </div>
 
   <script src="side_panel.js"></script>
+  <script src="progress.js"></script>
 </body>
 </html>

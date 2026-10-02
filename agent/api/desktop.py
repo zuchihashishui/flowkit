@@ -27,6 +27,9 @@ router = APIRouter(prefix="/desktop", tags=["desktop"])
 ROOT = OUTPUT_DIR / "desktop"
 STORE = BASE_DIR / "desktop_jobs.db"
 paused = False
+MEDIA_CONCURRENCY = 3
+VOICE_CONCURRENCY = 1
+ACTIVE_STATES = {"RUNNING", "SUBMITTING", "DOWNLOADING"}
 
 
 @contextmanager
@@ -36,6 +39,10 @@ def connection():
     db.row_factory = sqlite3.Row
     db.execute("CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL, state TEXT NOT NULL, remote TEXT, files TEXT NOT NULL DEFAULT '[]', error TEXT, created REAL NOT NULL)")
     db.execute("CREATE TABLE IF NOT EXISTS preferences (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    columns = {r[1] for r in db.execute("PRAGMA table_info(jobs)")}
+    for name, definition in (("stage", "TEXT"), ("started", "REAL"), ("updated", "REAL")):
+        if name not in columns:
+            db.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
     try:
         with db:
             yield db
@@ -49,7 +56,10 @@ def rows():
 
 
 def update(jid, **values):
-    assert set(values) <= {"state", "remote", "files", "error"}
+    assert set(values) <= {"state", "remote", "files", "error", "stage", "started"}
+    if "state" in values and "stage" not in values:
+        values["stage"] = values["state"]
+    values["updated"] = time.time()
     with connection() as db:
         db.execute("UPDATE jobs SET " + ",".join(f"{k}=?" for k in values) + " WHERE id=?", [*values.values(), jid])
 
@@ -105,6 +115,36 @@ async def list_jobs():
     return {"paused": paused, "jobs": [{**r, "payload": json.loads(r["payload"]), "can_resume": r["state"] == "FAILED" and bool(r["remote"]), "remote": None, "files": json.loads(r["files"])} for r in rows()]}
 
 
+@router.get("/flow-progress")
+async def flow_progress():
+    """Safe progress summary for the Flow side panel; excludes prompts and URLs."""
+    from agent.config import FLOW_GENERATION_MAX_CONCURRENT, FLOW_GENERATION_MIN_INTERVAL_S, FLOW_UNUSUAL_ACTIVITY_COOLDOWN_S
+    client = get_flow_client()
+    guard = getattr(client, "generation_guard_status", {})
+    jobs = []
+    for row in rows():
+        body = json.loads(row["payload"])
+        if body["kind"] == "voice":
+            continue
+        stage = row["stage"] or row["state"]
+        if row["state"] == "QUEUED":
+            stage = "PAUSED" if paused else "WAITING_CONNECTION" if not client.connected else "COOLDOWN" if guard.get("cooldown_active") and not row["remote"] else "QUEUED"
+        jobs.append({"id": row["id"], "kind": body["kind"], "label": body.get("label", "Scene"),
+                     "state": row["state"], "stage": stage, "created": row["created"],
+                     "started": row["started"], "updated": row["updated"] or row["created"],
+                     "error": row["error"]})
+    counts = {key: sum(j["state"] in states for j in jobs) for key, states in (
+        ("active", ACTIVE_STATES), ("queued", {"QUEUED"}), ("completed", {"COMPLETED"}),
+        ("failed", {"FAILED", "NEEDS_REVIEW"}))}
+    # Active/queued jobs first, then recent finished jobs; list size bounded.
+    display = sorted(jobs, key=lambda j: (j["state"] not in ACTIVE_STATES, j["state"] != "QUEUED", -j["created"]))[:50]
+    return {"connected": client.connected, "paused": paused, "max_concurrent": MEDIA_CONCURRENCY,
+            **counts, "jobs": display, "generation_throttle": {
+                "max_concurrent": FLOW_GENERATION_MAX_CONCURRENT,
+                "min_interval_s": FLOW_GENERATION_MIN_INTERVAL_S,
+                "unusual_activity_cooldown_s": FLOW_UNUSUAL_ACTIVITY_COOLDOWN_S, **guard}}
+
+
 class Pause(BaseModel):
     paused: bool
 
@@ -128,7 +168,7 @@ async def cancel_jobs(body: CancelBatch):
     cancelled = []
     with connection() as db:
         for jid in dict.fromkeys(body.ids):
-            result = db.execute("UPDATE jobs SET state='CANCELLED', error=NULL WHERE id=? AND state='QUEUED'", (jid,))
+            result = db.execute("UPDATE jobs SET state='CANCELLED', stage='CANCELLED', updated=?, error=NULL WHERE id=? AND state='QUEUED'", (time.time(), jid))
             if result.rowcount:
                 cancelled.append(jid)
     return {"cancelled": cancelled, "skipped": [jid for jid in dict.fromkeys(body.ids) if jid not in cancelled]}
@@ -218,14 +258,14 @@ async def process(job):
     jid = job["id"]
     # Claim atomically so a cancelled job cannot start from a stale queue snapshot.
     with connection() as db:
-        if not db.execute("UPDATE jobs SET state='RUNNING', error=NULL WHERE id=? AND state='QUEUED'", (jid,)).rowcount:
+        if not db.execute("UPDATE jobs SET state='RUNNING', stage='STARTING', started=?, updated=?, error=NULL WHERE id=? AND state='QUEUED'", (time.time(), time.time(), jid)).rowcount:
             return
     body = Job.model_validate_json(job["payload"])
     remote = json.loads(job["remote"]) if job["remote"] else None
     try:
         if not remote:
             # A crash after this state is persisted is not auto-resubmitted.
-            update(jid, state="SUBMITTING")
+            update(jid, state="SUBMITTING", stage="GENERATING_IMAGE" if body.kind == "image" else "SUBMITTING_VIDEO" if body.kind == "video" else "GENERATING_VOICE")
             if body.kind == "image":
                 result = await flow.generate_image(flow.GenerateImageRequest(prompt=body.prompt, project_id=body.project_id, image_model=body.image_model, aspect_ratio="IMAGE_ASPECT_RATIO_LANDSCAPE" if body.orientation == "HORIZONTAL" else "IMAGE_ASPECT_RATIO_PORTRAIT"))
                 urls = [m.get("image", {}).get("generatedImage", {}).get("fifeUrl") or m.get("image", {}).get("generatedImage", {}).get("imageUri") for m in result.get("media", [])]
@@ -244,6 +284,7 @@ async def process(job):
                 remote = {"audio_path": result.audio_path}
             update(jid, remote=json.dumps(remote), state="RUNNING")
         if body.kind == "video" and not remote.get("urls"):
+            update(jid, stage="GENERATING_VIDEO")
             for _ in range(120):
                 result = await flow.check_omni_status(flow.CheckOmniStatusRequest(workflows=remote["workflows"], project_id=body.project_id))
                 if result.get("done"):
@@ -286,16 +327,43 @@ async def run():
     for r in rows():
         if r["state"] in ("RUNNING", "SUBMITTING", "DOWNLOADING"):
             update(r["id"], state="QUEUED" if r["remote"] else "NEEDS_REVIEW", error="Application restarted; saved result will resume, uncertain submissions require review.")
-    while True:
-        if not paused:
-            for r in reversed(rows()):
-                if r["state"] == "QUEUED":
-                    body = json.loads(r["payload"])
-                    if body["kind"] != "voice" and not get_flow_client().connected:
+    tasks: dict[str, tuple[asyncio.Task, str]] = {}
+    try:
+        while True:
+            for jid, (task, _) in list(tasks.items()):
+                if task.done():
+                    try:
+                        task.result()
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        logger.exception("Desktop task failed outside job handler: %s", jid)
+                    del tasks[jid]
+            if not paused:
+                for r in reversed(rows()):
+                    if r["state"] != "QUEUED" or r["id"] in tasks:
                         continue
-                    await process(r)
-                    break
-        await asyncio.sleep(2)
+                    kind = json.loads(r["payload"])["kind"]
+                    lane = "voice" if kind == "voice" else "media"
+                    limit = VOICE_CONCURRENCY if lane == "voice" else MEDIA_CONCURRENCY
+                    if sum(active_lane == lane for _, active_lane in tasks.values()) >= limit:
+                        continue
+                    if lane == "media":
+                        client = get_flow_client()
+                        if not client.connected:
+                            continue
+                        # Hold unsubmitted jobs in the durable queue during
+                        # cooldown. Saved results may still poll/download.
+                        if not r["remote"] and getattr(client, "generation_guard_status", {}).get("cooldown_active"):
+                            continue
+                    tasks[r["id"]] = (asyncio.create_task(process(r)), lane)
+            await asyncio.sleep(2)
+    finally:
+        # Leave interrupted state durable. Startup only resumes known remote
+        # results; uncertain submissions are never automatically repeated.
+        for task, _ in tasks.values():
+            task.cancel()
+        await asyncio.gather(*(task for task, _ in tasks.values()), return_exceptions=True)
 
 
 @router.post("/voices/import")

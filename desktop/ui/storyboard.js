@@ -24,10 +24,10 @@
     if (documentDirty || editorDirty) throw Error('Save or discard script/concept edits first.');
     if (!data?.document) throw Error('Save the script before importing audio or segments.');
   }
-  function selected() {
+  function selected(limit=100) {
     assertSaved();
     const result = data.segments.filter(s => checked.has(s.id));
-    if (!result.length || result.length > 100) throw Error('Select 1–100 script segments.');
+    if (!result.length || result.length > limit) throw Error(`Select 1–${limit} script segments.`);
     return result;
   }
   function timestamp(ms) {
@@ -150,7 +150,7 @@
   $('sb-select-all').onclick=()=>{(data?.segments||[]).forEach(s=>checked.add(s.id));selectionChanged();};
   $('sb-select-none').onclick=()=>{checked.clear();selectionChanged();};
   $('sb-create-concepts').onclick=()=>run(async()=>{
-    const items=selected();if(!confirm(`Create concepts for up to ${items.length} segment(s) using ${$('sb-provider').value}? One AI request per segment; provider quotas apply.`))return;
+    const items=selected(200);if(!confirm(`Create concepts for up to ${items.length} segment(s) using ${$('sb-provider').value}? One AI request per segment; provider quotas apply.`))return;
     const result=await api('POST',path('/generate-concepts'),{segment_ids:items.map(s=>s.id),provider:$('sb-provider').value,model:$('sb-model').value.trim()||null,regenerate:$('sb-regenerate').checked});
     await reload();notice(`${result.ids.length} concept job(s) queued; ${result.skipped.length} skipped because current or pending concepts already exist.`);
   });

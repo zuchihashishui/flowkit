@@ -33,6 +33,7 @@ let flowKey = null;
 let callbackSecret = null;  // Auth secret for HTTP callback, received from server on WS connect
 let state = 'off'; // off | idle | running
 let manualDisconnect = false;
+const activeBatchRpcs = new Set();
 let metrics = {
   tokenCapturedAt: null,
   requestCount: 0,   // captcha-consuming requests only (gen image/video/upscale)
@@ -548,6 +549,7 @@ async function handleBatchRpc(msg) {
     return;
   }
 
+  activeBatchRpcs.add(id);
   setState('running');
   const hasCaptcha = !!captchaAction;
   if (hasCaptcha) metrics.requestCount++;
@@ -565,22 +567,23 @@ async function handleBatchRpc(msg) {
   if (visible) {
     addRequestLog({
       id, type: logType, time: new Date().toISOString(),
-      status: 'processing', error: null, outputUrl: null, url: rpcid,
+      status: 'processing', stage: 'Requesting Flow', startedAt: Date.now(), error: null, outputUrl: null, url: rpcid,
       payloadSummary: freq.slice(0, 200),
     });
   }
 
   try {
     const out = await runBatchRpc({ id, rpcid, freq, captchaAction, match });
-    if (out.error) {
-      if (hasCaptcha) { metrics.failedCount++; metrics.lastError = out.error; }
-      if (visible) updateRequestLog(id, { status: 'failed', error: out.error });
-      sendToAgent({ id, status: 502, error: out.error });
+    if (out.error || (Number.isInteger(out.status) && out.status >= 400)) {
+      const error = out.error || `HTTP_${out.status}`;
+      if (hasCaptcha) { metrics.failedCount++; metrics.lastError = error; }
+      if (visible) updateRequestLog(id, { status: 'failed', stage: 'RPC failed', finishedAt: Date.now(), error, httpStatus: out.status });
+      sendToAgent({ id, status: out.status || 502, ...(out.error ? {error: out.error} : {data: out.text}) });
     } else {
       if (hasCaptcha) { metrics.successCount++; metrics.lastError = null; }
       if (visible) {
         updateRequestLog(id, {
-          status: 'success', httpStatus: out.status,
+          status: 'success', stage: 'RPC returned', finishedAt: Date.now(), httpStatus: out.status,
           responseSummary: (out.text || '').slice(0, 300),
         });
       }
@@ -589,12 +592,13 @@ async function handleBatchRpc(msg) {
   } catch (e) {
     const err = e?.message || 'BATCH_RPC_FAILED';
     if (hasCaptcha) { metrics.failedCount++; metrics.lastError = err; }
-    if (visible) updateRequestLog(id, { status: 'failed', error: err });
+    if (visible) updateRequestLog(id, { status: 'failed', stage: 'RPC failed', finishedAt: Date.now(), error: err });
     sendToAgent({ id, status: 500, error: err });
+  } finally {
+    chrome.storage.local.set({ metrics });
+    activeBatchRpcs.delete(id);
+    setState(manualDisconnect || ws?.readyState === 3 ? 'off' : 'idle');
   }
-
-  chrome.storage.local.set({ metrics });
-  setState('idle');
 }
 
 // ─── API Request Proxy ──────────────────────────────────────
@@ -780,7 +784,7 @@ async function handleApiRequest(msg) {
 // ─── State & Popup ──────────────────────────────────────────
 
 function setState(newState) {
-  state = newState;
+  state = newState === 'idle' && activeBatchRpcs.size ? 'running' : newState;
   const badges = { idle: '●', running: '▶', off: '○' };
   const colors = { idle: '#22c55e', running: '#f59e0b', off: '#6b7280' };
   chrome.action.setBadgeText({ text: badges[state] || '' });
@@ -792,7 +796,18 @@ function broadcastStatus() {
   chrome.runtime.sendMessage({ type: 'STATUS_PUSH' }).catch(() => {});
 }
 
-chrome.runtime.onMessage.addListener((msg, _, reply) => {
+chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+  if (msg.type === 'FLOW_PROGRESS') {
+    if (sender.tab) { reply({ error: 'Extension page required' }); return false; }
+    fetch('http://127.0.0.1:8100/api/desktop/flow-progress', { signal: AbortSignal.timeout(5000) })
+      .then(async response => {
+        if (!response.ok) throw new Error(`Backend HTTP ${response.status}; restart the updated backend.`);
+        return response.json();
+      })
+      .then(data => reply({ ...data, rpc_in_flight: activeBatchRpcs.size }))
+      .catch(error => reply({ error: error.message || 'Backend unavailable', rpc_in_flight: activeBatchRpcs.size }));
+    return true;
+  }
   if (msg.type === 'STATUS') {
     reply({
       connected: ws?.readyState === WebSocket.OPEN,
@@ -807,6 +822,7 @@ chrome.runtime.onMessage.addListener((msg, _, reply) => {
         lastError: metrics.lastError,
       },
       state,
+      rpcInFlight: activeBatchRpcs.size,
     });
   }
 

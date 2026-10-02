@@ -231,7 +231,7 @@ async def select_concept(concept_id: str):
 
 
 class GenerateBody(BaseModel):
-    segment_ids: list[str] = Field(min_length=1, max_length=100)
+    segment_ids: list[str] = Field(min_length=1, max_length=200)
     provider: Literal['codex','claude','agy','chatgpt-web'] = 'codex'
     model: str | None = Field(default=None, max_length=100, pattern=r'^[^-\s][^\r\n]*$')
     regenerate: bool = False
@@ -291,7 +291,11 @@ async def process_concept(job):
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        from agent.services.chatgpt_gateway import GatewayReviewRequired
+        from agent.services.chatgpt_gateway import GatewayReviewRequired, GatewayBusy
+        if isinstance(exc, GatewayBusy):
+            async with transaction() as db:
+                await db.execute("UPDATE concept_job SET state='QUEUED' WHERE id=?", (job['id'],))
+            return
         state = 'NEEDS_REVIEW' if isinstance(exc, GatewayReviewRequired) else 'FAILED'
         async with transaction() as db:
             await db.execute("UPDATE concept_job SET state=?,error=? WHERE id=?", (state, str(exc)[:1500], job['id']))
@@ -300,18 +304,34 @@ async def process_concept(job):
 async def run():
     async with transaction() as db:
         await db.execute("UPDATE concept_job SET state='NEEDS_REVIEW',error='App stopped during AI generation. Check before submitting again.' WHERE state='RUNNING'")
-    while True:
-        pending = await query("SELECT * FROM concept_job WHERE state='QUEUED' ORDER BY created LIMIT 1")
-        if pending:
-            payload = json.loads(pending[0]['payload'])
-            ready = True
-            if payload.get('provider') == 'chatgpt-web':
-                from agent.services.chatgpt_gateway import status
-                info = await status()
-                ready = info.get('available') and info.get('extensionConnected') and not info.get('needsReview') and not info.get('busy')
-            if ready:
-                await process_concept(pending[0])
-        await asyncio.sleep(2)
+    tasks = {}
+    try:
+        while True:
+            for jid, task in list(tasks.items()):
+                if task.done():
+                    task.result()
+                    del tasks[jid]
+            from agent.services.chatgpt_gateway import status
+            info = await status()
+            slots = info.get('availableSlots',0)
+            pending = await query("SELECT * FROM concept_job WHERE state='QUEUED' ORDER BY created LIMIT 200")
+            for job in pending:
+                if len(tasks) >= 3:
+                    break
+                if job['id'] in tasks:
+                    continue
+                if json.loads(job['payload']).get('provider') == 'chatgpt-web':
+                    if slots <= 0:
+                        continue
+                    slots -= 1
+                elif tasks:
+                    continue
+                tasks[job['id']] = asyncio.create_task(process_concept(job))
+            await asyncio.sleep(1)
+    finally:
+        for task in tasks.values():
+            task.cancel()
+        await asyncio.gather(*tasks.values(),return_exceptions=True)
 
 
 @router.post('/videos/{video_id}/audio')

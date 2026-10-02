@@ -9,9 +9,12 @@ The upstream Camoufox, auto-login and MCP subprojects are not included.
 
 Flowkit modifications: explicit tab selection; page navigation before content messaging;
 DOM completion polling rejects timeout/partial output; model selection failures are
-visible; one active request; fail-closed review state after disconnect; loopback bind;
+visible; up to three fixed worker tabs; per-worker review state after disconnect; loopback bind;
 reject cross-origin browser HTTP calls; bounded bodies; no automatic replay;
-server identity/protocol health check; simplified popup; persistent Python audit.
+server identity/protocol health check (protocol 2); side panel; persistent Python audit and batch queue;
+verified Temporary Chat before submission; result-save acknowledgements before worker reuse.
 
 This remains DOM automation, not direct ChatGPT backend API or native SSE forwarding.
 No authentication challenges are bypassed. Users sign in manually in Chrome.
+
+The same upstream icon set is reused in `extensions/googleflow/icons/`; its MIT license is retained there.

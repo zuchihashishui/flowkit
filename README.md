@@ -1,10 +1,10 @@
-> **Studio 0.4.6:** Browser extensions are grouped in `extensions/googleflow/` and `extensions/chatgpt/`. See [extension installation and migration](extensions/README.md).
+> **Studio 0.7.23:** Restores the exact ElevenLabs extension from the working 0.7.20 release (Bridge 1.0.17). The only runtime change from 0.7.20 is new speech chunks targeting 900–1,199 characters. Restart the backend and reload the restored extension. Existing jobs keep their stored chunks and queue state.
 
-> **Studio 0.4.4:** Open **ChatGPT** in the Desktop sidebar to send a prompt and read/copy its response. Setup instructions: [ChatGPT Web](docs/CHATGPT_WEB.md).
-
-> **Studio 0.4.1:** ChatGPT side panel and persistent ON/OFF. See [extension setup](docs/CHATGPT_WEB.md) and [folder layout](docs/PROJECT_LAYOUT.md).
-
-> **Flowkit Studio 0.4 — ChatGPT Web integration:** See [setup and usage](docs/CHATGPT_WEB.md). Keep the Flow extension in `extensions/googleflow/` and load the separate ChatGPT extension from `extensions/chatgpt/`.
+> **Studio 0.7.20 / ElevenLabs Bridge 1.0.17:** Each TTS chunk closes previous TTS tabs, opens and auto-binds one new tab, clears and refreshes, then enters text and generates speech. [Workflow and update steps](docs/ELEVENLABS_FRESH_TABS.md). Update both backend and ElevenLabs extension.
+> **Studio 0.7.19:** Added backend process diagnostics and **Restart local backend** to resolve a stale process on port 8100. [Recovery guide](docs/BACKEND_RECOVERY.md). ElevenLabs extension stays at 1.0.16; ChatGPT stays at 1.5.1.
+> **Studio 0.7.18:** Consolidated ElevenLabs editor, queue, recovery and Electron fixes; ChatGPT complete-prompt checks; Google Flow uncertain-submission protection. [Stability review](docs/STABILITY_REVIEW_0.7.18.md) · [ElevenLabs setup](docs/ELEVENLABS_EXTENSION.md).
+> Google Flow runs three Desktop image/video jobs concurrently, with a minimum three-second submission gap and live job stages in the extension and Desktop. [Flow progress and limits](docs/GOOGLEFLOW_PROGRESS.md).
+> New **Flowkit ElevenLabs Bridge** adds Text to Speech with Eleven v4, Japanese text chunks of 900–1,199 characters, optional credit display, saved audio and optional FFmpeg joining. [Setup and recovery](docs/integrations/elevenlabs-bridge.md). Three independent extensions live under `extensions/googleflow/`, `extensions/chatgpt/`, and `extensions/elevenlabs/`. Restart the backend and reload changed extensions after updating.
 
 <p align="center">
   <img src="docs/images/flowkit_banner.svg" width="720" alt="FLOW KIT" />

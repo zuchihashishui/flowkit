@@ -10,9 +10,11 @@ for(const streaming of [false,true])test(`ChatGPT extension: ${streaming?'partia
  const input=w.document.querySelector('textarea');Object.defineProperty(input,'offsetParent',{get:()=>w.document.body});
  w.document.execCommand=(cmd,_,value)=>{if(cmd==='insertText')input.value=value;if(cmd==='delete')input.value='';};
  w.document.querySelector('button').onclick=()=>{
-  const answer=w.document.createElement('div');answer.dataset.messageAuthorRole='assistant';answer.textContent='A complete response';w.document.body.append(answer);
+  const answer=w.document.createElement('div');answer.dataset.messageAuthorRole='assistant';answer.dataset.localConversationFinalAssistant='true';answer.textContent='A complete response';w.document.body.append(answer);
   if(streaming){const stop=w.document.createElement('button');stop.dataset.testid='stop-button';w.document.body.append(stop);}
  };
+ w.document.body.insertAdjacentHTML('afterbegin','<div role="group" aria-label="Composer mode"><button aria-pressed="true">Chat</button><button aria-pressed="false">Work</button></div>');
+ for(const b of w.document.querySelectorAll('[aria-label="Composer mode"] button'))Object.defineProperty(b,'offsetParent',{get:()=>w.document.body});
  w.eval(fs.readFileSync(path.join(__dirname,'../../extensions/chatgpt/content.js'),'utf8'));
  const response=await new Promise(resolve=>handler({type:'chat',userMessage:'hello',newConversation:false,timeout:10000},{},resolve));
  assert.equal(response.ok,!streaming);
@@ -41,7 +43,9 @@ for(const mode of ['complete','streaming','disabled','long','hidden-duplicate'])
 
  w.document.execCommand=(cmd,_,value)=>{if(cmd==='insertText')editor.textContent=value;if(cmd==='delete')editor.textContent='';};
  if(mode==='disabled')button.setAttribute('aria-disabled','true');
- button.onclick=()=>{clicks++;const answer=w.document.createElement('div');answer.dataset.messageAuthorRole='assistant';answer.textContent='New answer';w.document.body.append(answer);if(mode==='streaming'){button.type='button';button.setAttribute('aria-label','Stop');}};
+ button.onclick=()=>{clicks++;const answer=w.document.createElement('div');answer.dataset.messageAuthorRole='assistant';answer.dataset.localConversationFinalAssistant='true';answer.textContent='New answer';w.document.body.append(answer);if(mode==='streaming'){button.type='button';button.setAttribute('aria-label','Stop');}};
+ w.document.body.insertAdjacentHTML('afterbegin','<div role="group" aria-label="Composer mode"><button aria-pressed="true">Chat</button><button aria-pressed="false">Work</button></div>');
+ for(const b of w.document.querySelectorAll('[aria-label="Composer mode"] button'))Object.defineProperty(b,'offsetParent',{get:()=>w.document.body});
  w.eval(fs.readFileSync(path.join(__dirname,'../../extensions/chatgpt/content.js'),'utf8'));
  const text=mode==='long'?'Long script. '.repeat(500):'Hello from Flowkit';
  const result=await new Promise(resolve=>handler({type:'chat',userMessage:text,newConversation:false,timeout:10000},{},resolve));

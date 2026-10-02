@@ -22,6 +22,8 @@ for(const mode of ['uploaded','old-only','virtualized','streaming','paragraphs']
   if(mode==='paragraphs')main.querySelector('[data-markdown-text-style]').innerHTML='<p>First paragraph.</p><p>Second paragraph.</p><button>Copy</button>';
   if(mode==='streaming'){const stop=d.createElement('button');stop.setAttribute('aria-label','Stop');d.body.append(stop);}
  };
+ w.document.body.insertAdjacentHTML('afterbegin','<div role="group" aria-label="Composer mode"><button aria-pressed="true">Chat</button><button aria-pressed="false">Work</button></div>');
+ for(const b of w.document.querySelectorAll('[aria-label="Composer mode"] button'))Object.defineProperty(b,'offsetParent',{get:()=>w.document.body});
  w.eval(fs.readFileSync(path.join(__dirname,'../../extensions/chatgpt/content.js'),'utf8'));
  const r=await new Promise(resolve=>handler({type:'chat',userMessage:'Hello',newConversation:false,timeout:10000},{},resolve));
  if(['old-only','streaming'].includes(mode)){assert.equal(r.ok,false);assert.match(r.error,/Timeout/);}

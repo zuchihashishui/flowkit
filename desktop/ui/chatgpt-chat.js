@@ -1,7 +1,7 @@
 (() => {
  const el=id=>document.getElementById(id);
  let pending=false, answer='';
- function lock(value){pending=value;for(const id of ['chat-send','chat-clear','chat-prompt','chat-model'])el(id).disabled=value;}
+ function lock(value){pending=value;for(const id of ['chat-send','chat-clear','chat-prompt','chat-model','chat-model-mode','chat-model-effort','chat-observed-model','chat-refresh-models'])el(id).disabled=value;}
  el('chat-form').onsubmit=async event=>{
   event.preventDefault();if(pending)return;
   const prompt=el('chat-prompt').value;
@@ -11,7 +11,7 @@
   el('chat-status').textContent='Sending… Keep the dedicated ChatGPT tab open. This can take a few minutes.';
   const started=Date.now();
   try{
-   const result=await window.studio.api('POST','/api/chatgpt/message',{prompt,model:el('chat-model').value.trim() || 'auto'});
+   const result=await window.studio.api('POST','/api/chatgpt/message',{prompt,model:window.chatModelSelection()});
    if(typeof result.response!=='string' || !result.response.trim())throw Error('ChatGPT returned an empty answer. Check Request History in Settings.');
    answer=result.response;el('chat-response').textContent=answer;el('chat-copy').disabled=false;
    el('chat-status').textContent=`Completed in ${Math.round((Date.now()-started)/1000)} seconds. Saved to Request History.`;
