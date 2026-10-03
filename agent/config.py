@@ -39,7 +39,7 @@ FLOW_GENERATION_MIN_INTERVAL_S = max(
     0.0, float(os.environ.get("FLOW_GENERATION_MIN_INTERVAL_S", "3"))
 )
 FLOW_GENERATION_MAX_CONCURRENT = max(
-    1, int(os.environ.get("FLOW_GENERATION_MAX_CONCURRENT", "1"))
+    1, int(os.environ.get("FLOW_GENERATION_MAX_CONCURRENT", "3"))
 )
 FLOW_UNUSUAL_ACTIVITY_COOLDOWN_S = max(
     0.0, float(os.environ.get("FLOW_UNUSUAL_ACTIVITY_COOLDOWN_S", "120"))
@@ -124,4 +124,3 @@ SUNO_MODEL = os.environ.get("SUNO_MODEL", "V4")
 SUNO_CALLBACK_URL = os.environ.get("SUNO_CALLBACK_URL", f"http://{API_HOST}:{API_PORT}/api/music/callback")
 SUNO_POLL_INTERVAL = int(os.environ.get("SUNO_POLL_INTERVAL", "5"))
 SUNO_POLL_TIMEOUT = int(os.environ.get("SUNO_POLL_TIMEOUT", "600"))
-

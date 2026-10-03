@@ -67,6 +67,8 @@ class FlowClient:
         self._operation_media: dict[str, str] = {}
         self._operation_polls: dict[str, int] = {}
         self._generation_slots = asyncio.Semaphore(FLOW_GENERATION_MAX_CONCURRENT)
+        self._generation_active = 0
+        self._generation_waiting = 0
         self._generation_rate_gate = asyncio.Lock()
         self._generation_last_submit_at = 0.0
         self._generation_unusual_until = 0.0
@@ -208,6 +210,9 @@ class FlowClient:
     def generation_guard_status(self) -> dict:
         remaining = max(0.0, self._generation_unusual_until - time.monotonic())
         return {
+            "active_submissions": self._generation_active,
+            "waiting_submissions": self._generation_waiting,
+            "next_submit_remaining_s": round(max(0.0, FLOW_GENERATION_MIN_INTERVAL_S - (time.monotonic() - self._generation_last_submit_at)), 3),
             "cooldown_active": remaining > 0,
             "cooldown_remaining_s": round(remaining, 3),
             "last_unusual_activity_at": self._generation_last_unusual_at,
@@ -434,6 +439,27 @@ class FlowClient:
                     refreshed, len(targets), project_id[:12])
         return {"refreshed": refreshed, "found": len(targets)}
 
+    async def close_idle_windows(self) -> bool:
+        """Ask every connected profile to close owned tabs, with confirmation."""
+        if self._pending or not self._extensions:
+            return False
+        for peer in list(self._extensions):
+            rid = str(uuid.uuid4())
+            future = asyncio.get_running_loop().create_future()
+            self._pending[rid] = future
+            self._pending_ws[rid] = peer
+            try:
+                await peer.send(json.dumps({'id': rid, 'method': 'close_idle_tabs', 'params': {}}))
+                result = await asyncio.wait_for(future, timeout=5)
+                if not result.get('result', {}).get('closed'):
+                    return False
+            except Exception:
+                return False
+            finally:
+                self._pending.pop(rid, None)
+                self._pending_ws.pop(rid, None)
+        return True
+
     async def _send(self, method: str, params: dict, timeout: float = 300) -> dict:
         """Send request to extension and wait for response.
 
@@ -452,6 +478,12 @@ class FlowClient:
             return {"error": "Extension not connected"}
 
         last_result = {"error": "Extension not connected"}
+        # Only known read-only RPCs can be replayed after losing a response.
+        # Generations, uploads, upscales and project creation may already have
+        # succeeded in the first browser even if its socket disconnected.
+        read_only = method == "batch_rpc" and params.get("rpcid") in {
+            fb.RPC_OPERATION, fb.RPC_PROJECT_MEDIA, fb.RPC_MEDIA,
+        }
         for index, extension_ws in enumerate(extension_candidates):
             if extension_ws not in self._extensions:
                 continue
@@ -472,13 +504,24 @@ class FlowClient:
                 last_result = await asyncio.wait_for(future, timeout=timeout)
             except asyncio.TimeoutError:
                 last_result = {"error": f"Timeout ({timeout}s) waiting for {method}"}
+                if not read_only:
+                    last_result["error"] = f"SUBMISSION_UNCERTAIN: {last_result['error']}. Check Flow before retrying."
             except Exception as e:
                 last_result = {"error": str(e)}
+                if not read_only:
+                    last_result["error"] = f"SUBMISSION_UNCERTAIN: {last_result['error']}. Check Flow before retrying."
             finally:
                 self._pending.pop(req_id, None)
                 self._pending_ws.pop(req_id, None)
 
             has_alternative = index + 1 < len(extension_candidates)
+            error = str(last_result.get("error") or "")
+            if not read_only and any(marker in error.lower() for marker in (
+                "extension disconnected", "extension_switched", "submission_uncertain",
+            )):
+                if "SUBMISSION_UNCERTAIN" not in error:
+                    last_result = {**last_result, "error": f"SUBMISSION_UNCERTAIN: {error}. Check Flow before retrying."}
+                return last_result
             if self._should_failover(last_result) and has_alternative:
                 if extension_ws in self._extensions:
                     self._extensions[extension_ws]["unavailable_until"] = (
@@ -533,7 +576,12 @@ class FlowClient:
                 ),
             }
 
-        await self._generation_slots.acquire()
+        self._generation_waiting += 1
+        try:
+            await self._generation_slots.acquire()
+        finally:
+            self._generation_waiting -= 1
+        self._generation_active += 1
         try:
             async with self._generation_rate_gate:
                 now = time.monotonic()
@@ -551,6 +599,11 @@ class FlowClient:
                 )
                 if delay > 0:
                     await asyncio.sleep(delay)
+                # Another overlapping request may have triggered cooldown while
+                # this task was waiting for the minimum submission gap.
+                if time.monotonic() < self._generation_unusual_until:
+                    remaining = max(1, int(self._generation_unusual_until - time.monotonic() + 0.999))
+                    return {"status": 429, "error": f"PUBLIC_ERROR_UNUSUAL_ACTIVITY local cooldown active; retry in about {remaining}s"}
                 self._generation_last_submit_at = time.monotonic()
 
             result = await self._send("batch_rpc", params, timeout=timeout)
@@ -593,6 +646,7 @@ class FlowClient:
                 )
             return result
         finally:
+            self._generation_active -= 1
             self._generation_slots.release()
 
     async def _batch_payload(self, rpcid: str, freq: str,

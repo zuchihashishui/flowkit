@@ -39,6 +39,9 @@ async def write_concept(payload):
     prompt = make_prompt(payload)
     provider = payload['provider']
     options = {'model': payload.get('model')}
+    if provider == 'chatgpt-web':
+        from agent.services.chatgpt_gateway import complete
+        return await complete(prompt, payload.get('model'), validate=parse_concept)
     if provider == 'claude':
         raw = await _run_claude_cli(prompt, **options)
     elif provider == 'codex':

@@ -1,0 +1,27 @@
+{
+  "name": "chatgpt-gateway",
+  "version": "1.0.0",
+  "description": "OpenAI-compatible API gateway that uses your logged-in ChatGPT browser session",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Draivix/chatgpt-gateway.git"
+  },
+  "author": "Draivix",
+  "keywords": [
+    "chatgpt",
+    "gateway",
+    "browser-extension",
+    "openai-api",
+    "chrome-extension",
+    "firefox-addon"
+  ]
+}

@@ -1,0 +1,12 @@
+#flow-progress { padding: 12px 14px; border-bottom: 1px solid #252545; color: #e2e8f0; background: #13132a; }
+.flow-counts { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 8px 0; font-size: 11px; }
+.flow-counts span { background: #1a1a35; border: 1px solid #252545; border-radius: 5px; padding: 3px 7px; }
+.flow-hint { color: #94a3b8; font-size: 10px; margin: 5px 0; line-height: 1.5; }
+.flow-warning { color: #fbbf24; font-size: 11px; overflow-wrap: anywhere; }
+.flow-jobs { max-height: 270px; overflow-y: auto; }
+.flow-job { border: 1px solid #252545; border-radius: 6px; padding: 8px; margin-top: 6px; font-size: 11px; }
+.flow-job div { display: flex; gap: 8px; justify-content: space-between; }
+.flow-job strong { overflow-wrap: anywhere; }
+.flow-job span { white-space: nowrap; color: #94a3b8; }
+.flow-job p { color: #93c5fd; margin: 4px 0; }
+.flow-job small { color: #94a3b8; overflow-wrap: anywhere; }

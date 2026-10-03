@@ -33,8 +33,8 @@ def _video_to_flat(sdk_video) -> dict:
 
 @router.post("", response_model=Video)
 async def create(body: VideoCreate):
-    sdk_video = await _repo.create_video(**body.model_dump(exclude_none=True))
-    return _video_to_flat(sdk_video)
+    from agent.services.project_workspace import ensure
+    return await ensure(body.project_id, body.orientation)
 
 
 @router.get("", response_model=list[Video])
@@ -62,6 +62,9 @@ async def update(vid: str, body: VideoUpdate):
 
 @router.delete("/{vid}")
 async def delete(vid: str):
+    from agent.services.workflow_scope import has_owned_resources
+    if has_owned_resources(video_id=vid):
+        raise HTTPException(409, 'This video owns saved sources or jobs. Keep the video to preserve their relationships.')
     if not await _repo.delete("video", vid):
         raise HTTPException(404, "Video not found")
     return {"ok": True}

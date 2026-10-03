@@ -264,6 +264,8 @@ async def _process_one(req: dict, deferred: dict = None, retry_after: dict = Non
             deferred[rid] = time.time() + 30  # defer 30s before rechecking
         return
 
+    from agent.services.browser_lifecycle import flow_started, flow_saved
+    flow_started("request", rid)
     logger.info("Processing request %s type=%s", rid[:8], req_type)
     await crud.update_request(rid, status="PROCESSING")
     await event_bus.emit("request_update", {"id": rid, "status": "PROCESSING", "type": req_type})
@@ -282,6 +284,7 @@ async def _process_one(req: dict, deferred: dict = None, retry_after: dict = Non
             else:
                 await apply_scene_result(req.get("scene_id"), req_type, orientation, gen_result)
             await event_bus.emit("request_update", {"id": rid, "status": "COMPLETED"})
+            flow_saved("request", rid)
             logger.info("Request %s COMPLETED: media=%s", rid[:8], gen_result.media_id[:20] if gen_result.media_id else "?")
     except Exception as e:
         logger.exception("Request %s exception: %s", rid[:8], e)
@@ -433,6 +436,15 @@ async def _handle_failure(rid: str, req: dict, result: dict, retry_after: dict =
             error_msg = "Unknown error"
     if isinstance(error_msg, dict):
         error_msg = json.dumps(error_msg)[:200]
+
+    # The browser may have accepted a write before its response was lost.
+    # Keep this ahead of generic transport/not-found retries to avoid charging
+    # for the same generation again after a disconnect or deadline.
+    if "submission_uncertain" in str(error_msg).lower():
+        await crud.update_request(rid, status="FAILED", error_message=str(error_msg))
+        await _mark_scene_failed(req)
+        logger.error("Request %s requires manual review of Flow before retry: %s", rid[:8], error_msg)
+        return
 
     # Auto-recover expired media by re-uploading
     if "not found" in str(error_msg).lower():

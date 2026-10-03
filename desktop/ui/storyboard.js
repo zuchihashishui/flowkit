@@ -24,10 +24,10 @@
     if (documentDirty || editorDirty) throw Error('Save or discard script/concept edits first.');
     if (!data?.document) throw Error('Save the script before importing audio or segments.');
   }
-  function selected() {
+  function selected(limit=100) {
     assertSaved();
     const result = data.segments.filter(s => checked.has(s.id));
-    if (!result.length || result.length > 100) throw Error('Select 1–100 script segments.');
+    if (!result.length || result.length > limit) throw Error(`Select 1–${limit} script segments.`);
     return result;
   }
   function timestamp(ms) {
@@ -65,15 +65,17 @@
       }
       target.append(tr);
     }
-    if(!data?.segments.length){const tr=element('tr'),td=element('td','Import SRT / JSON in Script & Scenes to load timed segments.');td.colSpan=mode==='editor'?6:5;tr.append(td);target.append(tr);}
+    if(!data?.segments.length){const tr=element('tr'),td=element('td','Import SRT / JSON in Text to Prompt to load timed segments.');td.colSpan=mode==='editor'?6:5;tr.append(td);target.append(tr);}
   }
   function render() {
     $('sb-count').textContent=`${checked.size} of ${data?.segments.length||0} segments selected`;
     $('sb-warnings').textContent=(data?.warnings||[]).join('\n');
     $('sb-status').textContent=data?.document ? `${data.video.title} · ${data.segments.length} segments · ${data.segments.filter(s=>s.ready).length} current concepts` : 'Save your script, then import audio and SRT / JSON segments.';
+    const source=data?.document?.source;
+    if(source)$('sb-status').textContent+=source.source_id?` · Source: ${source.kind} / ${source.source_id}`:' · Source: manually imported segments';
     renderRows($('sb-rows'),'editor');
     for(const kind of ['image','video']) {
-      $(kind+'-storyboard-name').textContent=data ? data.video.title+' · '+checked.size+' selected segments' : 'Choose a script in Script & Scenes.';
+      $(kind+'-storyboard-name').textContent=data ? data.video.title+' · '+checked.size+' selected segments' : 'Choose a script in Text to Prompt.';
       renderRows($(kind+'-storyboard-rows'),kind);
     }
     document.dispatchEvent(new Event('storyboard-selection'));
@@ -101,14 +103,23 @@
   }
   async function open() {
     const pid=$('project-select').value;
-    if(!pid){$('sb-status').textContent='Create or select an active project in Projects first.';return;}
+    if(!pid){$('sb-status').textContent='Create or select an active project in Project first.';return;}
     if(owner!==pid){if(!discard())return;data=null;checked.clear();collection='';owner=pid;}
+    if(window.workflow){
+      const ctx=window.workflow.context(),prior=collection;
+      if(ctx.project_id!==pid||!ctx.video_id){$('sb-status').textContent='Wait for the active project to load in Project.';return;}
+      collection=ctx.video_id;
+      $('sb-collection').replaceChildren(option(collection,'Current project'));$('sb-collection').value=collection;
+      await reload(prior!==collection||!data);return;
+    }
     const videos=await api('GET','/api/videos?project_id='+encodeURIComponent(pid));
     if(pid!==$('project-select').value)return;
     $('sb-collection').replaceChildren(option('','Select a collection'),...videos.map(v=>option(v.id,v.title)));
     const prior=collection;
-    collection=videos.some(v=>v.id===collection)?collection:videos.find(v=>v.id===$('video-select').value)?.id||videos[0]?.id||'';
+    const active=window.workflow?.context().video_id;
+    collection=active&&videos.some(v=>v.id===active)?active:videos.some(v=>v.id===collection)?collection:videos.find(v=>v.id===$('video-select').value)?.id||videos[0]?.id||'';
     $('sb-collection').value=collection;
+    if(window.workflow)$('sb-collection').disabled=true;
     if(collection)await reload(prior!==collection || !data);else{data=null;render();}
   }
   function openEditor(s) {
@@ -138,19 +149,14 @@
     await api('POST',path('/segments'),{format:f.name.toLowerCase().endsWith('.srt')?'srt':'json',content:f.text});await reload();notice('Segments imported with original timestamps.');
   });
   $('sb-collection').onchange=()=>{const next=$('sb-collection').value;if(!discard()){$('sb-collection').value=collection;return;}collection=next;data=null;checked.clear();if(collection)action(()=>reload(true));else render();};
-  $('sb-new').onclick=()=>{if(!discard())return;run(async()=>{
-    const pid=projectId(),title=$('sb-title').value.trim();if(!title)throw Error('Enter a script title.');
-    const v=await api('POST','/api/videos',{project_id:pid,title});owner=pid;collection=v.id;data=null;checked.clear();
-    await api('PUT',path(),{script_text:'',visual_style:''});await open();notice('New script created.');
-  });};
   $('sb-refresh').onclick=()=>action(()=>open());
   $('sb-check-provider').onclick=()=>run(async()=>{
-    const result=await api('GET','/api/storyboard/providers');$('sb-provider-status').textContent=result.providers.map(p=>p.id+': '+(p.installed?'installed (sign-in not verified)':'not on PATH')).join(' · ');
+    const result=await api('GET','/api/storyboard/providers');$('sb-provider-status').textContent=result.providers.map(p=>p.id+': '+(p.status || (p.installed?'installed (sign-in not verified)':'not on PATH'))).join(' · ');
   });
   $('sb-select-all').onclick=()=>{(data?.segments||[]).forEach(s=>checked.add(s.id));selectionChanged();};
   $('sb-select-none').onclick=()=>{checked.clear();selectionChanged();};
   $('sb-create-concepts').onclick=()=>run(async()=>{
-    const items=selected();if(!confirm(`Create concepts for up to ${items.length} segment(s) using ${$('sb-provider').value}? One AI request per segment; provider quotas apply.`))return;
+    const items=selected(200);if(!confirm(`Create concepts for up to ${items.length} segment(s) using ${$('sb-provider').value}? One AI request per segment; provider quotas apply.`))return;
     const result=await api('POST',path('/generate-concepts'),{segment_ids:items.map(s=>s.id),provider:$('sb-provider').value,model:$('sb-model').value.trim()||null,regenerate:$('sb-regenerate').checked});
     await reload();notice(`${result.ids.length} concept job(s) queued; ${result.skipped.length} skipped because current or pending concepts already exist.`);
   });
@@ -176,14 +182,23 @@
   window.storyboard={
     open,count:()=>checked.size,
     canChangeProject:()=>owner===$('project-select').value||discard(),
+    canChangeVideo:id=>collection===id||!collection||discard(),
+    canImportSource:()=>discard(),
     projectChanged:()=>{if(owner!==$('project-select').value){++requestId;owner='';collection='';data=null;checked.clear();$('sb-script').value='';$('sb-style').value='';$('sb-collection').replaceChildren(option('','Select a collection'));showAudio();render();}},
     generateMedia:async kind=>{
-      const items=selected();if(items.some(s=>!s.ready))throw Error('Selected segments need current concepts. Create or update them in Script & Scenes.');
+      const items=selected();if(items.some(s=>!s.ready))throw Error('Selected segments need current concepts. Create or update them in Text to Prompt.');
       if(!confirm(`Generate ${kind} for up to ${items.length} selected segment(s)? Uses Google Flow credits.`))return;
       const r=await api('POST',path('/generate-media'),{segment_ids:items.map(s=>s.id),kind,orientation:$(kind+'-ratio').value,duration:Number($('duration').value),image_model:kind==='image'?$('image-model').value||null:null,regenerate:$(kind+'-regenerate').checked});
       await reload();await refreshJobs();notice(`${r.ids.length} media job(s) queued; ${r.skipped.length} existing jobs/results skipped.`);
     }
   };
+  document.addEventListener('workflow-changed',()=>{
+    const ctx=window.workflow?.context();
+    if(!ctx||(ctx.project_id===owner&&ctx.video_id===collection))return;
+    ++requestId;owner=ctx.project_id;collection=ctx.video_id;data=null;checked.clear();edited=null;documentDirty=editorDirty=false;
+    $('sb-editor').hidden=true;$('sb-script').value='';$('sb-style').value='';showAudio();render();
+    if(!document.querySelector('[data-view="storyboard"]').hidden)action(open);
+  });
   setInterval(async()=>{
     if(pollBusy||busy||!collection||owner!==$('project-select').value)return;
     if(!data?.segments.some(s=>['QUEUED','RUNNING'].includes(s.job?.state)||s.media_jobs?.some(j=>['QUEUED','SUBMITTING','RUNNING','DOWNLOADING'].includes(j.state))))return;

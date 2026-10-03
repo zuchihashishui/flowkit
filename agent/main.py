@@ -2,11 +2,16 @@
 import asyncio
 import json
 import logging
+import os
+import sys
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from pathlib import Path
 
 import websockets
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from agent.config import API_HOST, API_PORT, WS_HOST, WS_PORT
 from agent.db.schema import init_db, close_db
@@ -27,10 +32,30 @@ from agent.worker.processor import get_worker_controller
 from agent.services.flow_client import get_flow_client
 from agent.services.event_bus import event_bus
 from agent.sdk import init_sdk
-from agent.api import desktop, storyboard
+from agent.api import desktop, storyboard, chatgpt, elevenlabs, whisperx, srt, assembly, workflow
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def _studio_version() -> str:
+    """Capture this process's source version, not whatever is later on disk."""
+    try:
+        package = json.loads((_SOURCE_ROOT / "desktop" / "package.json").read_text(encoding="utf-8"))
+        version = package.get("version")
+        return version if isinstance(version, str) and version else "unknown"
+    except (OSError, ValueError, AttributeError):
+        return "unknown"
+
+
+_SOURCE_ROOT = Path(__file__).resolve().parent.parent
+_STUDIO_VERSION = _studio_version()
+_RUNTIME_IDENTITY = {
+    "pid": os.getpid(),
+    "root": str(_SOURCE_ROOT),
+    "python": sys.executable,
+    "started_at": datetime.now(timezone.utc).isoformat(),
+}
 
 
 # ─── WebSocket Server for Extension ─────────────────────────
@@ -98,6 +123,16 @@ async def lifespan(app: FastAPI):
     worker_task = asyncio.create_task(controller.start())
     desktop_task = asyncio.create_task(desktop.run())
     storyboard_task = asyncio.create_task(storyboard.run())
+    from agent.services import chatgpt_gateway
+    chatgpt_task = asyncio.create_task(chatgpt_gateway.run())
+    from agent.services import elevenlabs_bridge
+    elevenlabs_task = asyncio.create_task(elevenlabs_bridge.run())
+    from agent.services.whisperx_service import service as whisperx_service
+    whisperx_task = asyncio.create_task(whisperx_service.run())
+    from agent.services.srt_service import service as srt_service
+    srt_task = asyncio.create_task(srt_service.run())
+    from agent.services.assembly_service import service as assembly_service
+    assembly_task = asyncio.create_task(assembly_service.run())
     logger.info("WS server + worker started")
 
     yield
@@ -108,7 +143,12 @@ async def lifespan(app: FastAPI):
     worker_task.cancel()
     desktop_task.cancel()
     storyboard_task.cancel()
-    await asyncio.gather(ws_task, worker_task, desktop_task, storyboard_task, return_exceptions=True)
+    chatgpt_task.cancel()
+    elevenlabs_task.cancel()
+    whisperx_task.cancel()
+    srt_task.cancel()
+    assembly_task.cancel()
+    await asyncio.gather(ws_task, worker_task, desktop_task, storyboard_task, chatgpt_task, elevenlabs_task, whisperx_task, srt_task, assembly_task, return_exceptions=True)
     await close_db()
     logger.info("Flow Kit stopped")
 
@@ -130,6 +170,14 @@ _GENERATION_PATHS = {
     "/api/flow/generate-video-omni-text",
     "/api/flow/edit-image",
 }
+
+
+@app.middleware("http")
+async def elevenlabs_local_mutations(request: Request, call_next):
+    # Paid jobs are issued by the local Electron process/CLI, never a web origin.
+    if request.url.path.startswith(('/api/elevenlabs/', '/api/whisperx/', '/api/srt/', '/api/assembly/')) and request.method not in ('GET', 'HEAD', 'OPTIONS') and request.headers.get('origin'):
+        return JSONResponse({'detail': 'Browser HTTP origins cannot submit ElevenLabs jobs. Use the local Desktop bridge.'}, status_code=403)
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -162,6 +210,12 @@ app.include_router(providers_router)
 app.include_router(active_project_router)
 app.include_router(desktop.router, prefix="/api")
 app.include_router(storyboard.router, prefix="/api")
+app.include_router(chatgpt.router, prefix="/api")
+app.include_router(elevenlabs.router, prefix="/api")
+app.include_router(whisperx.router, prefix="/api")
+app.include_router(srt.router, prefix="/api")
+app.include_router(assembly.router, prefix="/api")
+app.include_router(workflow.router, prefix="/api")
 
 
 import secrets as _secrets
@@ -198,7 +252,20 @@ async def health():
     client = get_flow_client()
     return {
         "status": "ok",
+        "service": "flowkit-backend",
         "version": app.version,
+        "studio_version": _STUDIO_VERSION,
+        "runtime": dict(_RUNTIME_IDENTITY),
+        "studio_api": 3,
+        "studio_features": {
+            "project_video_sources": True,
+            "project_single_video": True,
+            "elevenlabs_native_download_files": True,
+            "elevenlabs_unlimited_native_audio": True,
+            "elevenlabs_recover_downloads": True,
+            "elevenlabs_safe_pre_submit_failures": True,
+            "elevenlabs_auto_prepare_tab": True,
+        },
         "extension_connected": client.connected,
         "ws": client.ws_stats,
     }
@@ -257,7 +324,6 @@ async def dashboard_ws(websocket: WebSocket):
 
 
 if __name__ == "__main__":
-    import os
     import uvicorn
     reload_enabled = os.environ.get("GLA_RELOAD", "0") == "1"
     uvicorn.run(

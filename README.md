@@ -1,3 +1,51 @@
+> **Studio 0.7.51:** Final assembly uses one image or video per SRT scene. Choose **Images only** (default) or **Images + video** and review each scene before rendering. Video clips are optional. [Details](docs/VIDEO_ASSEMBLY.md). Update the complete source and restart Studio/backend.
+
+> **Studio 0.7.49:** WhisperX saves three JSON files: the unchanged full transcript, `transcript_video.json` for the opening section, and `transcript_image.json` for the remainder. **Video duration (seconds)** defaults to 100 and is editable. Existing completed jobs can use **Split saved JSON** without rerunning WhisperX. [Details](docs/WHISPERX.md#three-transcript-files-studio-0749). Restart Studio/backend after updating; extensions are unchanged.
+
+> **Studio 0.7.48:** JSON → SRT now uses ChatGPT only to choose scene boundaries. Studio preserves transcript wording, builds the continuous timeline from source timing, and shows a quality report with missing alignment and 3–15-second exceptions. New WhisperX JSON includes full audio duration. Existing SRT jobs remain compatible. [Usage and verification](docs/JSON_TO_SRT.md). Update the complete source and restart Studio/backend.
+
+> **Studio 0.7.44:** **One project = one complete video.** Select only the project; its name is the topic/title. Studio prepares its internal video record automatically. Separate video/collection selectors and creation buttons are removed. Existing single-video projects keep their IDs, files and history. Older multi-video projects are preserved and reported for migration, never automatically merged or discarded. See [Project workflow](docs/VIDEO_WORKFLOW.md).
+
+> **Studio 0.7.43:** Projects now owns the active project and video. ElevenLabs, WhisperX, JSON → SRT and Video Assembly keep ownership and exact input references. Existing records stay **Unassigned** until explicitly linked. Stages remain manual. See [Video sources and history](docs/VIDEO_WORKFLOW.md) for migration and usage. Update the complete source and restart Studio/backend; extensions are unchanged.
+
+> **Studio 0.7.42:** Select the active project once in **Projects**. The shared header shows its name, remembers the choice, and links back to Projects. Project-linked scene/media lists and Queue follow that selection. Tools without project ownership still show shared libraries/history, explicitly labeled in the UI. ChatGPT Bridge remains 1.8.1.
+
+> **Studio 0.7.41 / ChatGPT Bridge 1.8.1:** Click **Prepare 3 windows** to place each text worker in its own Chrome window. Existing worker tabs are moved and reused; SRT opens a separate window. Reload `extensions/chatgpt` after updating. This change still needs live ChatGPT verification.
+
+> **Studio 0.7.40:** SRT sends one prompt + JSON once through its own fresh, automatically bound Work tab. Text to Prompt processes up to 200 queued prompts through three separate reusable Chat / Temporary tabs. Restart Studio/backend/gateway and reload ChatGPT Bridge 1.8.0. [Details](docs/JSON_TO_SRT.md).
+
+> **Studio 0.7.35:** Fixes JSON → SRT source loading and file selection when a status request fails or stalls. Imported JSON is selected immediately; ChatGPT status no longer blocks local sources. Restart Studio completely and its backend after replacing the complete source. [Details](docs/JSON_TO_SRT.md#source-selection-recovery).
+
+> **Studio 0.7.34:** WhisperX defaults to NVIDIA GPU / CUDA. Saved Auto settings switch once to CUDA; CPU and Auto remain available. Restart Studio/backend. [Details](docs/WHISPERX.md#workflow).
+
+> **Studio 0.7.33:** WhisperX now shows measured progress for transcription/alignment, audio position, processed segments and source words/characters, elapsed time and last worker update. Loading stages remain indeterminate. Restart Studio/backend; existing WhisperX environments are supported. [Details](docs/WHISPERX.md#progress-for-long-narrations).
+
+> **Studio 0.7.32:** Adds **Video Assembly**: SRT scenes + narration + images → MP4, with editable scene mapping, timeline preview, burned/selectable subtitles, render progress, cancellation and export. [Usage](docs/VIDEO_ASSEMBLY.md). Restart Studio/backend after updating. No extension changes.
+
+> **Studio 0.7.31 / ChatGPT Bridge 1.6.0:** Adds **JSON → SRT**, attached JSON files, per-job Work/model selection, saved prompts, and automatic SRT output. Restart Studio/backend/gateway and reload `extensions/chatgpt/`. [Setup and usage](docs/JSON_TO_SRT.md).
+
+> **Studio 0.7.30:** WhisperX now supports **Choose audio file** alongside existing merged narrations. Imported audio is copied into Studio and remains selectable for future jobs. Restart Studio and the updated backend; no extension changes or WhisperX reinstall are required.
+
+> **Studio 0.7.29:** Adds **WhisperX**: merged narration → aligned word/character timestamps → JSON, with an Electron page, optional automatic processing and an isolated Python environment. [Setup and usage](docs/WHISPERX.md). Restart the updated backend; no extension update is needed.
+
+> **Studio 0.7.28 / ElevenLabs Bridge 1.0.21:** Chunk default and maximum are 3,000 characters. Restart Studio/backend and reload the ElevenLabs extension after updating. Existing jobs retain their stored chunks.
+
+> **Studio 0.7.27 / ElevenLabs Bridge 1.0.20:** Chunk default and maximum are 2,500 characters. Update source, restart Studio/backend, and reload the ElevenLabs extension. Create new jobs to split older scripts at the new limit; existing jobs keep their stored chunks.
+
+> **Studio 0.7.26 / ElevenLabs Bridge 1.0.19:** Default chunk size is 6,000 characters; Studio accepts 100–6,000. Update the complete source, restart Studio/backend, and reload the ElevenLabs extension to accept larger chunks. Existing jobs keep their chunks.
+
+> **Studio 0.7.25:** ElevenLabs defaults to 3,000 characters per chunk in both Studio and the backend. The adjustable range remains 100–4,000. Restart Studio and the backend after updating.
+
+> **Studio 0.7.24:** ElevenLabs now has **Max characters per chunk** in the desktop form, default 1,500 (range 100–4,000). Preview and new jobs use the entered value. Restart the updated backend and Studio. Existing jobs retain their saved chunks; the extension is unchanged.
+
+> **Studio 0.7.23:** Restores the exact ElevenLabs extension from the working 0.7.20 release (Bridge 1.0.17). The only runtime change from 0.7.20 is new speech chunks targeting 900–1,199 characters. Restart the backend and reload the restored extension. Existing jobs keep their stored chunks and queue state.
+
+> **Studio 0.7.20 / ElevenLabs Bridge 1.0.17:** Each TTS chunk closes previous TTS tabs, opens and auto-binds one new tab, clears and refreshes, then enters text and generates speech. [Workflow and update steps](docs/ELEVENLABS_FRESH_TABS.md). Update both backend and ElevenLabs extension.
+> **Studio 0.7.19:** Added backend process diagnostics and **Restart local backend** to resolve a stale process on port 8100. [Recovery guide](docs/BACKEND_RECOVERY.md). ElevenLabs extension stays at 1.0.16; ChatGPT stays at 1.5.1.
+> **Studio 0.7.18:** Consolidated ElevenLabs editor, queue, recovery and Electron fixes; ChatGPT complete-prompt checks; Google Flow uncertain-submission protection. [Stability review](docs/STABILITY_REVIEW_0.7.18.md) · [ElevenLabs setup](docs/ELEVENLABS_EXTENSION.md).
+> Google Flow runs three Desktop image/video jobs concurrently, with a minimum three-second submission gap and live job stages in the extension and Desktop. [Flow progress and limits](docs/GOOGLEFLOW_PROGRESS.md).
+> New **Flowkit ElevenLabs Bridge** adds Text to Speech with Eleven v4, Japanese text chunks of 900–1,199 characters, optional credit display, saved audio and optional FFmpeg joining. [Setup and recovery](docs/integrations/elevenlabs-bridge.md). Three independent extensions live under `extensions/googleflow/`, `extensions/chatgpt/`, and `extensions/elevenlabs/`. Restart the backend and reload changed extensions after updating.
+
 <p align="center">
   <img src="docs/images/flowkit_banner.svg" width="720" alt="FLOW KIT" />
 </p>
@@ -220,7 +268,7 @@ pip install -r requirements.txt
 ### Run
 
 ```bash
-# 1. Load Chrome extension: chrome://extensions → Developer mode → Load unpacked → extension/
+# 1. Load Chrome extension: chrome://extensions → Developer mode → Load unpacked → extensions/googleflow/
 # 2. Open https://flow.google.com/ and sign in — leave the tab open
 # 3. Create a project in the Flow UI and copy its uuid out of the URL
 export FLOW_PROJECT_ID=<that uuid>
@@ -762,7 +810,7 @@ agent/
 └── worker/
     └── processor.py     # Queue processor + poller
 
-extension/               # Chrome MV3 extension
+extensions/googleflow/               # Chrome MV3 extension
 skills/                  # AI agent workflow recipes (CLI-agnostic)
 youtube/
 ├── auth.py              # OAuth2 multi-channel auth

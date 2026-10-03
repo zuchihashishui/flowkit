@@ -13,6 +13,10 @@ pushd desktop
 call npm ci --no-audit --no-fund
 if errorlevel 1 (popd & goto failed)
 popd
+pushd integrations\chatgpt-gateway
+call npm ci --no-audit --no-fund
+if errorlevel 1 (popd & goto failed)
+popd
 where ffmpeg >nul 2>nul
 if errorlevel 1 echo Install FFmpeg and add its bin folder to PATH before generating media.
 echo Setup complete. Run start_desktop.bat.

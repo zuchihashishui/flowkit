@@ -69,8 +69,16 @@ class SegmentBody(BaseModel):
 
 
 class ImportBody(BaseModel):
+    source_kind: Literal['srt', 'asset'] | None = None
+    source_id: str | None = None
     format: Literal['srt', 'json']
     content: str = Field(min_length=1, max_length=2000000)
+
+    @model_validator(mode='after')
+    def paired_source(self):
+        if bool(self.source_kind) != bool(self.source_id):
+            raise ValueError('Provide both source kind and source ID.')
+        return self
 
 
 def parse_segments(body):
@@ -119,7 +127,9 @@ def parse_segments(body):
 
 @router.get('/providers')
 async def providers():
-    return {'providers': [{'id': name, 'installed': bool(shutil.which(name))} for name in ('codex', 'claude', 'agy')]}
+    from agent.services.chatgpt_gateway import status
+    info = await status()
+    return {'providers': [{'id': name, 'installed': bool(shutil.which(name))} for name in ('codex', 'claude', 'agy')] + [{'id':'chatgpt-web','installed':info.get('available') and info.get('extensionConnected'),'status':'needs review' if info.get('needsReview') else 'connected (use Test Connection)' if info.get('extensionConnected') else 'disconnected'}]}
 
 
 @router.put('/videos/{video_id}')
@@ -143,6 +153,8 @@ async def read_document(video_id: str):
     if not docs:
         return {'video': video, 'document': None, 'segments': [], 'warnings': []}
     doc = docs[0]
+    provenance = await query('SELECT kind,source_id,imported FROM document_source WHERE document_id=?', (doc['id'],))
+    doc['source'] = provenance[0] if provenance else None
     segments = await query('SELECT * FROM script_segment WHERE document_id=? ORDER BY ordinal', (doc['id'],))
     concepts = await query('SELECT c.* FROM scene_concept c JOIN script_segment s ON s.id=c.segment_id WHERE s.document_id=? ORDER BY c.version DESC', (doc['id'],))
     jobs = await query('SELECT j.id,j.segment_id,j.state,j.error,j.created FROM concept_job j JOIN script_segment s ON s.id=j.segment_id WHERE s.document_id=? ORDER BY j.created DESC', (doc['id'],))
@@ -173,6 +185,20 @@ async def read_document(video_id: str):
 
 @router.post('/videos/{video_id}/segments')
 async def import_segments(video_id: str, body: ImportBody):
+    if body.source_kind or body.source_id:
+        from agent.api.workflow import context
+        from agent.services import workflow_scope as scope
+        video = await one('SELECT * FROM video WHERE id=?', (video_id,))
+        try:
+            scope.resolve(await context(video['project_id'], video_id), [scope.ref(body.source_kind, body.source_id)])
+            from agent.api.srt import service as srt
+            from agent.api.assembly import service as assembly
+            path = srt.result_path(body.source_id) if body.source_kind == 'srt' else assembly.path(assembly.asset(body.source_id, 'srt'))
+            original = path.read_text(encoding='utf-8-sig')
+            if body.format != 'srt' or body.content.lstrip('\ufeff').replace('\r\n', '\n') != original.replace('\r\n', '\n'):
+                raise ValueError('Scene content does not match the selected SRT version.')
+        except (ValueError, OSError) as exc:
+            raise HTTPException(409, str(exc)) from exc
     try:
         items = parse_segments(body)
     except (ValueError, KeyError, TypeError, IndexError) as exc:
@@ -182,6 +208,7 @@ async def import_segments(video_id: str, body: ImportBody):
         if await query('SELECT id FROM script_segment WHERE document_id=? LIMIT 1', (doc['id'],)):
             raise HTTPException(409, 'This collection already has segments. Edit them in place or create a new collection for another import.')
         await db.executemany('INSERT INTO script_segment(id,document_id,ordinal,start_ms,end_ms,text) VALUES(?,?,?,?,?,?)', [(uid(), doc['id'], i+1, s.start_ms, s.end_ms, s.text) for i, s in enumerate(items)])
+        await db.execute('INSERT INTO document_source VALUES(?,?,?,?,?)', (doc['id'], body.source_kind or 'external', body.source_id, body.content, time.time()))
     return await read_document(video_id)
 
 
@@ -229,15 +256,20 @@ async def select_concept(concept_id: str):
 
 
 class GenerateBody(BaseModel):
-    segment_ids: list[str] = Field(min_length=1, max_length=100)
-    provider: Literal['codex','claude','agy'] = 'codex'
+    segment_ids: list[str] = Field(min_length=1, max_length=200)
+    provider: Literal['codex','claude','agy','chatgpt-web'] = 'codex'
     model: str | None = Field(default=None, max_length=100, pattern=r'^[^-\s][^\r\n]*$')
     regenerate: bool = False
 
 
 @router.post('/videos/{video_id}/generate-concepts')
 async def generate_concepts(video_id: str, body: GenerateBody):
-    if not shutil.which(body.provider):
+    if body.provider == 'chatgpt-web':
+        from agent.services.chatgpt_gateway import status
+        info = await status()
+        if not info.get('available') or not info.get('extensionConnected') or info.get('needsReview'):
+            raise HTTPException(503, 'Connect ChatGPT Web and resolve pending review in Settings first.')
+    elif not shutil.which(body.provider):
         raise HTTPException(503, f'{body.provider} CLI is not installed or not on PATH. Install and sign in to it before creating concepts.')
     ids, skipped = [], []
     async with transaction() as db:
@@ -284,18 +316,47 @@ async def process_concept(job):
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        from agent.services.chatgpt_gateway import GatewayReviewRequired, GatewayBusy
+        if isinstance(exc, GatewayBusy):
+            async with transaction() as db:
+                await db.execute("UPDATE concept_job SET state='QUEUED' WHERE id=?", (job['id'],))
+            return
+        state = 'NEEDS_REVIEW' if isinstance(exc, GatewayReviewRequired) else 'FAILED'
         async with transaction() as db:
-            await db.execute("UPDATE concept_job SET state='FAILED',error=? WHERE id=?", (str(exc)[:1500], job['id']))
+            await db.execute("UPDATE concept_job SET state=?,error=? WHERE id=?", (state, str(exc)[:1500], job['id']))
 
 
 async def run():
     async with transaction() as db:
         await db.execute("UPDATE concept_job SET state='NEEDS_REVIEW',error='App stopped during AI generation. Check before submitting again.' WHERE state='RUNNING'")
-    while True:
-        pending = await query("SELECT * FROM concept_job WHERE state='QUEUED' ORDER BY created LIMIT 1")
-        if pending:
-            await process_concept(pending[0])
-        await asyncio.sleep(2)
+    tasks = {}
+    try:
+        while True:
+            for jid, task in list(tasks.items()):
+                if task.done():
+                    task.result()
+                    del tasks[jid]
+            from agent.services.chatgpt_gateway import status
+            info = await status()
+            slots = info.get('availableSlots',0)
+            pending = await query("SELECT * FROM concept_job WHERE state='QUEUED' ORDER BY created LIMIT 200")
+            for job in pending:
+                if len(tasks) >= 3:
+                    break
+                if job['id'] in tasks:
+                    continue
+                if json.loads(job['payload']).get('provider') == 'chatgpt-web':
+                    if slots <= 0:
+                        continue
+                    slots -= 1
+                elif tasks:
+                    continue
+                tasks[job['id']] = asyncio.create_task(process_concept(job))
+            await asyncio.sleep(1)
+    finally:
+        for task in tasks.values():
+            task.cancel()
+        await asyncio.gather(*tasks.values(),return_exceptions=True)
 
 
 @router.post('/videos/{video_id}/audio')

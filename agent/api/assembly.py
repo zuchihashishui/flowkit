@@ -1,0 +1,97 @@
+from typing import Literal
+from uuid import UUID
+import shutil
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+from agent.services.assembly_service import service
+
+from agent.api.workflow import Scoped, inputs, context
+from agent.services import workflow_scope as scope
+
+router = APIRouter(prefix='/assembly', tags=['assembly'])
+
+class Plan(Scoped):
+    title: str = Field(default='Untitled video', min_length=1, max_length=200)
+    srt_id: UUID
+    audio_id: UUID
+    image_ids: list[UUID] = Field(default_factory=list, max_length=1000)
+    video_ids: list[UUID] = Field(default_factory=list, max_length=1000)
+    visual_mode: Literal['images', 'mixed'] = 'images'
+    clip_end: Literal['freeze', 'loop'] = 'freeze'
+    mapping: dict[str, UUID | None] = Field(default_factory=dict, max_length=3000)
+    mapping_mode: Literal['number', 'order'] = 'number'
+    size: Literal['1080p', '720p', 'vertical'] = '1080p'
+    fps: Literal[24, 30, 60] = 30
+    fit: Literal['fit', 'crop'] = 'fit'
+    subtitles: Literal['burn', 'soft', 'off'] = 'burn'
+    font: str = Field(default='Yu Gothic', min_length=1, max_length=80, pattern=r'^[\w .-]+$')
+
+class Source(Scoped):
+    kind: Literal['srt', 'audio']
+    source_id: UUID
+
+@router.get('/status')
+async def status(project_id: str | None = None, video_id: str | None = None, unassigned: bool = False):
+    return {'mixed_media_version': 1, 'assets': scope.select(scope.annotate(service, 'asset', service.assets()), project_id, video_id, unassigned), 'jobs': scope.select(scope.annotate(service, 'assembly', service.jobs(dict(project_id=project_id, video_id=video_id, unassigned=unassigned))), project_id, video_id, unassigned), 'ffmpeg': bool(shutil.which('ffmpeg')), 'ffprobe': bool(shutil.which('ffprobe'))}
+
+@router.post('/import/{kind}')
+async def import_file(kind: Literal['srt', 'audio', 'image', 'video'], file: UploadFile = File(...), project_id: str | None = Form(None), video_id: str | None = Form(None)):
+    try:
+        return await service.import_upload(kind, file, await context(project_id, video_id))
+    except (ValueError, UnicodeError, OSError) as e:
+        raise HTTPException(422, str(e)) from e
+    finally:
+        await file.close()
+
+@router.post('/source')
+async def use_source(body: Source):
+    try:
+        from agent.api.whisperx import service as wx
+        parent = scope.ref('srt', body.source_id) if body.kind == 'srt' else scope.audio_ref(wx, str(body.source_id))
+        return await service.use_source(body.kind, str(body.source_id), await inputs(body, [parent]))
+    except (ValueError, KeyError, OSError) as e:
+        raise HTTPException(409, str(e)) from e
+
+@router.post('/preview')
+async def preview(body: Plan):
+    try:
+        await inputs(body, [scope.ref('asset', i) for i in [body.audio_id,body.srt_id,*body.image_ids,*body.video_ids]])
+        return service.plan(body.model_dump(mode='json'))
+    except (ValueError, UnicodeError, OSError) as e:
+        raise HTTPException(409, str(e)) from e
+
+@router.post('/jobs')
+async def enqueue(body: Plan):
+    try:
+        ctx = await inputs(body, [scope.ref('asset', i) for i in [body.audio_id,body.srt_id,*body.image_ids,*body.video_ids]])
+        return service.enqueue(body.model_dump(mode='json'), ctx)
+    except (ValueError, UnicodeError, OSError) as e:
+        raise HTTPException(409, str(e)) from e
+
+@router.post('/jobs/{jid}/cancel')
+async def cancel(jid: UUID):
+    return await service.cancel(str(jid))
+
+@router.get('/jobs/{jid}/video')
+async def video(jid: UUID):
+    try:
+        return FileResponse(service.result_path(str(jid)), media_type='video/mp4', filename='video.mp4')
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
+
+@router.get('/clips/{aid}/video')
+async def clip(aid: UUID):
+    try:
+        asset = service.asset(str(aid), 'video')
+        return FileResponse(service.path(asset), filename=asset['title'])
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
+
+@router.get('/images/{aid}/thumbnail')
+async def thumbnail(aid: UUID):
+    try:
+        service.asset(str(aid), 'image')
+        return FileResponse(service.output/'assets'/(str(aid)+'-thumb.jpg'), media_type='image/jpeg')
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e

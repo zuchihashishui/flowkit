@@ -20,6 +20,10 @@ CREATE TABLE IF NOT EXISTS script_segment (
  active_concept_id TEXT,
  UNIQUE(document_id, ordinal)
 );
+CREATE TABLE IF NOT EXISTS document_source (
+ document_id TEXT PRIMARY KEY REFERENCES script_document(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL, source_id TEXT, content TEXT NOT NULL, imported REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS scene_concept (
  id TEXT PRIMARY KEY,
  segment_id TEXT NOT NULL REFERENCES script_segment(id) ON DELETE CASCADE,
