@@ -1,6 +1,6 @@
 (() => {
  'use strict';
- const $ = id => document.getElementById(id), api = (method, route, body) => window.studio.api(method, '/api/elevenlabs/' + route, body);
+ const $ = id => document.getElementById(id), api = (method, route, body) => (window.workflow?.api||window.studio.api)(method, '/api/elevenlabs/' + route, body);
  let jobs = [], selectedId = '', selectedJob = null, busy = false, refreshPromise = null, refreshAgain = false, previewUrl = '', detailRequest = 0, latestStatus = null, retryId = '', jobsSignature = '', detailSignature = '';
  const message = (text, id = 'el-message', error = false) => { $(id).textContent = text; $(id).classList.toggle('error', error); };
  const reviewRequired = s => !!(s?.reviewRequired || s?.needsReview || s?.settings?.needs_review || s?.state === 'NEEDS_REVIEW');
@@ -22,7 +22,7 @@
   DISPATCHING:['Starting chunk','Preparing a new ElevenLabs tab for this chunk.',0],
   PREPARING:['Preparing page','Preparing the Text to Speech editor.',0],
   CLOSING_TABS:['Closing previous Text to Speech tabs','Closing all ElevenLabs Text to Speech tabs in this Chrome profile. Other tabs stay open.',0],
-  OPENING_TAB:['Opening a new Text to Speech tab','Opening one fresh tab for this chunk.',0],
+  OPENING_TAB:['Opening a separate Text to Speech window','Opening one fresh tab for this chunk.',0],
   BINDING_TAB:['Binding the new tab','Connecting the new Text to Speech tab to the worker automatically.',0],
   WAITING_NEW_PAGE:['Waiting for the new page','Waiting for the new Text to Speech editor. ElevenLabs must be signed in.',0],
   CLEARING_TEXT:['Clearing previous text','Preparing the editor for the next chunk.',0],
@@ -210,7 +210,7 @@
   $('el-saved-progress').max = Math.max(1,total); $('el-saved-progress').value = saved;
   $('el-saved-count').textContent = `${saved} of ${total} chunks saved${j.merged_url ? ' · Joined audio available' : j.merge_error ? ' · Audio joining needs attention' : saved && saved === total ? ' · Joined audio not yet available' : ''}`;
   $('el-detail-error').textContent = [j.error, j.merge_error].filter(Boolean).join('\n');
-  $('el-preview-merged').hidden = $('el-save-merged').hidden = !j.merged_url;
+  $('el-preview-merged').hidden = $('el-save-merged').hidden = $('el-whisperx').hidden = !j.merged_url;
   $('el-export-all').disabled = !(j.chunks || []).some(c => c.state === 'COMPLETED');
   $('el-chunk-rows').replaceChildren(...(j.chunks || []).map((chunk, ordinal) => {
    const row = node('tr'), cell = text => { const td = node('td', text); row.append(td); return td; };
@@ -237,10 +237,15 @@
   })();
   try { await refreshPromise; } finally { refreshPromise = null; }
  }
- async function preview(text = $('el-text').value) {
+ function chunkSize() {
+  const value = Number($('el-chunk-size').value);
+  if (!Number.isInteger(value) || value < 100 || value > 3000) throw Error('Enter a whole number from 100 to 3,000 for Max characters per chunk.');
+  return value;
+ }
+ async function preview(text = $('el-text').value, max_chunk_characters = chunkSize()) {
   if (!text.trim()) throw Error('Enter narration text first.');
-  const result = await api('POST', 'preview', {text});
-  if ($('el-text').value === text) {
+  const result = await api('POST', 'preview', {text, max_chunk_characters});
+  if ($('el-text').value === text && Number($('el-chunk-size').value) === max_chunk_characters) {
    const chunks = result.chunks || [];
    $('el-preview-summary').textContent = `${result.characters ?? chars(text)} characters · ${chunks.length} chunks · Text order is preserved`;
    $('el-chunk-preview').replaceChildren(...chunks.map((chunk, index) => {
@@ -265,10 +270,17 @@
   $('el-preview-summary').textContent = 'Text changed. Preview chunks to update the split.';
   $('el-chunk-preview').replaceChildren();
  });
+ $('el-chunk-size').addEventListener('input', () => {
+  $('el-preview-summary').textContent = 'Chunk size changed. Preview chunks to update the split.';
+  $('el-chunk-preview').replaceChildren();
+ });
  $('el-form').onsubmit = event => { event.preventDefault(); return run(async () => {
+  const ctx = window.workflow?.requireContext();
   const text = $('el-text').value, title = $('el-title').value.trim();
-  await preview(text);
-  const result = await api('POST', 'jobs', {text, title, model: 'Eleven v4'});
+  const max_chunk_characters = chunkSize();
+  await preview(text, max_chunk_characters);
+  window.workflow?.assertCurrent(ctx);
+  const result = await api('POST', 'jobs', {text, title, model: 'Eleven v4', max_chunk_characters});
   selectedId = result.id || result.job?.id || ''; message('Narration queued. Audio will be downloaded after each completed chunk.'); await refresh();
   if (reviewRequired(latestStatus) || latestStatus?.settings?.paused) message('Narration queued and waiting. Follow the next step in ElevenLabs connection to release or resume the queue.');
  }, $('el-generate')); };
@@ -294,10 +306,12 @@
  bind('el-retry-submit', () => retryId && $('el-retry-confirm').checked && retryJob(retryId, true), 'el-jobs-message');
  bind('el-retry-cancel', () => { retryId = ''; $('el-retry-confirmation').hidden = true; $('el-retry-confirm').checked = false; }, 'el-jobs-message');
  bind('el-export-all', async () => { if (!selectedId) return; const result = await window.studio.elevenlabsExport(selectedId); message(result.canceled ? 'Export cancelled.' : `Exported ${result.count} audio file(s) to ${result.path}`, 'el-audio-message'); }, 'el-audio-message');
+ bind('el-whisperx', () => selectedJob && window.openWhisperX?.(selectedJob.id), 'el-audio-message');
  bind('el-preview-merged', () => selectedJob && play(selectedJob.id, 'merged', 'Joined narration'), 'el-audio-message');
  bind('el-save-merged', () => selectedJob && save(selectedJob.id, 'merged'), 'el-audio-message');
  document.querySelector('[data-page="elevenlabs"]').addEventListener('click', () => refresh().catch(e => message(e.message, 'el-control-message', true)));
  setInterval(() => { if (!busy && !refreshPromise && !document.querySelector('[data-view="elevenlabs"]').hidden) refresh().catch(e => message(e.message, 'el-control-message', true)); }, 3000);
  syncControls();
  window.addEventListener('beforeunload', () => { if (previewUrl) URL.revokeObjectURL(previewUrl); });
+ document.addEventListener('workflow-changed',async()=>{selectedId='';jobs=[];$('el-job-detail').hidden=true;$('el-audio').pause();$('el-audio').removeAttribute('src');$('el-audio').hidden=true;renderJobs();await Promise.allSettled([refresh()]);try{await refresh();}catch(e){message(e.message);}});
 })();

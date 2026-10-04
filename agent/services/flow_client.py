@@ -439,6 +439,27 @@ class FlowClient:
                     refreshed, len(targets), project_id[:12])
         return {"refreshed": refreshed, "found": len(targets)}
 
+    async def close_idle_windows(self) -> bool:
+        """Ask every connected profile to close owned tabs, with confirmation."""
+        if self._pending or not self._extensions:
+            return False
+        for peer in list(self._extensions):
+            rid = str(uuid.uuid4())
+            future = asyncio.get_running_loop().create_future()
+            self._pending[rid] = future
+            self._pending_ws[rid] = peer
+            try:
+                await peer.send(json.dumps({'id': rid, 'method': 'close_idle_tabs', 'params': {}}))
+                result = await asyncio.wait_for(future, timeout=5)
+                if not result.get('result', {}).get('closed'):
+                    return False
+            except Exception:
+                return False
+            finally:
+                self._pending.pop(rid, None)
+                self._pending_ws.pop(rid, None)
+        return True
+
     async def _send(self, method: str, params: dict, timeout: float = 300) -> dict:
         """Send request to extension and wait for response.
 

@@ -1,6 +1,6 @@
-# Flowkit ElevenLabs Bridge 1.0.17
+# Flowkit ElevenLabs Bridge 1.0.21
 
-Use this extension with Flowkit Studio 0.7.23 and its matching Python backend.
+Use this extension with Flowkit Studio 0.7.28 and its matching Python backend.
 It automates **Text to Speech** in one signed-in ElevenLabs browser tab. Google
 Flow and ChatGPT remain separate extensions.
 
@@ -10,7 +10,7 @@ Flow and ChatGPT remain separate extensions.
    folder and replace the complete source. Keep your databases, `output/`, and
    Python environment. Run `setup_desktop.bat`, then `start_desktop.bat`.
 2. In Chrome's extension manager, load or reload `extensions/elevenlabs/`.
-   Confirm **Flowkit ElevenLabs Bridge 1.0.17**. ChatGPT stays at 1.5.1 and does
+   Confirm **Flowkit ElevenLabs Bridge 1.0.21**. ChatGPT stays at 1.5.1 and does
    not need reloading for this update.
 3. Open or refresh
    [ElevenLabs Text to Speech](https://elevenlabs.io/app/speech-synthesis/text-to-speech).
@@ -58,7 +58,7 @@ TTS tab is bound. A failed replacement may keep that blank tab to report the err
 
 Progress distinguishes page preparation, text entry, generation, downloading, and
 **Save audio**. The website's character counter is never used to validate input.
-Backend chunking limits each new chunk to 1,199 UTF-16 code units, usually 900–1,199;
+Backend chunking uses **Max characters per chunk** from Studio (default 3,000 UTF-16 code units, configurable from 100 to 3,000);
 Japanese sentences and paragraph boundaries are preferred and the last chunk can
 be shorter. Text order and source whitespace are preserved by the splitter.
 

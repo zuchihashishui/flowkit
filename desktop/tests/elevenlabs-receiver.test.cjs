@@ -20,6 +20,7 @@ async function worker({receive,inject,savedTab=null,savedState='IDLE',tabs=[{id:
  sendMessage:async(id,m,options)=>{calls.push({id,...m,options});operations.push({id,...m,options});if(m.type==='clearForReload')return {ok:true,documentToken:String(documentCounter),voice:'Voice'};const r=receive?await receive(m,id):{ok:true,page:{generating:false}};if(r?.page)r.page={documentToken:String(documentCounter),voice:'Voice',editorReady:true,...r.page};return r;},
  reload:async id=>{operations.push({type:'reload',id});documentCounter++;},onRemoved:{addListener(fn){removed=fn;}}},
  scripting:{executeScript:async options=>{injections.push(options);return inject?.(options);}},alarms:{create(){},onAlarm:{addListener(){}}},sidePanel:{setPanelBehavior:async()=>{}}};
+ chrome.windows={create:async options=>({id:42,tabs:[await chrome.tabs.create({url:options.url,active:options.focused,windowId:42})]})};
  vm.runInNewContext(code,{chrome,WebSocket:WS,URL,Date:Clock,console,setInterval(){},setTimeout(fn,ms){time+=ms;return setImmediate(fn);}});await tick();socket.onopen();
  return {saved,sent,calls,injections,operations,openTabs,chrome,remove:id=>chrome.tabs.remove(id),ui:m=>new Promise(resolve=>listener(m,{id:'ext'},resolve)),send:m=>socket.onmessage({data:JSON.stringify(m)})};
 }
@@ -234,4 +235,40 @@ test('placeholder cleanup never closes a tab the user has navigated elsewhere',a
  w.chrome.tabs.create=async options=>{if(options.url===url)w.openTabs.get(101).url='https://example.com/user-page';return create(options);};
  w.send({type:'generate',requestId:'placeholder-navigation',text:'hello'});const r=await resultFor(w,'placeholder-navigation');assert.equal(r.ok,true,r.error);
  assert.equal(w.openTabs.get(101).url,'https://example.com/user-page');assert.deepEqual(w.operations.filter(x=>x.type==='remove').map(x=>x.id),[7]);assert.equal(w.saved.tabId,102);
+});
+
+test('new worker uses a separate window and closes only after final saved acknowledgement',async()=>{
+ const w=await worker({tabs:[{id:7,url:'https://example.com/'}],receive:async m=>m.type==='probe'?{ok:true,page:{}}:{ok:true,audioBase64:'SUQz'}});
+ let options;const create=w.chrome.windows.create;w.chrome.windows.create=async o=>{options=o;return create(o);};
+ w.send({type:'generate',requestId:'final',text:'hello'});assert.equal((await resultFor(w,'final')).ok,true);
+ const id=w.saved.tabId;assert.equal(options.type,'normal');assert.equal(options.focused,true);assert.equal(options.url,url);assert.ok(w.openTabs.has(id));
+ w.send({type:'commit',requestId:'wrong',ok:true,jobComplete:true});await tick();assert.ok(w.openTabs.has(id));
+ w.send({type:'commit',requestId:'final',ok:true,jobComplete:true});await tick();
+ assert.equal(w.openTabs.has(id),false);assert.ok(w.openTabs.has(7));assert.equal(w.saved.state,'IDLE');assert.equal(w.saved.tabId,null);
+ assert.ok(w.sent.some(m=>m.type==='commitAck'&&m.requestId==='final'&&m.ok));
+});
+test('intermediate saved acknowledgement retains the worker page',async()=>{
+ const w=await worker({receive:async m=>m.type==='probe'?{ok:true,page:{}}:{ok:true,audioBase64:'SUQz'}});
+ w.send({type:'generate',requestId:'middle',text:'hello'});await resultFor(w,'middle');const id=w.saved.tabId;
+ w.send({type:'commit',requestId:'middle',ok:true,jobComplete:false});await tick();assert.ok(w.openTabs.has(id));assert.equal(w.saved.state,'IDLE');
+});
+test('final cleanup preserves Chrome when worker is its only tab',async()=>{
+ const w=await worker({receive:async m=>m.type==='probe'?{ok:true,page:{}}:{ok:true,audioBase64:'SUQz'}});
+ w.send({type:'generate',requestId:'last',text:'hello'});await resultFor(w,'last');
+ w.send({type:'commit',requestId:'last',ok:true,jobComplete:true});await tick();
+ assert.equal(w.saved.state,'IDLE');assert.equal(w.openTabs.size,1);assert.equal([...w.openTabs.values()][0].url,'about:blank');
+});
+test('cleanup failure never invalidates saved audio or locks the queue',async()=>{
+ const w=await worker({receive:async m=>m.type==='probe'?{ok:true,page:{}}:{ok:true,audioBase64:'SUQz'}});
+ w.send({type:'generate',requestId:'cleanup-fail',text:'hello'});await resultFor(w,'cleanup-fail');const id=w.saved.tabId;
+ w.chrome.tabs.remove=async()=>{throw Error('Chrome refused');};
+ w.send({type:'commit',requestId:'cleanup-fail',ok:true,jobComplete:true});await tick();
+ assert.equal(w.saved.state,'IDLE');assert.ok(w.openTabs.has(id));assert.match((await w.ui({type:'status'})).lastError,/could not close/);
+ assert.ok(w.sent.some(m=>m.type==='commitAck'&&m.requestId==='cleanup-fail'&&m.ok));
+});
+test('final cleanup preserves a worker page navigated elsewhere',async()=>{
+ const w=await worker({receive:async m=>m.type==='probe'?{ok:true,page:{}}:{ok:true,audioBase64:'SUQz'}});
+ w.send({type:'generate',requestId:'navigated',text:'hello'});await resultFor(w,'navigated');const id=w.saved.tabId;
+ w.openTabs.get(id).pendingUrl='https://example.com/';
+ w.send({type:'commit',requestId:'navigated',ok:true,jobComplete:true});await tick();assert.ok(w.openTabs.has(id));assert.equal(w.saved.state,'IDLE');
 });

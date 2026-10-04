@@ -1,5 +1,11 @@
 const {contextBridge, ipcRenderer} = require('electron');
 contextBridge.exposeInMainWorld('studio', Object.freeze({
+  assemblyImport: (kind, context) => ipcRenderer.invoke('assembly-import', kind, context),
+  assemblyMedia: (id, action) => ipcRenderer.invoke('assembly-media', id, action),
+  srtImport: context => ipcRenderer.invoke('srt-import', context),
+  srtSave: id => ipcRenderer.invoke('srt-save', id),
+  whisperxImport: context => ipcRenderer.invoke('whisperx-import', context),
+  whisperxSave: (id,variant='full') => ipcRenderer.invoke('whisperx-save', id, variant),
   backendAction: action => ipcRenderer.invoke('backend-action', action),
   elevenlabsAction: action => ipcRenderer.invoke('elevenlabs-action', action),
   elevenlabsAudio: (id, index, action) => ipcRenderer.invoke('elevenlabs-audio', id, index, action),

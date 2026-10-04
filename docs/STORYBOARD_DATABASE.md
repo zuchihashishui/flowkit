@@ -1,5 +1,7 @@
 # Script-to-media workflow — desktop 0.3
 
+> Studio 0.7.44: one project = one complete video. Select the active project in **Projects**. Sources and jobs follow that selection. Existing records remain **Unassigned** until you link them in Projects → Project sources & history. See [Video workflow](VIDEO_WORKFLOW.md).
+
 ## The two AI steps
 
 **Create Concepts** uses a locally installed and signed-in Codex, Claude or
@@ -20,8 +22,8 @@ on restart uncertain concept jobs require review instead of automatic retries.
 
 1. Select/create a project in **Projects**. New Google Flow projects still require
    the Chrome extension. Existing local projects can prepare scripts without Flow.
-2. Open **Script & Scenes**, choose a collection or enter a title and click
-   **New script**. A collection is the existing `video` record.
+2. Open **Script & Scenes**. It uses the active project automatically. One project
+   is one video; create another project for another topic.
 3. Paste/import the full script, enter a shared visual style, and click
    **Save script & style**. The style should describe recurring characters and
    composition rules, rather than changing those details independently per segment.

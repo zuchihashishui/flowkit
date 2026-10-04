@@ -264,6 +264,8 @@ async def _process_one(req: dict, deferred: dict = None, retry_after: dict = Non
             deferred[rid] = time.time() + 30  # defer 30s before rechecking
         return
 
+    from agent.services.browser_lifecycle import flow_started, flow_saved
+    flow_started("request", rid)
     logger.info("Processing request %s type=%s", rid[:8], req_type)
     await crud.update_request(rid, status="PROCESSING")
     await event_bus.emit("request_update", {"id": rid, "status": "PROCESSING", "type": req_type})
@@ -282,6 +284,7 @@ async def _process_one(req: dict, deferred: dict = None, retry_after: dict = Non
             else:
                 await apply_scene_result(req.get("scene_id"), req_type, orientation, gen_result)
             await event_bus.emit("request_update", {"id": rid, "status": "COMPLETED"})
+            flow_saved("request", rid)
             logger.info("Request %s COMPLETED: media=%s", rid[:8], gen_result.media_id[:20] if gen_result.media_id else "?")
     except Exception as e:
         logger.exception("Request %s exception: %s", rid[:8], e)

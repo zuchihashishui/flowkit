@@ -11,6 +11,8 @@ from agent.config import BASE_DIR
 URL = 'http://127.0.0.1:18790'
 STORE = BASE_DIR / 'chatgpt_jobs.db'
 _inflight = set()
+_srt_inflight = set()
+_cleanup_pending = False
 DEFAULTS = {'workers': 3, 'timeout_seconds': 180, 'temporary': True, 'paused': False}
 
 class GatewayReviewRequired(RuntimeError):
@@ -98,13 +100,19 @@ async def status():
             info = r.json()
         valid = info.get('service') == 'flowkit-chatgpt-gateway' and info.get('protocol') == 2
         idle = sum(w.get('state') == 'IDLE' for w in info.get('workers', [])[:config['workers']])
-        slots = min(idle, max(0,config['workers']-len(_inflight))) if valid and info.get('enabled') and not info.get('needsReview') and not info.get('inspecting') and not config['paused'] else 0
-        return {**info, 'available':valid,'availableSlots':slots,'settings':config,'hasReviewJobs':blocked()}
+        dispatchable = valid and info.get('extensionConnected') and info.get('enabled') and not info.get('needsReview') and not info.get('inspecting') and not config['paused']
+        remaining = max(0, config['workers']-len(_inflight))
+        slots = min(idle, remaining) if dispatchable else 0
+        srt_worker = info.get('srtWorker')
+        srt_ready = not srt_worker or srt_worker.get('state') == 'IDLE'
+        srt_slots = int(bool(dispatchable and srt_ready and not _srt_inflight and
+                             'dedicated-srt-v1' in info.get('capabilities', [])))
+        return {**info, 'available':valid,'availableSlots':slots,'availableSrtSlots':srt_slots,'settings':config,'hasReviewJobs':blocked()}
     except Exception as e:
         return {'available':False,'extensionConnected':False,'availableSlots':0,'settings':config,'hasReviewJobs':blocked(),'error':str(e)}
 
 async def reset():
-    if _inflight:
+    if _inflight or _srt_inflight:
         raise GatewayReviewRequired('Requests are still running. Wait for them to finish.')
     async with httpx.AsyncClient(trust_env=False, timeout=8) as client:
         r = await client.post(URL+'/review/reset')
@@ -118,12 +126,27 @@ async def commit(request_id, ok):
         r = await client.post(URL+'/commit', json={'request_id':request_id,'ok':ok})
         r.raise_for_status()
 
-async def complete(prompt, model=None, validate=None, job_id=None):
+async def complete(prompt, model=None, validate=None, job_id=None, *, attachment=None, composer_mode=None, temporary=None, timeout_seconds=None, fresh_tab=False):
+    global _cleanup_pending
     config = settings()
-    if config['paused'] or len(_inflight) >= config['workers']:
+    timeout = timeout_seconds or config['timeout_seconds']
+    # Request-local defaults prevent a previous Work job or saved extension mode
+    # from changing a text job. SRT supplies its Work/regular options explicitly.
+    if composer_mode is None:
+        composer_mode = 'work' if attachment is not None else 'chat'
+    if temporary is None:
+        temporary = attachment is None
+    extra = {'composerMode': composer_mode}
+    if fresh_tab:
+        extra['freshTab'] = True
+    if attachment is not None:
+        extra['attachment'] = attachment
+    inflight = _srt_inflight if fresh_tab else _inflight
+    limit = 1 if fresh_tab else config['workers']
+    if config['paused'] or len(inflight) >= limit:
         raise GatewayBusy('ChatGPT queue is paused or all workers are busy.')
     rid = str(uuid.uuid4())
-    _inflight.add(rid)  # No await between checking capacity and reserving it.
+    inflight.add(rid)  # No await between checking capacity and reserving it.
     remote_id = None
     audited = False
     saved = False
@@ -134,10 +157,10 @@ async def complete(prompt, model=None, validate=None, job_id=None):
             if job_id:
                 c.execute('UPDATE chat_queue SET audit_id=? WHERE id=?',(rid,job_id))
         audited = True
-        async with httpx.AsyncClient(trust_env=False, timeout=config['timeout_seconds']+90) as client:
+        async with httpx.AsyncClient(trust_env=False, timeout=timeout+(240 if attachment is not None else 90)) as client:
             response = await client.post(URL+'/v1/chat/completions',json={
                 'messages':[{'role':'user','content':prompt}], 'model':model or 'auto',
-                'timeout':config['timeout_seconds']*1000,'workers':config['workers'],'temporary':config['temporary']})
+                'timeout':timeout*1000,'workers':config['workers'],'temporary':temporary, **extra})
         raw = response.text
         with db() as c:
             c.execute('UPDATE requests SET response=? WHERE id=?',(raw,rid))
@@ -160,6 +183,8 @@ async def complete(prompt, model=None, validate=None, job_id=None):
         saved = True
         try:
             await commit(remote_id, True)
+            if not fresh_tab:
+                _cleanup_pending = True
         except Exception as e:
             with db() as c:
                 c.execute('UPDATE requests SET error=? WHERE id=?',('Result saved; worker release unconfirmed: '+str(e),rid))
@@ -179,7 +204,7 @@ async def complete(prompt, model=None, validate=None, job_id=None):
             raise
         raise GatewayReviewRequired(f'ChatGPT request {rid} needs review: {e}. Check Request History and the worker tab.') from e
     finally:
-        _inflight.discard(rid)
+        inflight.discard(rid)
 
 async def process_job(job):
     with db() as c:
@@ -204,6 +229,25 @@ def recover():
     if old or legacy_review:
         update_settings({'paused':True})
 
+async def close_idle_text_workers():
+    """Release windows only after both prompt queues have drained and saved."""
+    global _cleanup_pending
+    if not _cleanup_pending or _inflight or blocked():
+        return
+    with db() as c:
+        if c.execute("SELECT 1 FROM chat_queue WHERE state IN ('QUEUED','RUNNING') LIMIT 1").fetchone():
+            return
+    from agent.api.storyboard import query
+    concepts = await query("SELECT payload FROM concept_job WHERE state IN ('QUEUED','RUNNING')")
+    if any(json.loads(row['payload']).get('provider') == 'chatgpt-web' for row in concepts):
+        return
+    if _inflight:
+        return
+    async with httpx.AsyncClient(trust_env=False, timeout=12) as client:
+        result = await client.post(URL+'/workers/close')
+        result.raise_for_status()
+    _cleanup_pending = False
+
 async def run():
     recover()
     tasks = {}
@@ -221,6 +265,10 @@ async def run():
                 for job in jobs:
                     if job['id'] not in tasks:
                         tasks[job['id']] = asyncio.create_task(process_job(job))
+            try:
+                await close_idle_text_workers()
+            except Exception:
+                pass  # Cleanup never changes a successfully saved result.
             await asyncio.sleep(1)
     finally:
         for task in tasks.values():
@@ -233,7 +281,7 @@ async def inspect_tabs(kind, model='auto'):
         raise GatewayBusy('Pause the queue and wait for active jobs before checking tabs.')
     async with httpx.AsyncClient(trust_env=False, timeout=25) as client:
         r = await client.post(URL+'/inspect', json={'kind':kind,'model':model,
-                              'workers':config['workers'],'temporary':config['temporary']})
+                              'workers':config['workers'],'composerMode':'chat','temporary':True})
         if r.status_code != 200:
             try:
                 detail = r.json().get('error', r.text)

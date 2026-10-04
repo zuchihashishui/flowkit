@@ -62,7 +62,7 @@ def test_japanese_split_is_lossless_with_exact_offsets_and_sentence_boundaries()
     chunks = split_text(text)
     assert ''.join(p['text'] for p in chunks) == text
     assert all(text[p['start']:p['end']] == p['text'] for p in chunks)
-    assert all(900 <= p['utf16_length'] < 1200 for p in chunks[:-1])
+    assert all(2250 <= p['utf16_length'] <= 3000 for p in chunks[:-1])
     assert all(p['text'].endswith('\n') for p in chunks[:-1])
     assert chunks[-1]['end'] == len(text)
 
@@ -71,13 +71,13 @@ def test_astral_characters_use_conservative_utf16_cap_and_preserve_tag_text():
     text = '[happy]😀説明' * 1400 + '\r\n [pause] 終了'
     chunks = split_text(text)
     assert ''.join(c['text'] for c in chunks) == text
-    assert all(c['utf16_length'] == utf16_length(c['text']) < 1200 for c in chunks)
+    assert all(c['utf16_length'] == utf16_length(c['text']) <= 3000 for c in chunks)
     assert all(not any(0xD800 <= ord(ch) <= 0xDFFF for ch in c['text']) for c in chunks)
 
 
 def test_unbroken_sentence_hard_split_and_short_final_chunk():
     chunks = split_text('あ' * 8100)
-    assert [c['characters'] for c in chunks] == [1199] * 6 + [906]
+    assert [c['characters'] for c in chunks] == [3000, 3000, 2100]
 
 
 @pytest.mark.parametrize('text', ['', ' \n ', '\ud800', 'あ' * 500001])
@@ -89,7 +89,7 @@ def test_invalid_inputs_rejected(text):
 @pytest.mark.asyncio
 async def test_two_chunks_saved_before_commit_and_generated_in_order(bridge, monkeypatch):
     monkeypatch.setattr(bridge, '_merge_audio', lambda jid: None)
-    job = bridge.enqueue('一' * 2100)
+    job = bridge.enqueue('一' * 4200)
     peer = await connected(bridge)
     assert await bridge.step()
     assert bridge.job(job['id'])['completed_chunks'] == 1
@@ -98,6 +98,7 @@ async def test_two_chunks_saved_before_commit_and_generated_in_order(bridge, mon
     assert current['state'] == 'COMPLETED'
     assert current['completed_chunks'] == 2
     assert [m['type'] for m in peer.sent] == ['generate', 'commit', 'generate', 'commit']
+    assert [m['jobComplete'] for m in peer.sent if m['type'] == 'commit'] == [False, True]
     assert ''.join(m['text'] for m in peer.sent if m['type'] == 'generate') == job['text']
     assert current['chunks'][0]['metadata']['estimatedCost'] is None
 
@@ -140,7 +141,7 @@ async def test_proven_pre_submit_failure_pauses_without_review_or_automatic_retr
 
 @pytest.mark.asyncio
 async def test_ack_disconnect_preserves_audio_and_blocks_next_chunk(bridge):
-    job = bridge.enqueue('文' * 2100)
+    job = bridge.enqueue('文' * 4200)
     await connected(bridge, drop_commit=True)
     await bridge.step()
     stored = bridge.job(job['id'])
@@ -185,7 +186,7 @@ def test_restart_quarantines_inflight_and_never_requeues(bridge):
 
 @pytest.mark.asyncio
 async def test_cancel_and_reviewed_retry_preserve_completed_audio(bridge):
-    job = bridge.enqueue('文' * 2100)
+    job = bridge.enqueue('文' * 4200)
     await connected(bridge)
     await bridge.step()
     bridge.cancel(job['id'])
@@ -258,7 +259,7 @@ def test_api_preview_and_queue_preserve_text_and_validate_boundaries(bridge, mon
     app.include_router(api.router, prefix='/api')
     with TestClient(app) as client:
         preview = client.post('/api/elevenlabs/preview', json={'text': '日' * 5000})
-        assert preview.status_code == 200 and preview.json()['total_chunks'] == 5
+        assert preview.status_code == 200 and preview.json()['total_chunks'] == 2
         job = client.post('/api/elevenlabs/jobs', json={'text': 'こんにちは。'}).json()
         assert job['model'] == 'Eleven v4'
         assert client.get('/api/elevenlabs/jobs/' + job['id']).json()['text'] == 'こんにちは。'
@@ -283,7 +284,7 @@ def test_restart_after_audio_commit_reconciles_job_and_requires_review(bridge):
 @pytest.mark.parametrize('fresh_tab', [False, True])
 async def test_later_chunks_pin_first_successful_voice(bridge, monkeypatch, fresh_tab):
     monkeypatch.setattr(bridge, '_merge_audio', lambda jid: None)
-    bridge.enqueue('日' * 6000)
+    bridge.enqueue('日' * 4200)
     peer = await connected(bridge, response={'ok': True, 'audioBase64': wav_payload(), 'mimeType': 'audio/wav', 'voice': 'Sakura'})
     if fresh_tab:
         await bridge.receive(peer, {'type': 'status', 'enabled': True, 'ready': True, 'tabId': None,
@@ -479,7 +480,7 @@ async def test_review_lock_is_not_reported_as_processing_and_release_clears_stal
 
 
 def test_cancel_pending_chunks_does_not_hide_uncertain_chunk(bridge):
-    job = bridge.enqueue('文' * 2100)
+    job = bridge.enqueue('文' * 4200)
     with bridge.db() as connection:
         connection.execute("UPDATE eleven_chunks SET state='NEEDS_REVIEW',error='Review this audio' WHERE job_id=? AND chunk_index=1", (job['id'],))
     bridge._finish_job(job['id'])
@@ -568,9 +569,26 @@ async def test_no_submit_rejection_does_not_release_an_existing_remote_review_lo
 
 
 @pytest.mark.parametrize('length', [1198, 1199, 1200, 2398, 2399])
-def test_default_chunk_limit_is_strictly_under_1200(length):
+def test_custom_chunk_limit_is_strictly_under_1200(length):
     text = 'あ' * length
-    chunks = split_text(text)
+    chunks = split_text(text, maximum=1199)
     assert ''.join(chunk['text'] for chunk in chunks) == text
     assert all(0 < chunk['utf16_length'] < 1200 for chunk in chunks)
     assert len(chunks) == (length + 1198) // 1199
+
+
+@pytest.mark.parametrize('limit', [100, 1200, 1500, 3000])
+def test_api_custom_chunk_size_matches_preview_and_saved_job(bridge, monkeypatch, limit):
+    monkeypatch.setattr(api, 'bridge', bridge)
+    app = FastAPI()
+    app.include_router(api.router, prefix='/api')
+    with TestClient(app) as client:
+        body = {'text': '日本語。😀' * 1100, 'max_chunk_characters': limit}
+        preview = client.post('/api/elevenlabs/preview', json=body).json()
+        job = client.post('/api/elevenlabs/jobs', json=body).json()
+        assert [c['text'] for c in preview['chunks']] == [c['text'] for c in job['chunks']]
+        assert ''.join(c['text'] for c in job['chunks']) == body['text']
+        assert all(c['utf16_length'] <= limit for c in job['chunks'])
+        for invalid in [99, 3001, 1500.5, True]:
+            for route in ['preview', 'jobs']:
+                assert client.post('/api/elevenlabs/' + route, json={**body, 'max_chunk_characters': invalid}).status_code == 422

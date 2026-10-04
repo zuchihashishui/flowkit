@@ -17,3 +17,34 @@ for(const mode of ['pressed','heading','unchanged','missing','lost','rate-limit'
  else{assert.equal(r.ok,false);assert.equal(sent,0);assert.match(r.error,/Temporary Chat/);if(mode!=='lost')assert.equal(typed,0);}
  dom.window.close();
 });
+
+for(const mode of ['pressed','switch','exit','missing-exit','disabled-exit','stuck','reactivated'])test(`Work regular request leaves Temporary Chat before selecting Work: ${mode}`,async()=>{
+ const dom=new JSDOM('<textarea id="prompt-textarea"></textarea><button type="submit" aria-label="Send">Send</button>',{url:'https://chatgpt.com/',runScripts:'outside-only'});
+ const w=dom.window,d=w.document;let listener,sent=0,typed=0,exited=0;
+ Object.defineProperty(w.HTMLElement.prototype,'offsetParent',{get(){return this.hidden?null:d.body;}});
+ w.chrome={runtime:{onMessage:{addListener:f=>listener=f}}};w.setTimeout=fn=>setImmediate(fn);
+ const toggle=d.createElement(mode==='switch'?'div':'button');
+ toggle.setAttribute('aria-label',mode==='exit'?'Exit temporary chat':'Temporary chat');
+ if(mode==='switch'){toggle.setAttribute('role','switch');toggle.setAttribute('aria-checked','true');}else toggle.setAttribute('aria-pressed','true');
+ if(mode==='missing-exit'){const h=d.createElement('h1');h.textContent='Temporary Chat';d.body.append(h);}else d.body.append(toggle);
+ if(mode==='disabled-exit')toggle.disabled=true;
+ toggle.onclick=()=>{
+  exited++;
+  if(mode==='stuck')return;
+  toggle.setAttribute('aria-label','Temporary chat');toggle.setAttribute('aria-pressed','false');toggle.setAttribute('aria-checked','false');
+  d.body.insertAdjacentHTML('afterbegin','<div role="group" aria-label="Composer mode"><button aria-pressed="true">Chat</button><button aria-pressed="false">Work</button></div>');
+  const [chat,work]=d.querySelectorAll('[role="group"] button');
+  work.onclick=()=>{work.setAttribute('aria-pressed','true');chat.setAttribute('aria-pressed','false');};
+ };
+ d.execCommand=(cmd,_,value)=>{if(cmd==='insertText'){
+  typed++;assert.equal(exited,1);assert.equal(d.querySelectorAll('[role="group"] button')[1].getAttribute('aria-pressed'),'true');
+  d.querySelector('textarea').value=value;if(mode==='reactivated')toggle.setAttribute('aria-pressed','true');
+ }};
+ d.querySelector('[aria-label="Send"]').onclick=()=>{sent++;d.body.insertAdjacentHTML('beforeend','<div data-local-conversation-final-assistant="true" data-markdown-text-style="assistant-message">Work answer</div>');};
+ w.eval(fs.readFileSync(path.join(__dirname,'../../extensions/chatgpt/content.js'),'utf8'));
+ const r=await new Promise(resolve=>listener({type:'chat',userMessage:'Work prompt',composerMode:'work',temporary:false,newConversation:false,timeout:10000},{},resolve));
+ const ok=['pressed','switch','exit'].includes(mode);
+ assert.equal(r.ok,ok,r.error);assert.equal(sent,ok?1:0);
+ if(!ok){assert.match(r.error,/Temporary Chat/);assert.equal(typed,mode==='reactivated'?1:0);}
+ dom.window.close();
+});

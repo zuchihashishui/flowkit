@@ -18,7 +18,7 @@ clears/restores the editor with a refresh, then submits the new text. It retains
 acknowledges the commit. The first saved voice is pinned across the job.
 
 The splitter preserves exact source text and prefers paragraph/sentence boundaries
-within 900–1,199 UTF-16 code units. The maximum is 1,199 units; the last chunk can be
+within 75–100% of the selected maximum in UTF-16 code units. The default maximum is 3,000 units; the last chunk can be
 shorter. `characters`, `start`, and `end` use Unicode code points. Concatenating chunk
 text reconstructs the source. A job accepts at most 500,000 code points.
 
@@ -113,3 +113,5 @@ ProseMirror model updates using paragraph and inline speaker schemas. Browser se
 and provider generation interactions use test doubles or sanitized page fixtures.
 These checks do not establish successful paid generation in a signed-in account or
 native Windows Electron operation. See the [release review](../STABILITY_REVIEW_0.7.18.md).
+
+Preview and job creation accept `max_chunk_characters` (integer 100–3000, default 3000). Studio exposes this as **Max characters per chunk**. Existing jobs keep their persisted chunks.

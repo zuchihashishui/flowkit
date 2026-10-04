@@ -59,7 +59,7 @@ for (const content of ['paragraph+','inline*']) test(`real ProseMirror ${content
   d.querySelector('[data-testid="tts-generate"]').onclick=()=>{generateClicks++;d.querySelector('audio').src=`blob:https://elevenlabs.io/generation-${generateClicks}`;};
   w.eval(code);
   const request=m=>new Promise(resolve=>listener(m,{id:'ext'},resolve));
-  const chunks=['日本語の文章です。'.repeat(360)+'\n\n次の段落です。','句読点。「テスト」\n改行と絵文字🎵。','[laughs]  二つの空白。\tタブ。<script>文字列</script> & 記号。'];
+  const chunks=['日本語の文章です。'.repeat(270)+'\n\n次の段落です。','句読点。「テスト」\n改行と絵文字🎵。','[laughs]  二つの空白。\tタブ。<script>文字列</script> & 記号。'];
   for(const [i,input] of chunks.entries()){
    // The first chunk replaces an existing document with its old cursor at the
    // end. Later chunks exercise the real app-style Clear transaction as well.

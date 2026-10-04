@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 let latest = {}, working = false, actionError = '';
 const workerLabels = {IDLE:'Ready',RUNNING:'Processing',AWAITING_SAVE:'Saving audio',NEEDS_REVIEW:'Waiting for review'};
-const phaseLabels = {IDLE:'Ready',FAILED:'Stopped before Generate',SAVED:'Audio saved',PREPARING:'Preparing page',CLOSING_TABS:'Closing previous Text to Speech tabs',OPENING_TAB:'Opening a new Text to Speech tab',BINDING_TAB:'Binding the new tab',WAITING_NEW_PAGE:'Waiting for the new page',CLEARING_TEXT:'Clearing previous text',REFRESHING_PAGE:'Refreshing page',WAITING_PAGE:'Waiting for the editor',SELECTING_MODEL:'Selecting model',ENTERING_TEXT:'Entering text',WAITING_GENERATE_BUTTON:'Waiting for Generate',READING_CREDITS:'Reading optional credits',GENERATING:'Generating speech',WAITING_DOWNLOAD:'Waiting for completed audio',VERIFYING_DOWNLOAD:'Verifying Download',DOWNLOADING:'Downloading audio',AWAITING_SAVE:'Saving audio',NEEDS_REVIEW:'Review required'};
+const phaseLabels = {IDLE:'Ready',FAILED:'Stopped before Generate',SAVED:'Audio saved',PREPARING:'Preparing page',CLOSING_TABS:'Closing previous Text to Speech tabs',OPENING_TAB:'Opening a separate Text to Speech window',BINDING_TAB:'Binding the new tab',WAITING_NEW_PAGE:'Waiting for the new page',CLEARING_TEXT:'Clearing previous text',REFRESHING_PAGE:'Refreshing page',WAITING_PAGE:'Waiting for the editor',SELECTING_MODEL:'Selecting model',ENTERING_TEXT:'Entering text',WAITING_GENERATE_BUTTON:'Waiting for Generate',READING_CREDITS:'Reading optional credits',GENERATING:'Generating speech',WAITING_DOWNLOAD:'Waiting for completed audio',VERIFYING_DOWNLOAD:'Verifying Download',DOWNLOADING:'Downloading audio',AWAITING_SAVE:'Saving audio',NEEDS_REVIEW:'Review required'};
 async function command(message) { const result = await chrome.runtime.sendMessage(message); if (result?.error && result.ok === false) throw new Error(result.error); return result; }
 async function refresh() {
   latest = await command({type:'status'});
@@ -36,7 +36,7 @@ $('reconnect').addEventListener('click',() => action(() => command({type:'reconn
 $('clear').addEventListener('click',() => action(() => command({type:'clearEvents'})));
 $('bind').addEventListener('click',() => action(() => { if (!$('tab').value) throw new Error('Choose a Text to Speech tab before clicking Bind tab.'); return command({type:'bindTab',tabId:Number($('tab').value)}); }));
 $('probe').addEventListener('click',() => action(() => command({type:'probe'})));
-$('open').addEventListener('click',() => action(() => chrome.tabs.create({url:'https://elevenlabs.io/app/speech-synthesis/text-to-speech'})));
+$('open').addEventListener('click',() => action(() => chrome.windows.create({url:'https://elevenlabs.io/app/speech-synthesis/text-to-speech',type:'normal',focused:true})));
 $('focus').addEventListener('click',() => action(async () => { const tab = await chrome.tabs.update(latest.tabId,{active:true}); await chrome.windows.update(tab.windowId,{focused:true}); }));
 void action(async () => {});
 setInterval(() => { if (!working) void action(async () => {},false); },3000);

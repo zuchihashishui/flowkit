@@ -9,7 +9,7 @@ async function setup(initial){
  const dom=new JSDOM(fs.readFileSync(path.join(root,'side_panel.html'),'utf8'),{url:'https://extension.invalid/side_panel.html',runScripts:'outside-only'}),w=dom.window,calls=[];
  let status={connected:true,enabled:true,ready:true,autoPrepareTab:true,state:'IDLE',phase:'IDLE',tabId:null,pageConnected:false,...initial},poll;
  w.setInterval=fn=>poll=fn;
- w.chrome={runtime:{sendMessage:async message=>{calls.push(message);return status;}},tabs:{query:async()=>[]}};
+ w.chrome={runtime:{sendMessage:async message=>{calls.push(message);return status;}},tabs:{query:async()=>[]},windows:{create:async options=>{calls.push({type:'window',...options});}}};
  w.eval(fs.readFileSync(path.join(root,'panel.js'),'utf8'));await tick();
  return {dom,w,$:id=>w.document.getElementById(id),calls,async update(next){status={...status,...next};poll();await tick();}};
 }
@@ -27,7 +27,7 @@ test('ElevenLabs panel shows automatic readiness without a tab and enables inspe
 
 test('ElevenLabs panel labels every fresh-tab phase and disables commands that could interfere',async()=>{
  const {dom,$,update}=await setup({ready:false,busy:true,state:'RUNNING'});
- for(const [phase,label] of [['CLOSING_TABS','Closing previous Text to Speech tabs'],['OPENING_TAB','Opening a new Text to Speech tab'],['BINDING_TAB','Binding the new tab'],['WAITING_NEW_PAGE','Waiting for the new page']]){
+ for(const [phase,label] of [['CLOSING_TABS','Closing previous Text to Speech tabs'],['OPENING_TAB','Opening a separate Text to Speech window'],['BINDING_TAB','Binding the new tab'],['WAITING_NEW_PAGE','Waiting for the new page']]){
   await update({phase});assert.equal($('phase').textContent,label);assert.equal($('state').textContent,'Processing');
   assert.match($('page-connection').textContent,/Preparing a fresh Text to Speech tab/);
   for(const id of ['bind','probe','open'])assert.equal($(id).disabled,true,id);
@@ -39,4 +39,9 @@ test('ElevenLabs panel preserves the review lock and never presents stale readin
  const {dom,$,calls}=await setup({state:'NEEDS_REVIEW',needsReview:true,phase:'FAILED'});
  assert.equal($('state').textContent,'Waiting for review');assert.equal($('phase').textContent,'Review required');
  assert.match($('page-connection').textContent,/No tabs will be replaced/);assert.equal(calls.length,1);assert.equal(calls[0].type,'status');dom.window.close();
+});
+
+test('Open ElevenLabs opens a separate normal Chrome window',async()=>{
+ const {dom,$,calls}=await setup();$('open').click();await tick();
+ const opened=calls.find(c=>c.type==='normal');assert.ok(opened);assert.equal(opened.focused,true);assert.match(opened.url,/text-to-speech$/);dom.window.close();
 });

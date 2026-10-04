@@ -108,8 +108,8 @@
   }
 
   function temporaryEnabled() {
-    const toggles = document.querySelectorAll('button[aria-label="Temporary chat"]');
-    if ([...toggles].some(el => visible(el) && (el.getAttribute('aria-pressed') === 'true' || el.getAttribute('data-state') === 'on'))) return true;
+    const toggles = document.querySelectorAll('button[aria-label="Temporary chat"], [role="switch"][aria-label="Temporary chat"]');
+    if ([...toggles].some(el => visible(el) && (el.getAttribute('aria-pressed') === 'true' || el.getAttribute('data-state') === 'on' || el.getAttribute('aria-checked') === 'true'))) return true;
     // Positive UI evidence only; the existence of the entry button is not proof.
     return [...document.querySelectorAll('button, [role="switch"], h1, h2, [role="heading"]')].some(el => {
       if (!visible(el)) return false;
@@ -121,8 +121,8 @@
 
   async function enableTemporaryChat() {
     if (temporaryEnabled()) return;
-    const button = [...document.querySelectorAll('button[aria-label="Temporary chat"]')].find(visible);
-    if (!button || button.disabled) throw new Error('Temporary Chat button not found. No prompt was sent. Choose Chat in the extension, or explicitly choose Regular chat in Studio if Work has no Temporary Chat support.');
+    const button = [...document.querySelectorAll('button[aria-label="Temporary chat"], [role="switch"][aria-label="Temporary chat"]')].find(visible);
+    if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true') throw new Error('Temporary Chat button not found or unavailable. No prompt was sent. Text jobs require Chat / Temporary Chat; JSON to SRT uses Work / regular chat. Check the worker tab.');
     button.click();
     let choseUnpersonalized = false;
     for (let i = 0; i < 20; i++) {
@@ -134,6 +134,23 @@
       if (temporaryEnabled()) return;
     }
     throw new Error('Cannot verify Temporary Chat is active. No prompt was sent. Check the tab and share the HTML after enabling Temporary Chat.');
+  }
+
+  async function disableTemporaryChat() {
+    if (!temporaryEnabled()) return;
+    const button = [...document.querySelectorAll('button, [role="switch"]')].find(el => {
+      if (!visible(el) || el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+      const label = (el.getAttribute('aria-label') || el.textContent || '').trim().toLowerCase();
+      return /^(exit temporary chat|turn off temporary chat|temporary chat is on)$/.test(label) ||
+        label === 'temporary chat' && (el.getAttribute('aria-pressed') === 'true' || el.getAttribute('data-state') === 'on' || el.getAttribute('aria-checked') === 'true');
+    });
+    if (!button) throw new Error('Cannot exit Temporary Chat for this regular-chat request. No prompt was sent. Open a regular chat in the worker tab.');
+    button.click();
+    for (let i=0;i<20;i++) {
+      await sleep(500);
+      if (!temporaryEnabled() && findInput()) return;
+    }
+    throw new Error('Cannot verify Temporary Chat is OFF. No prompt was sent. Check the worker tab.');
   }
 
   function pageFailure() {
@@ -329,17 +346,20 @@
   function editorText(input) {
     if (!input) return '';
     if (input.getAttribute('contenteditable') !== 'true') return input.value || '';
-    // Read ProseMirror paragraphs as lines; textContent alone joins adjacent
-    // paragraphs and cannot verify a multiline prompt reliably.
-    const block = node => node?.nodeType === 1 && /^(P|DIV|LI|PRE|BLOCKQUOTE)$/.test(node.tagName);
+    // A paragraph boundary is one newline even next to an empty paragraph or
+    // a hard break. Looking at value.endsWith('\n') collapses real blank lines.
+    const block = node => node?.nodeType === 1 && /^(P|DIV|LI|PRE|BLOCKQUOTE|UL|OL|H[1-6])$/.test(node.tagName);
     const read = node => {
       if (node.nodeType === 3) return node.nodeValue || '';
       if (node.nodeType !== 1) return '';
-      if (node.tagName === 'BR') return '\n';
+      // ProseMirror adds a caret placeholder at the end of a text block. A lone
+      // browser <br> in an empty paragraph is a placeholder too, not extra text.
+      if (node.tagName === 'BR') return node.classList.contains('ProseMirror-trailingBreak') ? '' : '\n';
+      if (block(node) && node.childNodes.length === 1 && node.firstChild.nodeName === 'BR') return '';
       let value = '', previous = null;
       for (const child of node.childNodes) {
         const part = read(child);
-        if (value && (block(previous) || block(child)) && !value.endsWith('\n') && !part.startsWith('\n')) value += '\n';
+        if (previous && (block(previous) || block(child))) value += '\n';
         value += part;
         previous = child;
       }
@@ -389,12 +409,58 @@
     throw new Error('ChatGPT input did not stabilize. No prompt was sent. Refresh the worker tab before retrying.');
   }
 
-  async function clickSend(text) {
+  function attachmentPresent(name) {
+    const editor = findInput();
+    const scope = editor?.closest('form') || editor?.closest('[data-type="unified-composer"]') || editor?.parentElement?.parentElement;
+    if (!scope) return false;
+    const named = [...scope.querySelectorAll('[title], [aria-label], span, p, div')].filter(el =>
+      el.getAttribute('title') === name || el.getAttribute('aria-label') === name ||
+      (el.textContent || '').trim() === name);
+    const busy = scope.querySelector('[role="progressbar"], [aria-busy="true"], [data-loading="true"], .animate-spin');
+    const failed = named.some(el => /upload failed|error uploading|unable to upload|unsupported file|file too large/i.test(
+      (el.closest('[data-testid*="file"], [data-testid*="attachment"]') || el.parentElement)?.textContent || ''));
+    return named.length > 0 && !busy && !failed;
+  }
+
+  async function attachJSON(attachment) {
+    if (!attachment || !/^transcript-[a-f0-9-]{36}\.json$/.test(attachment.name) ||
+        typeof attachment.base64 !== 'string' || attachment.base64.length > 22369624) throw Error('Invalid JSON attachment. No prompt was sent.');
+    const bytes = Uint8Array.from(atob(attachment.base64), ch => ch.charCodeAt(0));
+    JSON.parse(new TextDecoder().decode(bytes).replace(/^\uFEFF/, ''));
+    const file = new File([bytes], attachment.name, {type:'application/json'});
+    const fileInput = () => [...document.querySelectorAll('input[type="file"]')].find(el => {
+      const accept = (el.getAttribute('accept') || '').toLowerCase();
+      return !el.disabled && (!accept || accept.includes('.json') || accept.includes('application/json') || accept.includes('*/*'));
+    });
+    let input = fileInput();
+    if (!input) {
+      const add = [...document.querySelectorAll('button')].find(el => visible(el) &&
+        /^(Add files|Attach files|Upload files|Add photos & files|Add photos and files|Open.*attachment)/i.test(el.getAttribute('aria-label') || el.textContent || ''));
+      if (add) add.click();
+      for (let i=0;i<20 && !input;i++) {await sleep(250);input=fileInput();}
+    }
+    if (!input) throw Error('JSON file input was not found. No prompt was sent. Open the attachment menu and check the page.');
+    const transfer = new DataTransfer();transfer.items.add(file);input.files = transfer.files;
+    input.dispatchEvent(new Event('change', {bubbles:true}));
+    let stable = 0;
+    for (let i=0;i<240;i++) {
+      await sleep(500);
+      const failure=pageFailure();if(failure)throw failure;
+      const button=findSendButton();
+      if(attachmentPresent(attachment.name) && button && !button.disabled && button.getAttribute('aria-disabled')!=='true') {
+        if(++stable>=10)return;
+      }else stable=0;
+    }
+    throw Error('JSON attachment did not become ready within 120 seconds. No prompt was sent. Check the upload in the worker tab.');
+  }
+
+  async function clickSend(text, attachmentName) {
     // Wait a moment for the send button to become enabled
     for (let i = 0; i < 10; i++) {
       const btn = findSendButton();
       if (btn && !btn.disabled) {
         checkEnteredPrompt(text);
+        if (attachmentName && !attachmentPresent(attachmentName)) throw Error('The JSON attachment is no longer ready. No prompt was sent.');
         btn.click();
         return;
       }
@@ -403,7 +469,7 @@
     throw new Error("Send button not found or disabled");
   }
 
-  async function waitForNewResponse(beforeMessages, timeout = MAX_WAIT) {
+  async function waitForNewResponse(beforeMessages, timeout = MAX_WAIT, srtOutput = false) {
     let lastText = "";
     let stableCount = 0;
     let lastKey = null;
@@ -426,6 +492,16 @@
       } else if (text !== lastText || key !== lastKey) {
         stableCount = 0;
       } else if (++stableCount >= 4) {
+        if(srtOutput) {
+          const blocks=[...latest.querySelectorAll('pre code')].filter(el=>!el.closest('[hidden], [aria-hidden="true"]'));
+          if(blocks.length){
+            // Keep exceptions/statistics outside the SRT, too. The backend saves
+            // the full response before extracting the fenced subtitle content.
+            const notes=latest.cloneNode(true);
+            notes.querySelectorAll('pre').forEach(node=>node.remove());
+            return [blocks.map(block=>'```srt\n'+block.textContent.trim()+'\n```').join('\n\n'),assistantText(notes)].filter(Boolean).join('\n\n');
+          }
+        }
         return text;
       }
       lastText = text;
@@ -450,24 +526,29 @@
       }
 
       const composerMode = msg.composerMode ?? 'chat';
+      // Temporary mode may hide the Chat/Work switch, so exit before choosing Work.
+      if (msg.temporary === false && temporaryEnabled()) {progress('DISABLING_TEMPORARY');await disableTemporaryChat();}
       progress('SELECTING_MODE');
       await selectComposerMode(composerMode);
       if (msg.temporary){progress('ENABLING_TEMPORARY');await enableTemporaryChat();}
       progress('SELECTING_MODEL');
       const selectedModel = await selectModel(msg.model);
       checkComposerStillSelected(composerMode);
+      if (msg.temporary === false && temporaryEnabled()) throw new Error('Temporary Chat is still active for a regular-chat request. No prompt was sent.');
       checkModelSelection(selectedModel);
       const beforeMessages = new Set(assistantMessages().map(messageKey));
       const failure=pageFailure();if(failure)throw failure;
       progress('TYPING');
       await typeMessage(msg.userMessage);
+      if (msg.attachment) {progress('ATTACHING_FILE');await attachJSON(msg.attachment);}
       if (msg.temporary && !temporaryEnabled()) throw new Error("Temporary Chat is no longer confirmed. No prompt was sent.");
+      if (msg.temporary === false && temporaryEnabled()) throw new Error('Temporary Chat became active during setup. No prompt was sent.');
       checkComposerStillSelected(composerMode);
       checkModelSelection(selectedModel);
       progress('SENDING');
-      await clickSend(msg.userMessage);
+      await clickSend(msg.userMessage, msg.attachment?.name);
 
-      const response = await waitForNewResponse(beforeMessages, msg.timeout);
+      const response = await waitForNewResponse(beforeMessages, msg.timeout, !!msg.attachment);
 
       return { ok: true, content: response, conversation_url: window.location.href };
     } catch (err) {

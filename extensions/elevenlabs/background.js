@@ -2,7 +2,7 @@ const BRIDGE_URL = 'ws://127.0.0.1:8100/api/elevenlabs/ws';
 const PAGE_URL = 'https://elevenlabs.io/app/speech-synthesis/text-to-speech';
 let socket, initialized = false, enabled = true, tabId = null, state = 'IDLE', requestId = null;
 let page = {}, pageConnected = false, phase = 'IDLE', progressMessage = '', lastError = '', executing = false, inspecting = false;
-let generationDispatched = false;
+let generationDispatched = false, ownedTabId = null;
 const closingTabs = new Set();
 const events = [];
 const isPage = url => { try { const u = new URL(url); return u.origin === 'https://elevenlabs.io' && u.pathname.replace(/\/$/,'') === '/app/speech-synthesis/text-to-speech'; } catch { return false; } };
@@ -86,11 +86,12 @@ async function openFreshPage(message, peer) {
       }
     } finally { for (const tab of existing) closingTabs.delete(tab.id); }
     assertCurrentRun(peer,null);
-    reportPreparation('OPENING_TAB','Opening a new ElevenLabs Text to Speech tab',peer);
-    created = await chrome.tabs.create({url:PAGE_URL,active:true});
+    reportPreparation('OPENING_TAB','Opening Text to Speech in a separate Chrome window',peer);
+    const workerWindow = await chrome.windows.create({url:PAGE_URL,type:'normal',focused:true});
+    created = workerWindow.tabs?.[0];
     assertCurrentRun(peer,null);
     if (!Number.isInteger(created?.id)) throw new Error('Chrome did not create a Text to Speech tab. No speech was generated.');
-    tabId = created.id;
+    tabId = created.id; ownedTabId = created.id;
     reportPreparation('BINDING_TAB','Binding the new Text to Speech tab automatically',peer);
     record(`Opened and bound new Text to Speech tab ${tabId}.`); await persist();
   } finally {
@@ -181,13 +182,42 @@ async function clearAndReload(message, peer) {
   }
   throw new Error(`The refreshed Text to Speech page was not ready within 60 seconds. ${waiting}. No new speech was generated.`);
 }
+// A saved final chunk can close only the page created by this worker.
+async function closeCompletedPage() {
+  const target = ownedTabId;
+  if (!Number.isInteger(target) || target !== tabId) return;
+  let tab;
+  try { tab = await chrome.tabs.get(target); } catch { return; }
+  if (!isPage(tab.url) || (tab.pendingUrl && !isPage(tab.pendingUrl))) {
+    record('Kept the worker tab because it was navigated away from Text to Speech.'); return;
+  }
+  const tabs = await chrome.tabs.query({});
+  if (tabs.length === 1 && tabs[0].id === target) {
+    await chrome.tabs.create({url:'about:blank',active:false});
+  }
+  closingTabs.add(target);
+  try {
+    await chrome.tabs.remove(target);
+    tabId = null; ownedTabId = null; pageConnected = false; page = {};
+    record('All chunks saved. Closed the Text to Speech worker tab.');
+  } finally { closingTabs.delete(target); }
+}
 async function control(message, peer) {
   if (message.type === 'commit') {
     if (message.requestId !== requestId || executing || !['AWAITING_SAVE','NEEDS_REVIEW'].includes(state)) {
       send({type:'commitAck',requestId:message.requestId,ok:false,error:'No matching saved chunk is awaiting acknowledgement.'},peer); return;
     }
     if (message.ok && state !== 'AWAITING_SAVE') { send({type:'commitAck',requestId:message.requestId,ok:false,error:'The worker requires review and cannot be released by a save acknowledgement.'},peer); return; }
-    if (message.ok && state === 'AWAITING_SAVE') { state = 'IDLE'; phase = 'SAVED'; progressMessage = ''; requestId = null; lastError = ''; record('Audio saved by Studio. Ready for the next chunk.'); }
+    if (message.ok && state === 'AWAITING_SAVE') {
+      // Keep AWAITING_SAVE until cleanup finishes so another job cannot race it.
+      lastError = '';
+      if (message.jobComplete === true) {
+        try { await closeCompletedPage(); }
+        catch (error) { lastError = `Audio saved, but the worker tab could not close: ${error.message}`; record(lastError); }
+      }
+      state = 'IDLE'; phase = 'SAVED'; progressMessage = ''; requestId = null;
+      record(message.jobComplete === true ? 'Narration audio saved by Studio.' : 'Audio saved by Studio. Ready for the next chunk.');
+    }
     else { state = 'NEEDS_REVIEW'; phase = 'NEEDS_REVIEW'; record('Chunk requires review before the queue can continue.'); }
     await persist(); send({type:'commitAck',requestId:message.requestId,ok:true},peer); return;
   }
@@ -209,8 +239,8 @@ async function control(message, peer) {
 }
 async function generate(message, peer) {
   if (!ready()) { send({type:'result',requestId:message.requestId,ok:false,error:'The ElevenLabs worker is disabled or unavailable. Finish saving or review the current chunk before starting another.',code:'BUSY',notSubmitted:true,state,needsReview:state === 'NEEDS_REVIEW'},peer); return; }
-  if (typeof message.requestId !== 'string' || !message.requestId || typeof message.text !== 'string' || !message.text.trim() || message.text.length > 4000) {
-    send({type:'result',requestId:message.requestId,ok:false,error:'Invalid chunk. Send 1–4,000 characters with a request ID.',code:'INVALID_REQUEST',notSubmitted:true,state,needsReview:state === 'NEEDS_REVIEW'},peer); return;
+  if (typeof message.requestId !== 'string' || !message.requestId || typeof message.text !== 'string' || !message.text.trim() || message.text.length > 3000) {
+    send({type:'result',requestId:message.requestId,ok:false,error:'Invalid chunk. Send 1–3,000 characters with a request ID.',code:'INVALID_REQUEST',notSubmitted:true,state,needsReview:state === 'NEEDS_REVIEW'},peer); return;
   }
   executing = true; generationDispatched = false; state = 'RUNNING'; phase = 'PREPARING'; progressMessage = ''; requestId = message.requestId; lastError = ''; record(`Starting chunk ${requestId}.`); await persist();
   let dispatched = false;
@@ -321,7 +351,7 @@ chrome.runtime.onMessage.addListener((message,sender,reply) => {
       try {
         const selected = await chrome.tabs.get(message.tabId);
         if (!isPage(selected.url)) throw new Error('Choose an ElevenLabs Text to Speech tab.');
-        tabId = selected.id; page = {}; pageConnected = false; if (state === 'IDLE') lastError = '';
+        ownedTabId = null; tabId = selected.id; page = {}; pageConnected = false; if (state === 'IDLE') lastError = '';
         await persist(); await inspectPage(); record(`Bound tab ${tabId}${state === 'NEEDS_REVIEW' ? '; review is still required in Studio' : ''}.`);
       } finally { inspecting = false; announce(); }
       return status();

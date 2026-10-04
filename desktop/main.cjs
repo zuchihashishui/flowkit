@@ -9,14 +9,44 @@ const gateway = require(path.join(__dirname,'chatgpt-process.cjs'))(app, ROOT);
 let win, settings = {};
 let runtime;
 const entry = pathToFileURL(path.join(__dirname, 'ui/index.html')).href;
+function workflowAllowed(method,route){
+  return method==='GET'&&/^\/api\/(elevenlabs\/jobs|whisperx\/status|srt\/status|assembly\/status|workflow\/resources)(\?(project_id|video_id|unassigned)=[a-zA-Z0-9_-]+(&(project_id|video_id|unassigned)=[a-zA-Z0-9_-]+){0,2})?$/.test(route)
+    ||method==='POST'&&/^\/api\/workflow\/(project|assignment-preview|assign|import-scenes)$/.test(route);
+}
+function importContext(value){
+  if(value===undefined)return {};
+  if(!value||typeof value!=='object'||Object.keys(value).some(k=>!['project_id','video_id'].includes(k))||!['project_id','video_id'].every(k=>typeof value[k]==='string'&&/^[a-zA-Z0-9_-]{1,100}$/.test(value[k])))throw Error('Select a project and video before importing files.');
+  return {project_id:value.project_id,video_id:value.video_id};
+}
+function contextForm(form,ctx){for(const [key,value] of Object.entries(ctx))form.append(key,value);}
+let workflowCheck;
+async function requireWorkflow(){
+  if(!workflowCheck)workflowCheck=request('GET','/health',undefined,5000).then(health=>{
+    if(health?.studio_features?.project_video_sources!==true||health?.studio_features?.project_single_video!==true)throw Error('Project sources require the updated backend for one-project/one-video mode. Restart Studio from this complete release. Existing files and jobs are retained.');
+  }).finally(()=>{workflowCheck=null;});
+  await workflowCheck;
+}
 const storyboardAllowed = /^\/api\/storyboard\/(providers|videos\/[a-zA-Z0-9_-]+(?:\/(segments|generate-concepts|cancel-concepts|generate-media))?|segments\/[a-zA-Z0-9_-]+(?:\/concepts)?|concepts\/[a-zA-Z0-9_-]+\/select)$/;
 const allowed = /^\/(health|api\/(projects(?:\/[a-zA-Z0-9_-]+)?|videos|scenes(?:\/[a-zA-Z0-9_-]+)?|models|materials|flow\/status|tts\/templates(?:\/[a-zA-Z0-9_-]+)?|desktop\/(jobs(?:\/cancel|\/[a-f0-9-]+\/resume)?|pause|diagnostics|flow-progress)))(\?[^#]*)?$/;
+function whisperxAllowed(method, route) {
+  return method === 'GET' && /^\/api\/whisperx\/(status|jobs\/[a-f0-9-]{36}\/preview(?:\/(full|video|image))?)$/.test(route)
+    || method === 'POST' && /^\/api\/whisperx\/(check|settings|jobs|jobs\/[a-f0-9-]{36}\/(cancel|split))$/.test(route);
+}
+function srtAllowed(method, route) {
+  return method === 'GET' && /^\/api\/srt\/(status|jobs\/[a-f0-9-]{36}\/(preview|quality))$/.test(route)
+    || method === 'POST' && /^\/api\/srt\/(jobs|analyze|jobs\/[a-f0-9-]{36}\/(cancel|approve))$/.test(route);
+}
+function assemblyAllowed(method, route) {
+  return method === 'GET' && route === '/api/assembly/status'
+    || method === 'POST' && /^\/api\/assembly\/(source|preview|jobs|jobs\/[a-f0-9-]{36}\/cancel)$/.test(route);
+}
 function elevenlabsAllowed(method, route) {
   return method === 'GET' && /^\/api\/elevenlabs\/(status|jobs(?:\/[a-f0-9-]{36})?)$/.test(route)
     || method === 'POST' && /^\/api\/elevenlabs\/(preview|jobs|probe|control|jobs\/[a-f0-9-]{36}\/(cancel|retry|recover))$/.test(route);
 }
 async function readBackendResponse(response, route) {
   const text = await response.text();
+  if(response.status===404 && ['/api/srt/status','/api/srt/import'].includes(route))throw Error('JSON → SRT is missing from the running backend. Update the complete source, then restart Studio and its backend.');
   let data;
   try { data = JSON.parse(text); } catch {
     const summary = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
@@ -31,6 +61,7 @@ async function readBackendResponse(response, route) {
   return data;
 }
 async function request(method, route, body, timeoutMs) {
+  if(timeoutMs===undefined && method==='GET' && ['/api/srt/status','/api/whisperx/status','/api/chatgpt/status','/api/workflow/resources'].includes(route.split('?')[0]))timeoutMs=10000;
   const response = await fetch(BASE + route, {method, headers:body ? {'Content-Type':'application/json'} : {}, body: body ? JSON.stringify(body) : undefined, signal:AbortSignal.timeout(timeoutMs ?? (route.startsWith('/api/chatgpt/')?720000:120000))});
   return readBackendResponse(response, route);
 }
@@ -98,8 +129,9 @@ app.whenReady().then(async()=>{
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',e=>e.preventDefault());
   handle('api',async(method,route,body)=>{
-    if(!['GET','POST','PATCH','PUT'].includes(method)||typeof route!=='string'||!(elevenlabsAllowed(method,route)||allowed.test(route)||storyboardAllowed.test(route)||/^\/api\/chatgpt\/(status|history|test|resume|message|queue|config|cancel|retry|preflight|models)$/.test(route))||route.includes('..')||route.includes('\\')) throw Error('Unsupported API operation');
+    if(!['GET','POST','PATCH','PUT'].includes(method)||typeof route!=='string'||!(workflowAllowed(method,route)||assemblyAllowed(method,route)||srtAllowed(method,route)||whisperxAllowed(method,route)||elevenlabsAllowed(method,route)||allowed.test(route)||storyboardAllowed.test(route)||/^\/api\/chatgpt\/(status|history|test|resume|message|queue|config|cancel|retry|preflight|models)$/.test(route))||route.includes('..')||route.includes('\\')) throw Error('Unsupported API operation');
     if (method !== 'GET' && runtime.isRestarting()) throw Error('The backend is restarting. Wait for it to become ready.');
+    if(route.startsWith('/api/workflow/')||(workflowAllowed(method,route)&&route.includes('?'))||(method==='POST'&&body?.video_id&&/^\/api\/(elevenlabs|whisperx|srt|assembly)\//.test(route)))await requireWorkflow();
     if(route.startsWith('/api/elevenlabs/')) {
       let issue = '', health;
       try { health = await request('GET','/health',undefined,5000); issue = backendProblem(health); }
@@ -109,6 +141,96 @@ app.whenReady().then(async()=>{
       return route === '/api/elevenlabs/status' ? {...result,compatibilityError:issue,backendDiagnostics:issue ? await runtime.diagnostics(health) : {compatible:true}} : result;
     }
     return request(method,route,body);
+  });
+  handle('assembly-import',async(kind,scope)=>{
+    const ctx=importContext(scope);
+    if(ctx.video_id)await requireWorkflow();
+    if(!['srt','audio','images','images-folder','videos','videos-folder'].includes(kind))throw Error('Unsupported assembly input');
+    const image=kind.startsWith('images'),video=kind.startsWith('videos'),folder=kind.endsWith('-folder');
+    const extensions=image?['png','jpg','jpeg','webp']:video?['mp4','mov','mkv','webm','m4v']:kind==='audio'?['mp3','wav','m4a','aac','flac','ogg','opus']:['srt'];
+    const selected=await dialog.showOpenDialog(win,{title:'Choose '+kind.replace('-',' '),properties:folder?['openDirectory']:(image||video)?['openFile','multiSelections']:['openFile'],...folder?{}:{filters:[{name:kind,extensions}]}});
+    if(selected.canceled||!selected.filePaths?.length)return {canceled:true};
+    const paths=folder?(await fs.readdir(selected.filePaths[0],{withFileTypes:true})).filter(e=>e.isFile()&&extensions.includes(path.extname(e.name).slice(1).toLowerCase())).map(e=>path.join(selected.filePaths[0],e.name)):selected.filePaths;
+    if(!paths.length)throw Error('No supported files found in the selected folder.');
+    if(paths.length>1000)throw Error('Choose up to 1,000 files per import.');
+    const assets=[],errors=[];
+    for(const filename of paths){
+      try{
+        const blob=await require('node:fs').openAsBlob(filename);
+        const form=new FormData();form.append('file',blob,path.basename(filename));contextForm(form,ctx);
+        const route='/api/assembly/import/'+(image?'image':video?'video':kind);
+        const response=await fetch(BASE+route,{method:'POST',body:form,signal:AbortSignal.timeout(600000)});
+        assets.push(await readBackendResponse(response,route));
+      }catch(e){errors.push(path.basename(filename)+': '+e.message);}
+    }
+    return {canceled:false,assets,errors};
+  });
+  handle('assembly-media',async(id,action)=>{
+    if(typeof id!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id))throw Error('Invalid assembly ID');
+    if(!['thumbnail','clip-preview','preview','save'].includes(action))throw Error('Unsupported assembly action');
+    if(action==='thumbnail'){
+      const response=await fetch(`${BASE}/api/assembly/images/${id}/thumbnail`,{signal:AbortSignal.timeout(30000)});
+      if(!response.ok)throw Error('Image thumbnail is not available.');
+      return 'data:image/jpeg;base64,'+Buffer.from(await response.arrayBuffer()).toString('base64');
+    }
+    const status=await request('GET','/api/assembly/status');
+    if(action==='clip-preview'){
+      if(!status.assets?.some(a=>a.id===id&&a.kind==='video'))throw Error('Selected clip is not available.');
+      return {url:`${BASE}/api/assembly/clips/${id}/video`};
+    }
+    if(!status.jobs.some(j=>j.id===id&&j.state==='COMPLETED'))throw Error('Rendered video is not available.');
+    const url=`${BASE}/api/assembly/jobs/${id}/video`;
+    if(action==='preview')return {url};
+    const dest=await dialog.showSaveDialog(win,{title:'Save assembled video',defaultPath:path.join(settings.output,`video-${id}.mp4`),filters:[{name:'MP4 video',extensions:['mp4']}]});
+    if(dest.canceled||!dest.filePath)return {canceled:true};
+    const response=await fetch(url,{signal:AbortSignal.timeout(3600000)});
+    if(!response.ok)throw Error('Rendered video is not available.');
+    await saveAudioResponse(response,dest.filePath);
+    return {canceled:false,path:dest.filePath};
+  });
+  handle('srt-import',async scope=>{
+    const ctx=importContext(scope);
+    if(ctx.video_id)await requireWorkflow();
+    const selected=await dialog.showOpenDialog(win,{title:'Choose transcript JSON',properties:['openFile'],filters:[{name:'JSON',extensions:['json']}]});
+    if(selected.canceled||!selected.filePaths?.length)return {canceled:true};
+    const filename=selected.filePaths[0];
+    if((await fs.stat(filename)).size>16*1024*1024)throw Error('Choose a JSON file up to 16 MiB.');
+    const blob=await require('node:fs').openAsBlob(filename);
+    const form=new FormData();form.append('file',blob,path.basename(filename));contextForm(form,ctx);
+    const response=await fetch(BASE+'/api/srt/import',{method:'POST',body:form,signal:AbortSignal.timeout(120000)});
+    return {canceled:false,...await readBackendResponse(response,'/api/srt/import')};
+  });
+  handle('srt-save',async id=>{
+    if(typeof id!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id))throw Error('Invalid SRT job ID');
+    const dest=await dialog.showSaveDialog(win,{title:'Save subtitles',defaultPath:`subtitles-${id}.srt`,filters:[{name:'SubRip subtitles',extensions:['srt']}]});
+    if(dest.canceled||!dest.filePath)return {canceled:true};
+    const response=await fetch(`${BASE}/api/srt/jobs/${id}/result`,{signal:AbortSignal.timeout(120000)});
+    if(!response.ok)throw Error('Completed SRT is not available.');
+    await saveAudioResponse(response,dest.filePath);
+    return {canceled:false,path:dest.filePath};
+  });
+  handle('whisperx-import',async scope=>{
+    const ctx=importContext(scope);
+    if(ctx.video_id)await requireWorkflow();
+    const selected=await dialog.showOpenDialog(win,{title:'Choose audio for WhisperX',properties:['openFile'],filters:[{name:'Audio',extensions:['mp3','wav','m4a','flac','ogg','opus','aac']}]});
+    if(selected.canceled||!selected.filePaths?.length)return {canceled:true};
+    const filename=selected.filePaths[0];
+    const {openAsBlob}=require('node:fs');
+    const audio=await openAsBlob(filename);
+    const form=new FormData();form.append('file',audio,path.basename(filename));contextForm(form,ctx);
+    const response=await fetch(BASE+'/api/whisperx/import',{method:'POST',body:form,signal:AbortSignal.timeout(600000)});
+    return {canceled:false,...await readBackendResponse(response,'/api/whisperx/import')};
+  });
+  handle('whisperx-save',async (id,variant='full')=>{
+    if(typeof id!=='string'||! /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id)) throw Error('Invalid transcription ID');
+    const files={full:'transcript.json',video:'transcript_video.json',image:'transcript_image.json'};
+    if(!Object.hasOwn(files,variant))throw Error('Invalid transcript variant');
+    const dest=await dialog.showSaveDialog(win,{title:'Save WhisperX JSON',defaultPath:files[variant],filters:[{name:'JSON',extensions:['json']}]});
+    if(dest.canceled||!dest.filePath)return {canceled:true};
+    const response=await fetch(`${BASE}/api/whisperx/jobs/${id}/result${variant==='full'?'':'/'+variant}`,{signal:AbortSignal.timeout(120000)});
+    if(!response.ok)throw Error('Aligned JSON is not available yet.');
+    await saveAudioResponse(response,dest.filePath);
+    return {path:dest.filePath,canceled:false};
   });
   handle('backend-action',async action=>{
     if(action==='status')return {backendDiagnostics:await runtime.diagnostics(undefined,true)};

@@ -1,0 +1,2 @@
+# Isolated environment only. Resolve the current stable WhisperX 3.x release.
+whisperx>=3.7,<4

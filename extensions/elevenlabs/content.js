@@ -1,6 +1,6 @@
 // The bridge operates only the visible TTS UI; it never reads session tokens or calls private APIs.
 (() => {
-  const bridgeVersion = '1.0.17', previous = window.__flowkitElevenLabsBridge;
+  const bridgeVersion = '1.0.22', previous = window.__flowkitElevenLabsBridge;
   const documentToken = window.__flowkitElevenLabsDocumentToken ||= crypto.randomUUID();
   // A boolean left by 1.0.0 or an invalidated extension context must not block repair.
   try {
@@ -395,7 +395,7 @@
     let submitted = false;
     if (message.expectedDocumentToken && message.expectedDocumentToken !== documentToken) return {ok:false,error:'The page changed after refresh. Review the tab before retrying.',code:'PAGE_CHANGED',notSubmitted:true};
     if (active || generating()) return {ok:false,error:'The ElevenLabs page is already generating speech.',code:'BUSY',notSubmitted:true};
-    if (typeof message.text !== 'string' || !message.text.trim() || message.text.length > 4000) return {ok:false,error:'Each text chunk must contain 1–4,000 characters.',code:'INVALID_TEXT',notSubmitted:true};
+    if (typeof message.text !== 'string' || !message.text.trim() || message.text.length > 3000) return {ok:false,error:'Each text chunk must contain 1–3,000 characters.',code:'INVALID_TEXT',notSubmitted:true};
     active = true;
     try {
       progress(message.requestId,'SELECTING_MODEL');

@@ -32,7 +32,7 @@ from agent.worker.processor import get_worker_controller
 from agent.services.flow_client import get_flow_client
 from agent.services.event_bus import event_bus
 from agent.sdk import init_sdk
-from agent.api import desktop, storyboard, chatgpt, elevenlabs
+from agent.api import desktop, storyboard, chatgpt, elevenlabs, whisperx, srt, assembly, workflow
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -127,6 +127,12 @@ async def lifespan(app: FastAPI):
     chatgpt_task = asyncio.create_task(chatgpt_gateway.run())
     from agent.services import elevenlabs_bridge
     elevenlabs_task = asyncio.create_task(elevenlabs_bridge.run())
+    from agent.services.whisperx_service import service as whisperx_service
+    whisperx_task = asyncio.create_task(whisperx_service.run())
+    from agent.services.srt_service import service as srt_service
+    srt_task = asyncio.create_task(srt_service.run())
+    from agent.services.assembly_service import service as assembly_service
+    assembly_task = asyncio.create_task(assembly_service.run())
     logger.info("WS server + worker started")
 
     yield
@@ -139,7 +145,10 @@ async def lifespan(app: FastAPI):
     storyboard_task.cancel()
     chatgpt_task.cancel()
     elevenlabs_task.cancel()
-    await asyncio.gather(ws_task, worker_task, desktop_task, storyboard_task, chatgpt_task, elevenlabs_task, return_exceptions=True)
+    whisperx_task.cancel()
+    srt_task.cancel()
+    assembly_task.cancel()
+    await asyncio.gather(ws_task, worker_task, desktop_task, storyboard_task, chatgpt_task, elevenlabs_task, whisperx_task, srt_task, assembly_task, return_exceptions=True)
     await close_db()
     logger.info("Flow Kit stopped")
 
@@ -166,7 +175,7 @@ _GENERATION_PATHS = {
 @app.middleware("http")
 async def elevenlabs_local_mutations(request: Request, call_next):
     # Paid jobs are issued by the local Electron process/CLI, never a web origin.
-    if request.url.path.startswith('/api/elevenlabs/') and request.method not in ('GET', 'HEAD', 'OPTIONS') and request.headers.get('origin'):
+    if request.url.path.startswith(('/api/elevenlabs/', '/api/whisperx/', '/api/srt/', '/api/assembly/')) and request.method not in ('GET', 'HEAD', 'OPTIONS') and request.headers.get('origin'):
         return JSONResponse({'detail': 'Browser HTTP origins cannot submit ElevenLabs jobs. Use the local Desktop bridge.'}, status_code=403)
     return await call_next(request)
 
@@ -203,6 +212,10 @@ app.include_router(desktop.router, prefix="/api")
 app.include_router(storyboard.router, prefix="/api")
 app.include_router(chatgpt.router, prefix="/api")
 app.include_router(elevenlabs.router, prefix="/api")
+app.include_router(whisperx.router, prefix="/api")
+app.include_router(srt.router, prefix="/api")
+app.include_router(assembly.router, prefix="/api")
+app.include_router(workflow.router, prefix="/api")
 
 
 import secrets as _secrets
@@ -245,6 +258,8 @@ async def health():
         "runtime": dict(_RUNTIME_IDENTITY),
         "studio_api": 3,
         "studio_features": {
+            "project_video_sources": True,
+            "project_single_video": True,
             "elevenlabs_native_download_files": True,
             "elevenlabs_unlimited_native_audio": True,
             "elevenlabs_recover_downloads": True,

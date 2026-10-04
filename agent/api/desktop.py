@@ -262,6 +262,9 @@ async def process(job):
             return
     body = Job.model_validate_json(job["payload"])
     remote = json.loads(job["remote"]) if job["remote"] else None
+    from agent.services.browser_lifecycle import flow_started, flow_saved
+    if body.kind != "voice":
+        flow_started("desktop", jid)
     try:
         if not remote:
             # A crash after this state is persisted is not auto-resubmitted.
@@ -313,6 +316,8 @@ async def process(job):
                 target = await download(url, target)
                 files.append(str(target))
         update(jid, state="COMPLETED", files=json.dumps(files))
+        if body.kind != "voice":
+            flow_saved("desktop", jid)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -357,6 +362,11 @@ async def run():
                         if not r["remote"] and getattr(client, "generation_guard_status", {}).get("cooldown_active"):
                             continue
                     tasks[r["id"]] = (asyncio.create_task(process(r)), lane)
+            try:
+                from agent.services.browser_lifecycle import close_idle_flow_tabs
+                await close_idle_flow_tabs()
+            except Exception:
+                logger.debug("Flow worker cleanup deferred", exc_info=True)
             await asyncio.sleep(2)
     finally:
         # Leave interrupted state durable. Startup only resumes known remote

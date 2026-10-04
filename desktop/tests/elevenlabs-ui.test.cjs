@@ -30,7 +30,7 @@ test('ElevenLabs UI preserves Japanese script, previews backend chunks and submi
  assert.match($('el-character-count').textContent,new RegExp(String(Array.from(text).length)));
  await $('el-preview').onclick();assert.equal($('el-chunk-preview').querySelector('pre').textContent,text);
  $('el-title').value=' Narration ';await $('el-form').onsubmit({preventDefault(){}});
- const submit=calls.find(c=>c[0]==='POST'&&c[1]==='/api/elevenlabs/jobs');assert.deepEqual(JSON.parse(JSON.stringify(submit[2])),{text,title:'Narration',model:'Eleven v4'});
+ const submit=calls.find(c=>c[0]==='POST'&&c[1]==='/api/elevenlabs/jobs');assert.deepEqual(JSON.parse(JSON.stringify(submit[2])),{text,title:'Narration',model:'Eleven v4',max_chunk_characters:3000});
  assert.equal($('el-voice').value,'Japanese narrator');assert.match($('el-credits').textContent,/241.9K credits free/);assert.match($('el-credits').textContent,/Cost not shown by page/);
  assert.equal($('el-job-rows').querySelector('script'),null);assert.equal($('el-stage-title').textContent,'Review required');assert.match($('el-technical').textContent,/AWAITING_SAVE/);assert.equal($('el-job-detail').hidden,false);
  dom.window.close();
@@ -130,11 +130,11 @@ test('enqueue uses the exact draft snapshot that was previewed even if the user 
   if(route.endsWith('/jobs'))return method==='GET'?{jobs:[]}:job;
   return job;
  });
- $('el-text').value='First script';$('el-title').value='First title';
+ $('el-text').value='First script';$('el-title').value='First title';$('el-chunk-size').value='1200';
  const pending=$('el-form').onsubmit({preventDefault(){}});
- $('el-text').value='Second draft';$('el-title').value='Second title';release();await pending;
+ $('el-text').value='Second draft';$('el-title').value='Second title';$('el-chunk-size').value='2000';release();await pending;
  const submitted=calls.find(c=>c[0]==='POST'&&c[1].endsWith('/jobs'));
- assert.equal(submitted[2].text,'First script');assert.equal(submitted[2].title,'First title');
+ assert.equal(submitted[2].max_chunk_characters,1200);assert.equal(submitted[2].text,'First script');assert.equal(submitted[2].title,'First title');
  assert.equal($('el-text').value,'Second draft');assert.equal($('el-chunk-preview').children.length,0);
  dom.window.close();
 });
@@ -274,7 +274,7 @@ test('automatic tab preparation is ready without a bound page and describes the 
 test('fresh-tab preparation phases remain in Prepare page and disable inspection until finished',async()=>{
  let status={connected:true,enabled:true,autoPrepareTab:true,ready:false,busy:true,processing:true,state:'RUNNING',active:{chunk_index:1},settings:{paused:false},progress:{}};
  const {dom,$}=setup(async(_method,route)=>route.endsWith('/status')?status:{jobs:[]});
- for(const [phase,title] of [['CLOSING_TABS','Closing previous Text to Speech tabs'],['OPENING_TAB','Opening a new Text to Speech tab'],['BINDING_TAB','Binding the new tab'],['WAITING_NEW_PAGE','Waiting for the new page']]){
+ for(const [phase,title] of [['CLOSING_TABS','Closing previous Text to Speech tabs'],['OPENING_TAB','Opening a separate Text to Speech window'],['BINDING_TAB','Binding the new tab'],['WAITING_NEW_PAGE','Waiting for the new page']]){
   status.progress={phase};await $('el-refresh').onclick();assert.equal($('el-stage-title').textContent,title);
   assert.equal($('el-steps').querySelector('[aria-current]').textContent,'Prepare page');assert.equal($('el-probe').disabled,true);
  }

@@ -34,6 +34,8 @@ let callbackSecret = null;  // Auth secret for HTTP callback, received from serv
 let state = 'off'; // off | idle | running
 let manualDisconnect = false;
 const activeBatchRpcs = new Set();
+const ownedFlowTabs = new Set();
+let flowWindowPromise = null, closingFlowTabs = null;
 let metrics = {
   tokenCapturedAt: null,
   requestCount: 0,   // captcha-consuming requests only (gen image/video/upscale)
@@ -41,6 +43,48 @@ let metrics = {
   failedCount: 0,
   lastError: null,
 };
+
+function isFlowPage(url) {
+  try {const u=new URL(url);return u.origin==='https://flow.google.com'||(u.origin==='https://labs.google'&&/^\/fx\/(?:[^/]+\/)?tools\/flow(?:\/|$)/.test(u.pathname));} catch{return false;}
+}
+async function openFlowWindow({temporary=false}={}) {
+  if(closingFlowTabs)await closingFlowTabs;
+  if(!temporary&&flowWindowPromise)return flowWindowPromise;
+  const create=async()=>{
+    if(!temporary)for(const id of ownedFlowTabs){
+      const tab=await chrome.tabs.get(id).catch(()=>null);
+      if(tab&&isFlowPage(tab.url||tab.pendingUrl))return tab;
+    }
+    const win=await chrome.windows.create({url:FLOW_TAB_URL,type:'normal',focused:false});
+    const tab=win.tabs?.[0]||(await chrome.tabs.query({windowId:win.id}))[0];
+    if(!Number.isInteger(tab?.id))throw Error('Chrome did not return the Flow worker tab');
+    ownedFlowTabs.add(tab.id);
+    await chrome.storage.local.set({ownedFlowTabs:[...ownedFlowTabs]});
+    // Every concurrent caller waits for the same fresh page to boot.
+    await sleep(5000);
+    return tab;
+  };
+  if(temporary)return create();
+  flowWindowPromise=create();
+  try{return await flowWindowPromise;}finally{flowWindowPromise=null;}
+}
+async function closeSavedFlowTabs() {
+  if(activeBatchRpcs.size||flowWindowPromise||closingFlowTabs)return {closed:false};
+  closingFlowTabs=(async()=>{
+    for(const id of [...ownedFlowTabs]){
+      const tab=await chrome.tabs.get(id).catch(()=>null);
+      if(!tab){ownedFlowTabs.delete(id);continue;}
+      if(!isFlowPage(tab.url)||(tab.pendingUrl&&!isFlowPage(tab.pendingUrl)))continue;
+      const all=await chrome.tabs.query({});
+      if(all.length===1&&all[0].id===id)await chrome.tabs.create({url:'about:blank',active:false});
+      await chrome.tabs.remove(id);ownedFlowTabs.delete(id);
+    }
+    await chrome.storage.local.set({ownedFlowTabs:[...ownedFlowTabs]});
+  })();
+  try{await closingFlowTabs;return {closed:true};}
+  catch(e){metrics.lastError='Results saved; worker cleanup failed: '+e.message;await chrome.storage.local.set({metrics});return {closed:false};}
+  finally{closingFlowTabs=null;}
+}
 
 // ─── URL → Log Type Classifier ─────────────────────────────
 
@@ -113,7 +157,8 @@ function ensureInitialized() {
 }
 
 async function initialize() {
-  const data = await chrome.storage.local.get(['flowKey', 'metrics', 'callbackSecret']);
+  const data = await chrome.storage.local.get(['flowKey', 'metrics', 'callbackSecret', 'ownedFlowTabs']);
+  for(const id of data.ownedFlowTabs||[])if(Number.isInteger(id))ownedFlowTabs.add(id);
   if (data.flowKey) flowKey = data.flowKey;
   if (data.metrics) Object.assign(metrics, data.metrics);
   if (data.callbackSecret) callbackSecret = data.callbackSecret;
@@ -170,8 +215,7 @@ async function captureTokenFromFlowTab({ createIfMissing = false } = {}) {
     _openingFlowTab = true;
     try {
       console.log('[FlowAgent] No Flow tab found — opening one for explicit refresh');
-      const opened = await chrome.tabs.create({ url: FLOW_TAB_URL, active: false });
-      await sleep(3000);
+      const opened = await openFlowWindow();
       const target = opened?.id ? await chrome.tabs.get(opened.id).catch(() => null) : null;
       if (!target) {
         console.log('[FlowAgent] Flow tab not ready yet after open');
@@ -240,7 +284,9 @@ function connectToAgent() {
     try {
       const msg = JSON.parse(data);
 
-      if (msg.method === 'batch_rpc') {
+      if (msg.method === 'close_idle_tabs') {
+        sendToAgent({id:msg.id,result:await closeSavedFlowTabs()});
+      } else if (msg.method === 'batch_rpc') {
         await handleBatchRpc(msg);
       } else if (msg.method === 'api_request') {
         await handleApiRequest(msg);
@@ -368,15 +414,16 @@ function captchaFromTab(tabId, requestId, captchaAction) {
 }
 
 async function solveCaptcha(requestId, captchaAction) {
-  let tabs = await chrome.tabs.query({ url: flowUrls });
+  if(closingFlowTabs)await closingFlowTabs;
+  if(flowWindowPromise)await flowWindowPromise;
+  let tabs = (await chrome.tabs.query({ url: flowUrls })).filter(tab=>ownedFlowTabs.has(tab.id));
 
   // No Flow tab at all — spawn one and let it settle. Keep the exact tab id:
   // a redirected or stale tab must not make us select some older candidate.
   if (!tabs.length) {
     let opened;
     try {
-      opened = await chrome.tabs.create({ url: FLOW_TAB_URL, active: false });
-      await sleep(3000);
+      opened = await openFlowWindow();
     } catch (e) {
       return { error: e.message || 'NO_FLOW_TAB' };
     }
@@ -421,8 +468,7 @@ async function solveCaptcha(requestId, captchaAction) {
   // newly-created one on every retry.
   let recoveryTab = null;
   try {
-    recoveryTab = await chrome.tabs.create({ url: FLOW_TAB_URL, active: false });
-    await sleep(3000);
+    recoveryTab = await openFlowWindow({temporary:true});
     const target = await chrome.tabs.get(recoveryTab.id);
     if (!target || target.discarded) return { error: 'NO_FLOW_TAB' };
     return await captchaFromTab(target.id, requestId, captchaAction);
@@ -432,7 +478,7 @@ async function solveCaptcha(requestId, captchaAction) {
     // A recovery tab is disposable: there were already Flow tabs available
     // for the signed RPC. Do not let CAPTCHA retries accumulate root tabs.
     if (recoveryTab?.id) {
-      try { await chrome.tabs.remove(recoveryTab.id); } catch { /* already gone */ }
+      try { await chrome.tabs.remove(recoveryTab.id); ownedFlowTabs.delete(recoveryTab.id); await chrome.storage.local.set({ownedFlowTabs:[...ownedFlowTabs]}); } catch { /* already gone */ }
     }
   }
 }
@@ -466,16 +512,18 @@ const CAPTCHA_SLOT = '__CAPTCHA__';
 const MAX_RPC_TEXT = 32000000; // the project listing alone is past 17 MB
 
 async function runBatchRpc(cmd) {
+  if(closingFlowTabs)await closingFlowTabs;
+  if(flowWindowPromise)await flowWindowPromise;
   const tabs = await chrome.tabs.query({ url: flowUrls });
-  let candidate = tabs.find((t) => !t.discarded) || tabs[0];
+  const managed = tabs.filter(t=>ownedFlowTabs.has(t.id));
+  let candidate = managed.find((t) => !t.discarded) || managed[0];
   if (!candidate) {
     // No Flow tab — open one and give the app a moment to boot, otherwise
     // WIZ_global_data is not on the page yet and `at` comes back empty. Keep
     // the exact created tab id so redirects/stale tabs cannot hijack recovery.
     let opened;
     try {
-      opened = await chrome.tabs.create({ url: FLOW_TAB_URL, active: false });
-      await sleep(5000);
+      opened = await openFlowWindow();
       candidate = opened?.id ? await chrome.tabs.get(opened.id).catch(() => null) : null;
     } catch (e) {
       return { error: e?.message || 'NO_FLOW_TAB' };
@@ -851,7 +899,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         chrome.tabs.update(tabs[0].id, { active: true });
         reply({ ok: true, tabId: tabs[0].id });
       } else {
-        chrome.tabs.create({ url: FLOW_TAB_URL })
+        openFlowWindow()
           .then((tab) => reply({ ok: true, tabId: tab.id }))
           .catch((e) => reply({ error: e.message }));
       }

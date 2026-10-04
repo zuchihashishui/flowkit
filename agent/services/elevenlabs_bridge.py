@@ -2,6 +2,8 @@
 
 No cookies, provider API keys or remote audio URLs pass through this service.
 """
+from agent.services import workflow_scope as scope
+
 import asyncio
 import base64
 import binascii
@@ -31,7 +33,7 @@ def utf16_length(text):
     return sum(2 if ord(char) > 0xFFFF else 1 for char in text)
 
 
-def split_text(text, minimum=900, maximum=1199):
+def split_text(text, minimum=None, maximum=3000):
     """Lossless Python/code-point offsets, capped by browser UTF-16 character count.
 
 Prefer paragraph/sentence ends within the target window, then whitespace. A
@@ -41,8 +43,10 @@ Prefer paragraph/sentence ends within the target window, then whitespace. A
         raise ValueError('Enter text to generate speech.')
     if len(text) > MAX_TEXT_CHARACTERS:
         raise ValueError(f'Text exceeds {MAX_TEXT_CHARACTERS:,} characters.')
-    if not 1 <= minimum <= maximum <= 4000:
-        raise ValueError('Chunk limits must satisfy 1 <= minimum <= maximum <= 4000.')
+    if minimum is None:
+        minimum = max(1, int(maximum * 0.75))
+    if not 1 <= minimum <= maximum <= 3000:
+        raise ValueError('Chunk limits must satisfy 1 <= minimum <= maximum <= 3000.')
     if any(0xD800 <= ord(char) <= 0xDFFF for char in text):
         raise ValueError('Text contains an invalid Unicode surrogate.')
     chunks, start = [], 0
@@ -72,7 +76,7 @@ Prefer paragraph/sentence ends within the target window, then whitespace. A
                 if candidates[kind]:
                     end = candidates[kind][-1]
                     break
-        # maximum >= 1 may not fit an astral codepoint; production maximum is 1199.
+        # maximum >= 1 may not fit an astral codepoint; default maximum is 3000.
         if end == start:
             raise ValueError('Chunk limit is too small for a Unicode character.')
         part = text[start:end]
@@ -116,6 +120,7 @@ class ElevenLabsBridge:
               state TEXT NOT NULL, request_id TEXT, audio_file TEXT, metadata TEXT, error TEXT,
               updated REAL NOT NULL, PRIMARY KEY(job_id,chunk_index));
         ''')
+        scope.initialize(connection)
         try:
             with connection:
                 yield connection
@@ -150,14 +155,14 @@ class ElevenLabsBridge:
             self.configure(paused=True, needs_review=True)
         return max(count, len(running_jobs))
 
-    def preview(self, text):
-        chunks = split_text(text)
+    def preview(self, text, max_chunk_characters=3000):
+        chunks = split_text(text, maximum=max_chunk_characters)
         return {'chunks': chunks, 'total_chunks': len(chunks), 'characters': len(text),
                 'utf16_length': utf16_length(text), 'credit_estimate': None,
                 'note': 'Credits are optional page information. Missing values do not block generation.'}
 
-    def enqueue(self, text, title='', model=DEFAULT_MODEL):
-        chunks = split_text(text)
+    def enqueue(self, text, title='', model=DEFAULT_MODEL, max_chunk_characters=3000, context=None):
+        chunks = split_text(text, maximum=max_chunk_characters)
         model = model.strip() or DEFAULT_MODEL
         if len(model) > 100:
             raise ValueError('Model name is too long.')
@@ -167,6 +172,7 @@ class ElevenLabsBridge:
               (jid, title.strip()[:200] or 'Untitled speech', text, model, 'QUEUED', now, now))
             connection.executemany('''INSERT INTO eleven_chunks(job_id,chunk_index,start_offset,end_offset,text,utf16_length,state,updated)
               VALUES(?,?,?,?,?,?,?,?)''', [(jid, p['index'], p['start'], p['end'], p['text'], p['utf16_length'], 'QUEUED', now) for p in chunks])
+            scope.record(connection, 'elevenlabs', jid, context)
         return self.job(jid)
 
     def _public_job(self, row, chunks):
@@ -179,11 +185,12 @@ class ElevenLabsBridge:
             isinstance(json.loads(chunk['metadata'] or '{}').get('nativeDownload'), dict) for chunk in chunks)
         return data
 
-    def jobs(self):
+    def jobs(self, filters=None):
+        where, params = scope.job_filter('elevenlabs', 'j.id', filters)
         with self.db() as connection:
-            rows = connection.execute('''SELECT j.*,length(j.text) characters,
+            rows = connection.execute(f'''SELECT j.*,length(j.text) characters,
               count(c.chunk_index) total_chunks,sum(c.state='COMPLETED') completed_chunks
-              FROM eleven_jobs j LEFT JOIN eleven_chunks c ON j.id=c.job_id GROUP BY j.id ORDER BY j.created DESC LIMIT 500''').fetchall()
+              FROM eleven_jobs j LEFT JOIN eleven_chunks c ON j.id=c.job_id {where} GROUP BY j.id ORDER BY j.created DESC LIMIT 500''', params).fetchall()
             parts = {row['id']: [] for row in rows}
             if rows:
                 markers = ','.join('?' for _ in rows)
@@ -591,10 +598,14 @@ class ElevenLabsBridge:
                 interrupted = True
             with self.db() as connection:
                 connection.execute("UPDATE eleven_chunks SET state='COMPLETED',audio_file=?,metadata=?,error=NULL,updated=? WHERE job_id=? AND chunk_index=?", (filename, json.dumps(metadata), time.time(), job['job_id'], job['chunk_index']))
+                job_complete = connection.execute(
+                    "SELECT COUNT(*) FROM eleven_chunks WHERE job_id=? AND state!='COMPLETED'",
+                    (job['job_id'],),
+                ).fetchone()[0] == 0
             saved = True
             if interrupted:
                 raise asyncio.CancelledError()
-            ack = await self.request('commit', {'ok': True}, timeout=10, request_id=rid, expected='commitAck', peer=peer)
+            ack = await self.request('commit', {'ok': True, 'jobComplete': job_complete}, timeout=10, request_id=rid, expected='commitAck', peer=peer)
             if not ack.get('ok'):
                 raise BridgeError('Extension did not confirm the saved audio. Review before continuing.')
             self.remote_busy = False

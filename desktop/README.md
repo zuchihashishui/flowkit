@@ -1,4 +1,4 @@
-# Flowkit Studio 0.7.23
+# Flowkit Studio 0.7.39
 
 An English-language Electron desktop application connected to the Python backend.
 This is a source release, not a prebuilt Windows installer.
@@ -13,7 +13,7 @@ This is a source release, not a prebuilt Windows installer.
 Each ElevenLabs chunk closes existing TTS tabs, opens one fresh TTS tab, binds it
 without manual setup, clears old text, refreshes, and then enters/generates the new
 chunk. Other tabs stay open. New progress stages show the tab preparation.
-Update the backend and reload ElevenLabs Bridge 1.0.17; see the
+Update the backend and reload ElevenLabs Bridge 1.0.21; see the
 [fresh-tab workflow](../docs/ELEVENLABS_FRESH_TABS.md). Dependencies are unchanged.
 
 ## New in 0.7.19

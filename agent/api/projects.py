@@ -259,6 +259,9 @@ async def update(pid: str, body: ProjectUpdate):
 
 @router.delete("/{pid}")
 async def delete(pid: str):
+    from agent.services.workflow_scope import has_owned_resources
+    if has_owned_resources(project_id=pid):
+        raise HTTPException(409, 'This project owns saved sources or jobs. Keep the project to preserve their relationships.')
     repo = _get_repo()
     if not await repo.delete_project(pid):
         raise HTTPException(404, "Project not found")

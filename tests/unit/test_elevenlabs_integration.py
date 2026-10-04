@@ -49,14 +49,14 @@ def test_http_ws_queue_persists_two_audio_chunks_before_ack(tmp_path, monkeypatc
             ws.send_json({'type': 'status', 'enabled': True, 'ready': True, 'busy': False, 'state': 'IDLE',
                           'tabId': None if fresh_tab else 9, 'autoPrepareTab': fresh_tab,
                           'page': {'model': 'Eleven v4', 'voice': 'Test voice', 'credits': 20000}})
-            response = client.post('/api/elevenlabs/jobs', json={'title': 'Japanese test', 'text': '日本語の文章です。' * 220})
+            response = client.post('/api/elevenlabs/jobs', json={'title': 'Japanese test', 'text': '日本語の文章です。' * 440})
             assert response.status_code == 200
             job = response.json()
             assert job['total_chunks'] == 2
             for index in (1, 2):
                 command = ws.receive_json()
                 assert command['type'] == 'generate'
-                assert len(command['text']) < 1200
+                assert len(command['text']) <= 3000
                 assert command['model'] == 'Eleven v4'
                 assert command['expectedVoice'] == ('Test voice' if index == 2 else None)
                 ws.send_json({'type': 'progress', 'requestId': command['requestId'], 'phase': 'GENERATING'})
@@ -72,7 +72,7 @@ def test_http_ws_queue_persists_two_audio_chunks_before_ack(tmp_path, monkeypatc
                               'voice': 'Test voice', 'model': 'Eleven v4', 'creditsBefore': 20000,
                               'creditsAfter': 15000, 'estimatedCost': None})
                 commit = ws.receive_json()
-                assert commit == {'type': 'commit', 'requestId': command['requestId'], 'ok': True}
+                assert commit == {'type': 'commit', 'requestId': command['requestId'], 'ok': True, 'jobComplete': index == 2}
                 detail = client.get('/api/elevenlabs/jobs/' + job['id']).json()
                 chunk = detail['chunks'][index - 1]
                 assert chunk['state'] == 'COMPLETED'

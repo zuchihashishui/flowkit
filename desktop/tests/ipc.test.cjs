@@ -6,7 +6,7 @@ const os = require('node:os');
 const vm = require('node:vm');
 const {pathToFileURL} = require('node:url');
 
-const compatibleHealth = {studio_api:3,studio_features:{elevenlabs_native_download_files:true,elevenlabs_unlimited_native_audio:true,elevenlabs_recover_downloads:true,elevenlabs_safe_pre_submit_failures:true,elevenlabs_auto_prepare_tab:true}};
+const compatibleHealth = {studio_api:3,studio_features:{project_single_video:true,project_video_sources:true,elevenlabs_native_download_files:true,elevenlabs_unlimited_native_audio:true,elevenlabs_recover_downloads:true,elevenlabs_safe_pre_submit_failures:true,elevenlabs_auto_prepare_tab:true}};
 async function mainProcess(folder, reply, health=compatibleHealth) {
   const handlers = new Map(), requests = [];
   let win, ready;
@@ -22,12 +22,12 @@ async function mainProcess(folder, reply, health=compatibleHealth) {
   const root=path.resolve(__dirname,'..');
   const source=await fs.readFile(path.join(root,'main.cjs'),'utf8');
   vm.runInNewContext(source, {
-    require: name=>name==='electron'?electron:name==='./backend-runtime.cjs'?require('../backend-runtime.cjs'):name==='./backend-compatibility.cjs'?require('../backend-compatibility.cjs'):name.endsWith('chatgpt-process.cjs')?()=>({start:async()=>{},stop(){},getError(){return '';}}):require(name),__dirname:root,process,console,AbortSignal,FormData,Blob,
+    require: name=>name==='electron'?electron:name==='./backend-runtime.cjs'?require('../backend-runtime.cjs'):name==='./backend-compatibility.cjs'?require('../backend-compatibility.cjs'):name.endsWith('chatgpt-process.cjs')?()=>({start:async()=>{},stop(){},getError(){return '';}}):require(name),__dirname:root,process,console,AbortSignal,FormData,Blob,Buffer,
     fetch:async(url,options)=>{requests.push({url,options});return reply && !url.endsWith('/health') ? (typeof reply==='function'?reply(url,options):reply) : {ok:true,text:async()=>JSON.stringify(health)};}
   });
   await loaded;
   const event={sender:win.webContents,senderFrame:{url:pathToFileURL(path.join(root,'ui/index.html')).href}};
-  return {requests,handlers,event,invoke:(name,...args)=>handlers.get(name)(event,...args)};
+  return {requests,handlers,event,dialog:electron.dialog,invoke:(name,...args)=>handlers.get(name)(event,...args)};
 }
 
 test('actual main-process IPC supports scene edits and queue cancellation, rejects untrusted routes',async()=>{
@@ -132,4 +132,168 @@ test('stale backend is visible in status and cannot accept new ElevenLabs mutati
   assert.equal((await main.invoke('api','GET','/api/elevenlabs/status')).compatibilityError,'');
   await main.invoke('api','POST','/api/elevenlabs/probe',{});
  } finally {await fs.rm(folder,{recursive:true,force:true});}
+});
+
+test('WhisperX IPC accepts only job/settings/check routes and validates export IDs',async()=>{
+ const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-wx-ipc-'));
+ try {
+  const main=await mainProcess(folder);
+  await main.invoke('api','GET','/api/whisperx/status');
+  await main.invoke('api','POST','/api/whisperx/jobs',{source_id:'11111111-1111-4111-8111-111111111111'});
+  await main.invoke('api','POST','/api/whisperx/settings',{auto:false});
+  assert(main.requests.some(r=>r.url.endsWith('/api/whisperx/jobs')));
+  await assert.rejects(main.invoke('api','POST','/api/whisperx/run-command',{}),/Unsupported/);
+  await assert.rejects(main.invoke('api','GET','/api/whisperx/jobs/../../file/preview'),/Unsupported/);
+  await assert.rejects(main.invoke('whisperx-save','../../file'),/Invalid/);
+ } finally {await fs.rm(folder,{recursive:true,force:true});}
+});
+
+test('WhisperX import uses native file selection and uploads audio without renderer paths',async()=>{
+ const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-wx-import-'));
+ try {
+  await fs.writeFile(path.join(folder,'sample.mp3'),'ID3fixture');
+  const main=await mainProcess(folder,{ok:true,text:async()=>JSON.stringify({id:'imported',title:'sample.mp3'})});
+  const result=await main.invoke('whisperx-import');
+  assert.equal(result.id,'imported');
+  const upload=main.requests.find(r=>r.url.endsWith('/api/whisperx/import'));
+  assert.equal(upload.options.body.get('file').name,'sample.mp3');
+  assert.equal(upload.options.body.get('file').size,10);
+  await assert.rejects(main.invoke('api','POST','/api/whisperx/import',{}),/Unsupported/);
+ } finally {await fs.rm(folder,{recursive:true,force:true});}
+});
+
+test('WhisperX exports each JSON variant with its own name and allowlists split/preview routes',async()=>{
+ const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-wx-split-'));
+ const jid='11111111-1111-1111-1111-111111111111',root='/api/whisperx/jobs/'+jid;
+ try{
+  const main=await mainProcess(folder,(url)=>new Response(JSON.stringify({route:url})));
+  for(const [variant,name,suffix] of [['full','transcript.json',''],['video','transcript_video.json','/video'],['image','transcript_image.json','/image']]){
+   main.dialog.showSaveDialog=async(_win,options)=>{assert.equal(options.defaultPath,name);return {canceled:false,filePath:path.join(folder,name)};};
+   const result=await main.invoke('whisperx-save',jid,variant);
+   assert.equal(JSON.parse(await fs.readFile(result.path,'utf8')).route,'http://127.0.0.1:8100'+root+'/result'+suffix);
+   await main.invoke('api','GET',root+'/preview/'+variant);
+  }
+  await main.invoke('api','POST',root+'/split',{video_duration_seconds:50});
+  await assert.rejects(main.invoke('api','GET',root+'/preview/private'),/Unsupported/);
+  await assert.rejects(main.invoke('whisperx-save',jid,'../private'),/Invalid transcript variant/);
+  await assert.rejects(main.invoke('whisperx-save',jid,'__proto__'),/Invalid transcript variant/);
+ }finally{await fs.rm(folder,{recursive:true,force:true});}
+});
+
+test('SRT picker cancellation skips upload and an older backend reports restart instructions',async()=>{
+ const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-srt-missing-api-'));
+ try{
+  const main=await mainProcess(folder,()=>new Response('{"detail":"Not Found"}',{status:404}));
+  main.dialog.showOpenDialog=async()=>({canceled:true,filePaths:[]});
+  const requestsBefore=main.requests.length;
+  assert.equal((await main.invoke('srt-import')).canceled,true);
+  assert.equal(main.requests.length,requestsBefore);
+  const filename=path.join(folder,'日本語.json');await fs.writeFile(filename,'{"segments":[]}');
+  main.dialog.showOpenDialog=async()=>({canceled:false,filePaths:[filename]});
+  await assert.rejects(main.invoke('srt-import'),/JSON → SRT is missing.*restart Studio and its backend/);
+  await assert.rejects(main.invoke('api','GET','/api/srt/status'),/JSON → SRT is missing/);
+ }finally{await fs.rm(folder,{recursive:true,force:true});}
+});
+
+test('SRT imports through native picker and generic IPC cannot read arbitrary files',async()=>{
+ const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-srt-ipc-'));
+ try{
+  await fs.writeFile(path.join(folder,'sample.mp3'),'{"word_segments":[]}');
+  const main=await mainProcess(folder,(url,options)=>{
+   if(url.endsWith('/api/srt/import')){
+    assert(options.body instanceof FormData);
+    assert.equal(options.body.get('file').name,'sample.mp3');
+   }
+   return {ok:true,text:async()=>JSON.stringify({id:'source-id',title:'sample.json'})};
+  });
+  assert.equal((await main.invoke('srt-import')).id,'source-id');
+  await main.invoke('api','GET','/api/srt/status');
+  await main.invoke('api','POST','/api/srt/jobs',{source_id:'source-id',prompt:'SRT'});
+  const jid='11111111-1111-1111-1111-111111111111';
+  await main.invoke('api','POST','/api/srt/analyze',{source_id:'source-id'});
+  await main.invoke('api','GET',`/api/srt/jobs/${jid}/quality`);
+  await main.invoke('api','POST',`/api/srt/jobs/${jid}/approve`,{reviewed:true});
+  await assert.rejects(main.invoke('api','GET','/api/srt/analyze'),/Unsupported/);
+  await assert.rejects(main.invoke('api','GET',`/api/srt/jobs/${jid}/approve`),/Unsupported/);
+  await assert.rejects(main.invoke('api','POST','/api/srt/import',{}),/Unsupported/);
+  await assert.rejects(main.invoke('srt-save','../../private'),/Invalid/);
+ }finally{await fs.rm(folder,{recursive:true,force:true});}
+});
+
+test('assembly folder imports supported files and streams completed MP4 to native save location',async()=>{
+ const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-assembly-ipc-'));
+ const jid='11111111-1111-1111-1111-111111111111';
+ try{
+  await fs.writeFile(path.join(folder,'001.png'),'image1');await fs.writeFile(path.join(folder,'002.jpg'),'image2');await fs.writeFile(path.join(folder,'ignore.txt'),'ignore');
+  const uploaded=[],video=Buffer.alloc(2*1024*1024,37);
+  const main=await mainProcess(folder,(url,options)=>{
+   if(url.endsWith('/api/assembly/import/image')){uploaded.push(options.body.get('file').name);return new Response(JSON.stringify({id:'image'+uploaded.length,kind:'image'}));}
+   if(url.endsWith('/api/assembly/status'))return new Response(JSON.stringify({jobs:[{id:jid,state:'COMPLETED'}]}));
+   if(url.endsWith('/thumbnail'))return new Response(Buffer.from('jpeg'));
+   if(url.endsWith('/video'))return new Response(video,{headers:{'Content-Type':'video/mp4'}});
+   throw Error('Unexpected request '+url);
+  });
+  main.dialog.showOpenDialog=async()=>({canceled:false,filePaths:[folder]});
+  const imported=await main.invoke('assembly-import','images-folder');
+  assert.equal(imported.assets.length,2);assert.deepEqual(uploaded.sort(),['001.png','002.jpg']);
+  assert.match(await main.invoke('assembly-media',jid,'thumbnail'),/^data:image\/jpeg;base64,/);
+  assert.equal((await main.invoke('assembly-media',jid,'preview')).url,`http://127.0.0.1:8100/api/assembly/jobs/${jid}/video`);
+  const result=await main.invoke('assembly-media',jid,'save');assert.deepEqual(await fs.readFile(result.path),video);
+  await assert.rejects(main.invoke('assembly-media','../../private','save'),/Invalid/);
+  await assert.rejects(main.invoke('api','POST','/api/assembly/import/image',{}),/Unsupported/);
+  await assert.rejects(main.invoke('assembly-import','arbitrary-path'),/Unsupported/);
+ }finally{await fs.rm(folder,{recursive:true,force:true});}
+});
+
+test('workflow IPC scopes queries and uploads, captures picker context and rejects older backends',async()=>{
+ const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-scope-'));
+ try{
+  await fs.writeFile(path.join(folder,'sample.mp3'),'fixture');
+  const health=structuredClone(compatibleHealth),main=await mainProcess(folder,undefined,health);
+  const ctx={project_id:'project-a',video_id:'video-a'};
+  for(const route of ['elevenlabs/jobs','whisperx/status','srt/status','assembly/status','workflow/resources']){
+   await main.invoke('api','GET','/api/'+route+'?project_id=project-a&video_id=video-a');
+  }
+  for(const action of ['assignment-preview','assign','import-scenes'])await main.invoke('api','POST','/api/workflow/'+action,{...ctx,kind:'srt',id:'result'});
+  for(const channel of ['whisperx-import','srt-import']){
+   await assert.rejects(main.invoke(channel,'/untrusted-path'),/Select a project and video/);
+   await assert.rejects(main.invoke(channel,{project_id:'project-a'}),/Select a project and video/);
+   let release;
+   main.dialog.showOpenDialog=()=>new Promise(resolve=>{release=resolve;});
+   const original={...ctx},pending=main.invoke(channel,original);
+   while(!release)await new Promise(resolve=>setImmediate(resolve));
+   original.video_id='video-b';
+   release({canceled:false,filePaths:[path.join(folder,'sample.mp3')]});
+   await pending;
+   const upload=main.requests.filter(r=>r.url.endsWith('/import')).at(-1);
+   assert.equal(upload.options.body.get('project_id'),'project-a');
+   assert.equal(upload.options.body.get('video_id'),'video-a');
+  }
+  await assert.rejects(main.invoke('api','GET','/api/workflow/resources?path=secret'),/Unsupported/);
+  delete health.studio_features.project_video_sources;
+  const before=main.requests.length;
+  await assert.rejects(main.invoke('api','POST','/api/srt/jobs',{...ctx,source_id:'source',prompt:'SRT'}),/updated backend/);
+  assert(!main.requests.slice(before).some(r=>r.url.endsWith('/api/srt/jobs')));
+ }finally{await fs.rm(folder,{recursive:true,force:true});}
+});
+
+
+test('assembly imports optional video files/folders and validates original clip previews',async()=>{
+ const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-video-import-'));
+ const aid='22222222-2222-2222-2222-222222222222',uploaded=[];
+ try{
+  await fs.writeFile(path.join(folder,'001.MP4'),'video1');await fs.writeFile(path.join(folder,'002.webm'),'video2');await fs.writeFile(path.join(folder,'ignore.png'),'image');
+  const main=await mainProcess(folder,(url,options)=>{
+   if(url.endsWith('/api/assembly/import/video')){uploaded.push(options.body.get('file').name);return new Response(JSON.stringify({id:aid,kind:'video'}));}
+   if(url.endsWith('/api/assembly/status'))return new Response(JSON.stringify({assets:[{id:aid,kind:'video'}],jobs:[]}));
+   throw Error('Unexpected request '+url);
+  });
+  main.dialog.showOpenDialog=async(_win,options)=>{assert.ok(options.properties.includes('openDirectory'));return {canceled:false,filePaths:[folder]};};
+  const imported=await main.invoke('assembly-import','videos-folder');assert.equal(imported.assets.length,2);assert.deepEqual(uploaded.sort(),['001.MP4','002.webm']);
+  main.dialog.showOpenDialog=async(_win,options)=>{assert.ok(options.properties.includes('multiSelections'));assert.ok(options.filters[0].extensions.includes('mp4'));return {canceled:false,filePaths:[path.join(folder,'001.MP4')]};};
+  assert.equal((await main.invoke('assembly-import','videos')).assets.length,1);
+  assert.equal((await main.invoke('assembly-media',aid,'clip-preview')).url,`http://127.0.0.1:8100/api/assembly/clips/${aid}/video`);
+  await assert.rejects(main.invoke('assembly-media','11111111-1111-1111-1111-111111111111','clip-preview'),/not available/);
+  await assert.rejects(main.invoke('api','POST','/api/assembly/import/video',{}),/Unsupported/);
+ }finally{await fs.rm(folder,{recursive:true,force:true});}
 });

@@ -8,12 +8,16 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from agent.services.elevenlabs_bridge import bridge, BridgeError, MAX_AUDIO_BYTES, MAX_TEXT_CHARACTERS, DEFAULT_MODEL
 
+from agent.api.workflow import Scoped, inputs
+from agent.services import workflow_scope as scope
+
 router = APIRouter(prefix='/elevenlabs', tags=['elevenlabs'])
 
 class TextBody(BaseModel):
     text: str = Field(min_length=1, max_length=MAX_TEXT_CHARACTERS)
+    max_chunk_characters: int = Field(default=3000, ge=100, le=3000, strict=True)
 
-class JobBody(TextBody):
+class JobBody(TextBody, Scoped):
     title: str = Field(default='', max_length=200)
     model: str = Field(default=DEFAULT_MODEL, max_length=100)
 
@@ -29,8 +33,8 @@ async def status():
     return bridge.status()
 
 @router.get('/jobs')
-async def jobs():
-    return {'jobs': bridge.jobs(), 'settings': bridge.settings()}
+async def jobs(project_id: str | None = None, video_id: str | None = None, unassigned: bool = False):
+    return {'jobs': scope.select(scope.annotate(bridge, 'elevenlabs', bridge.jobs(dict(project_id=project_id, video_id=video_id, unassigned=unassigned))), project_id, video_id, unassigned), 'settings': bridge.settings()}
 
 @router.get('/jobs/{job_id}')
 async def job(job_id: str):
@@ -42,14 +46,14 @@ async def job(job_id: str):
 @router.post('/preview')
 async def preview(body: TextBody):
     try:
-        return bridge.preview(body.text)
+        return bridge.preview(body.text, body.max_chunk_characters)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 
 @router.post('/jobs')
 async def enqueue(body: JobBody):
     try:
-        return bridge.enqueue(body.text, body.title, body.model)
+        return bridge.enqueue(body.text, body.title, body.model, body.max_chunk_characters, await inputs(body))
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 

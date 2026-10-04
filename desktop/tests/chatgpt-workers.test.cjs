@@ -37,3 +37,44 @@ for(const composerMode of ['chat','work'])test(`extension ${composerMode} runs t
  assert.equal(saved.workers[0].state,'NEEDS_REVIEW');
  const status=await new Promise(resolve=>listener({type:'status'},{id:'ext'},resolve));assert.equal(status.busy,false);
 });
+
+test('Work + JSON and Chat Temporary stay isolated concurrently and when reusing the same tab',async()=>{
+ const saved={enabled:true,composerMode:'work',modelPreference:'Saved extension model',workers:[1,2,3].map(i=>({id:'w'+i,tabId:i,state:'IDLE'}))};
+ let listener,socket;const pending=new Map(),payloads=[],inspections=[];
+ class WS{constructor(){this.readyState=1;socket=this;}send(){} }
+ const chrome={storage:{local:{get:async()=>structuredClone(saved),set:async d=>Object.assign(saved,structuredClone(d))}},
+ tabs:{get:async id=>({id,url:'https://chatgpt.com/',status:'complete'}),update:async()=>{},onRemoved:{addListener(){}},sendMessage:async(id,m)=>{
+  if(m.type==='ping')return {ok:true};
+  if(m.type==='preflight'){inspections.push(m);return {ok:true,data:{passed:true}};}
+  payloads.push({tabId:id,...m});return new Promise(resolve=>pending.set(m.requestId,resolve));}},
+ runtime:{id:'ext',onMessage:{addListener:f=>listener=f},onStartup:{addListener(){}},onInstalled:{addListener(){}}},alarms:{create(){},onAlarm:{addListener(){}}}};
+ vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../extensions/chatgpt/background.js'),'utf8'),{chrome,WebSocket:WS,URL,console,clearTimeout,setTimeout:(fn,ms)=>ms>=5000?setTimeout(fn,ms):setImmediate(fn),setInterval(){}});
+ await tick();await tick();socket.onopen();
+ const send=m=>socket.onmessage({data:JSON.stringify(m)});
+ const ui=m=>new Promise(resolve=>listener(m,{id:'ext'},resolve));
+ await send({type:'inspect',controlId:'inspect-chat',kind:'preflight',composerMode:'chat',temporary:true});
+ assert.ok(inspections.every(m=>m.composerMode==='chat'&&m.temporary));
+ inspections.length=0;
+ await ui({type:'preflight',temporary:false});
+ assert.ok(inspections.every(m=>m.composerMode==='work'&&!m.temporary));
+ const attachment={name:'transcript.json',base64:'e30='};
+ await send({type:'chat',workerId:'w1',requestId:'srt',messages:[{content:'Make SRT'}],composerMode:'work',temporary:false,model:'GPT-6 Astra',attachment});
+ await send({type:'chat',workerId:'w2',requestId:'text',messages:[{content:'Text'}],composerMode:'chat',temporary:true,model:'auto'});
+ for(let i=0;i<20&&pending.size<2;i++)await tick();
+ assert.equal(pending.size,2);
+ const work=payloads.find(p=>p.requestId==='srt'),chat=payloads.find(p=>p.requestId==='text');
+ assert.equal(work.tabId,1);assert.equal(work.composerMode,'work');assert.equal(work.temporary,false);assert.equal(work.model,'GPT-6 Astra');assert.deepEqual(JSON.parse(JSON.stringify(work.attachment)),attachment);
+ assert.equal(chat.tabId,2);assert.equal(chat.composerMode,'chat');assert.equal(chat.temporary,true);assert.equal(chat.model,'auto');assert.equal(chat.attachment,undefined);
+ assert.equal(saved.workers[0].requestOptions.composerMode,'work');assert.equal(saved.workers[1].requestOptions.composerMode,'chat');
+ pending.get('srt')({ok:true,content:'SRT'});await tick();await tick();
+ assert.equal(saved.workers[0].state,'AWAITING_SAVE');
+ await send({type:'commit',controlId:'saved-srt',requestId:'srt',ok:true});
+ assert.equal(saved.workers[0].state,'IDLE');assert.equal(saved.workers[0].requestOptions,null);
+ await send({type:'chat',workerId:'w1',requestId:'text-after-work',messages:[{content:'Next text'}],composerMode:'chat',temporary:true,model:'Chat model'});
+ for(let i=0;i<20&&!pending.has('text-after-work');i++)await tick();
+ const next=payloads.at(-1);
+ assert.equal(next.tabId,1);assert.equal(next.composerMode,'chat');assert.equal(next.temporary,true);assert.equal(next.model,'Chat model');assert.equal(next.attachment,undefined);
+ assert.equal(saved.composerMode,'work');assert.equal(saved.modelPreference,'Saved extension model');
+ for(const id of ['text','text-after-work']){pending.get(id)({ok:true,content:id});await tick();await tick();await send({type:'commit',controlId:'saved-'+id,requestId:id,ok:true});}
+ assert.ok(saved.workers.every(w=>w.state==='IDLE'));
+});

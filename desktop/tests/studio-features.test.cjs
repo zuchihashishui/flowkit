@@ -4,8 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {JSDOM} = require('jsdom');
 const tick = () => new Promise(resolve => setImmediate(resolve));
-async function studio() {
-  const dom = new JSDOM(fs.readFileSync(path.join(__dirname, '../ui/index.html'), 'utf8'), {runScripts:'outside-only'});
+async function studio(savedProject='') {
+  const dom = new JSDOM(fs.readFileSync(path.join(__dirname, '../ui/index.html'), 'utf8'), {runScripts:'outside-only',url:'https://studio.test'});
   const w = dom.window, $ = id => w.document.getElementById(id), calls = [], exports = [], preferences = [];
   let scenes = [
     {id:'s1',display_order:0,prompt:'Boat',video_prompt:'A moving boat',narrator_text:'First narration'},
@@ -18,14 +18,17 @@ async function studio() {
     {id:'d',state:'NEEDS_REVIEW',payload:{kind:'image',project_id:'p1',label:'Uncertain job',prompt:'Check Flow'}}
   ].map(j => ({...j,files:j.state==='COMPLETED'?['/output/output.png']:[],created:1,error:j.state==='FAILED'?'Download failed':null}));
   w.confirm = () => true; w.setInterval = () => 0;
+  if(savedProject)w.localStorage.setItem('active-project-id',savedProject);
   w.studio = {
     settings: async () => ({autoExport:false,output:'/output',extension:'/extension'}),
     updateSettings: async p => { preferences.push(p); return p; },
     exportJob: async id => { exports.push(id); return '/output/'+id; },
     api: async (method, route, body) => {
       calls.push({method,route,body});
+      if(route.startsWith('/api/workflow/resources'))return {resources:[]};
       if(route==='/health')return {version:'test',extension_connected:true};
       if(route==='/api/projects')return [{id:'p1',name:'First project'},{id:'p2',name:'Second project'}];
+      if(route==='/api/workflow/project')return {project_id:body.project_id,video_id:'v1',title:'First collection',protocol:2};
       if(route.startsWith('/api/videos?'))return [{id:'v1',title:'First collection'}];
       if(route.startsWith('/api/scenes?'))return scenes.map(s=>({...s}));
       if(route.startsWith('/api/scenes/')&&method==='PATCH') {
@@ -44,6 +47,7 @@ async function studio() {
       throw Error('Unexpected request '+method+' '+route);
     }
   };
+  w.eval(fs.readFileSync(path.join(__dirname, '../ui/workflow.js'), 'utf8'));
   w.eval(fs.readFileSync(path.join(__dirname, '../ui/app.js'), 'utf8')); await tick();
   const change = async (id,value) => {const e=$(id); if(e.type==='checkbox')e.checked=value;else e.value=value;e.dispatchEvent(new w.Event(e.type==='search'?'input':'change'));await tick();};
   const submit = async id => {$(id).dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();};
@@ -84,10 +88,10 @@ test('queue filters scope exports and cancellation; details expose full prompt a
   const s=await studio();const {$,change,click,exports,calls}=s;
   try {
     assert.equal($('auto-export').checked,false);assert.equal(exports.length,0);
-    await change('job-project','p2');await change('job-state','COMPLETED');
+    await change('project-select','p2');await change('job-state','COMPLETED');
     assert.equal($('all-jobs').children.length,1);
     $('export-filtered').click();await tick();assert.deepEqual(exports,['b']);
-    await change('job-project','');await change('job-state','');await change('job-search','saved prompt');
+    await change('project-select','p1');await change('job-state','');await change('job-search','saved prompt');
     assert.equal($('all-jobs').children.length,1);
     await click($('all-jobs'),'Details');assert.match($('job-detail-text').textContent,/A saved prompt/);assert.match($('job-detail-text').textContent,/Download failed/);
     assert([...$('all-jobs').querySelectorAll('button')].some(b=>b.textContent==='Resume saved result'));
@@ -98,6 +102,34 @@ test('queue filters scope exports and cancellation; details expose full prompt a
     assert.match($('all-jobs').textContent,/No jobs match/);
     await change('job-state','CANCELLED');assert.equal($('all-jobs').children.length,1);
   }finally{s.dom.window.close();}
+});
+
+test('Projects owns the only selector; selection persists and all media lists follow it',async()=>{
+ const s=await studio('p2');const {$,w,change}=s;
+ try{
+  assert.equal($('project-select').closest('[data-view]').dataset.view,'projects');
+  assert.equal(w.document.querySelector('header select'),null);assert.equal($('job-project'),null);
+  assert.equal($('project-select').value,'p2');assert.equal($('active-project-name').textContent,'Second project');
+  assert.equal(w.workflow.context().project_id,'p2');assert.equal(w.workflow.context().video_id,'v1');assert.equal($('active-video-name'),null);assert.equal($('video-select').hidden,true);assert.equal($('new-collection'),null);
+  assert.match($('image-jobs').textContent,/Cloud job/);assert.doesNotMatch($('image-jobs').textContent,/Uncertain job/);
+  w.document.querySelector('[data-page="image"]').click();assert.equal($('active-project-name').textContent,'Second project');
+  await change('project-select','p1');assert.equal(w.localStorage.getItem('active-project-id'),'p1');
+  assert.match($('image-jobs').textContent,/Uncertain job/);assert.doesNotMatch($('image-jobs').textContent,/Cloud job/);
+  assert.match($('queue-summary').textContent,/3 jobs/);assert.match($('job-project-context').textContent,/First project/);
+  assert.equal(w.document.querySelector('#project-list [data-active="true"]').dataset.projectId,'p1');
+  w.document.querySelector('[data-page="whisperx"]').click();assert.equal($('project-scope-note').hidden,true);
+  $('change-project').click();assert.equal(w.document.querySelector('[data-page].active').dataset.page,'projects');
+ }finally{s.dom.window.close();}
+});
+
+test('cancelled project switch keeps the active project and unsaved scene editor',async()=>{
+ const s=await studio('p1');const {$,w,change,click}=s;
+ try{
+  await click($('scenes').children[0],'Edit scene');$('scene-prompt').value='Unsaved edit';$('scene-prompt').dispatchEvent(new w.Event('input',{bubbles:true}));
+  w.confirm=()=>false;await change('project-select','p2');
+  assert.equal($('project-select').value,'p1');assert.equal($('active-project-name').textContent,'First project');
+  assert.equal($('scene-editor').hidden,false);assert.equal($('scene-prompt').value,'Unsaved edit');assert.equal(w.localStorage.getItem('active-project-id'),'p1');
+ }finally{s.dom.window.close();}
 });
 
 test('auto-export preference is restored, saved, and reverted on a write error',async()=>{

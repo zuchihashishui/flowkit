@@ -1,9 +1,29 @@
-# Fresh Text to Speech tabs — Studio 0.7.20 / Bridge 1.0.17
+# Separate Text to Speech windows — Studio 0.7.45 / Bridge 1.0.22
+
+The automated worker opens its Text to Speech tab in a separate normal Chrome
+window. The side panel's Open ElevenLabs button also opens a separate window.
+After the backend has saved every chunk of a narration job, its successful commit
+includes `jobComplete: true`. Only then does the extension close its own worker tab.
+Local narration merging continues in the backend after this acknowledgement.
+
+Intermediate chunks and failed/review jobs do not trigger final cleanup. A tab
+navigated away from Text to Speech is preserved. Cleanup removes only the worker
+tab, not other tabs the user may have added to that window. A blank tab is kept if
+necessary to avoid shutting down Chrome. If Chrome refuses cleanup, saved audio
+remains successful and the extension records a warning.
+
+Update the complete source, restart Studio/backend, and reload
+`extensions/elevenlabs` in Chrome (version 1.0.22). No dependencies changed.
+Automated backend and extension tests cover save acknowledgements, separate-window
+creation, intermediate chunks, cleanup failure, navigation and last-tab protection.
+Live signed-in Windows Chrome generation was not tested in this environment.
+
+## Existing preparation sequence
 
 Every chunk follows this order:
 
 1. Close all currently open ElevenLabs Text to Speech tabs in the extension's Chrome profile.
-2. Open one new Text to Speech tab.
+2. Open one new Text to Speech tab in a separate Chrome window.
 3. Bind the new tab automatically and wait for its editor and voice.
 4. Clear restored text and refresh the new tab.
 5. Wait for the refreshed editor, enter the chunk, and click Generate speech.
@@ -35,29 +55,3 @@ stages. A deliberate old-tab closure does not cause Needs review. Closing the ne
 tab before Generate is a pre-submit failure; losing it after submission remains
 uncertain and requires review. Tab replacement never runs during an unresolved
 review or before save acknowledgement.
-
-## Update all three parts
-
-Close Studio, copy the full 0.7.20 source into the existing folder, and keep databases,
-`output/`, and `.venv`. Dependencies have not changed from 0.7.19. Open Studio and use
-**Restart local backend** if an older process is still serving port 8100. Reload the
-ElevenLabs extension in Chrome and verify **1.0.17**. The backend requires the new
-`elevenlabs_auto_prepare_tab` capability; otherwise an old backend would keep waiting
-for manual binding. ChatGPT and Google Flow extensions have not changed.
-
-Existing review jobs are not automatically retried. Inspect their results and release
-review first, then choose the unfinished work to queue and resume.
-
-## Validation scope
-
-Release checks: **543 Python tests and 253 JavaScript/UI tests passed**.
-JavaScript syntax and diff checks passed.
-
-Regression tests cover multiple old TTS tabs, no existing tabs, a stale remembered
-tab, last-window protection, unrelated tab preservation, automatic binding, exact
-clear/refresh/generate order, two chunks separated by save acknowledgement, missing
-page receivers, page timeout, voice mismatch, and closure before/after submission.
-Backend tests cover both fresh-tab and legacy bound-tab handshakes over local
-HTTP/WebSocket transport. UI tests cover preparation progress and readiness without
-manual binding. These are automated tests; a signed-in ElevenLabs generation and
-native Windows Chrome operation have not been executed in this environment.
