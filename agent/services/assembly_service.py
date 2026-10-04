@@ -113,7 +113,7 @@ class AssemblyService:
     def path(self, asset):
         return self.output / 'assets' / asset['filename']
 
-    async def import_upload(self, kind, upload, context=None, sources=()):
+    async def import_upload(self, kind, upload, context=None, sources=(), metadata_extra=None):
         name = (upload.filename or '').replace('\\', '/').rsplit('/', 1)[-1]
         suffix = Path(name).suffix.lower()
         if suffix not in EXTENSIONS.get(kind, set()):
@@ -134,7 +134,7 @@ class AssemblyService:
             if not size:
                 raise ValueError('The selected file is empty.')
             part.replace(target)
-            metadata = {'bytes': size}
+            metadata = {**(metadata_extra or {}), 'bytes': size}
             if kind == 'srt':
                 normalized, cues = cues_from_srt(target.read_bytes())
                 target.write_text(normalized, encoding='utf-8')
@@ -250,6 +250,7 @@ class AssemblyService:
             raise ValueError(f'Select {noun} for scenes: ' + ', '.join(map(str, plan['missing'][:30])))
         if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
             raise ValueError('Install FFmpeg and FFprobe and restart Studio.')
+        plan['render_version'] = 2
         jid, now = str(uuid.uuid4()), time.time()
         with self.db() as db:
             db.execute('INSERT INTO assembly_jobs VALUES(?,?,?,?,?,?,?,?,?)',
@@ -260,7 +261,12 @@ class AssemblyService:
     def jobs(self, filters=None):
         where, params = scope.job_filter('assembly', 'id', filters)
         with self.db() as db:
-            return [dict(r) for r in db.execute(f'SELECT id,title,state,phase,progress,error,created,updated FROM assembly_jobs {where} ORDER BY created DESC LIMIT 500', params)]
+            jobs = [dict(r) for r in db.execute(f'SELECT id,title,state,phase,progress,error,created,updated FROM assembly_jobs {where} ORDER BY created DESC LIMIT 500', params)]
+        from agent.services import render_cache
+        for job in jobs:
+            job['saved_scenes'] = len(render_cache.read(self.output/job['id']))
+            job['can_resume'] = job['state'] in {'FAILED','CANCELLED','INTERRUPTED'}
+        return jobs
 
     def update(self, jid, **values):
         values['updated'] = time.time()
@@ -283,7 +289,18 @@ class AssemblyService:
             changed = 1
         return {'cancelled': changed}
 
+    def resume(self, jid):
+        with self.db() as db:
+            changed = db.execute("UPDATE assembly_jobs SET state='QUEUED',phase='Queued for resume',error=NULL,updated=? WHERE id=? AND state IN ('FAILED','CANCELLED','INTERRUPTED')", (time.time(),jid)).rowcount
+        if not changed:
+            raise ValueError('Only failed, cancelled or interrupted renders can resume.')
+        return {'id':jid,'resumed':True}
+
     async def render(self, jid, plan):
+        from agent.services.assembly_preflight import check
+        checked = await check(self, plan)
+        if checked['blocked']:
+            raise ValueError('Preflight failed: ' + '; '.join(m for c in checked['checks'] if c['status']=='ERROR' for m in c['messages']))
         folder = self.output / jid
         folder.mkdir(parents=True, exist_ok=True)
         frames_dir = folder / 'frames'
@@ -292,15 +309,27 @@ class AssemblyService:
         mode = plan['fit']
         scale = (f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black' if mode == 'fit'
                  else f'scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}') + ',setsar=1'
-        has_video = any(c.get('kind') == 'video' for c in plan['scenes'])
+        has_video = plan.get('render_version') == 2 or any(c.get('kind') == 'video' for c in plan['scenes'])
         lines = ['ffconcat version 1.0']
         render_start = 55 if has_video else 10
         if has_video:
             clips_dir = folder / 'clips'
             clips_dir.mkdir(exist_ok=True)
+            from agent.services import render_cache
+            checkpoints, digests = render_cache.read(folder), {}
             for n, cue in enumerate(plan['scenes']):
                 self.update(jid, phase=f"Preparing scene {n+1}/{len(plan['scenes'])}", progress=55*n/len(plan['scenes']))
                 asset = self.asset(cue['asset_id'], cue['kind'])
+                if asset['id'] not in digests:
+                    digests[asset['id']] = await asyncio.to_thread(render_cache.digest, self.path(asset))
+                key = render_cache.key(plan, cue, digests[asset['id']])
+                target = clips_dir / f'{n:05d}.mp4'
+                saved = checkpoints.get(str(n), {})
+                if saved.get('key') == key and target.is_file() and saved.get('sha256') == await asyncio.to_thread(render_cache.digest, target):
+                    self.update(jid, phase=f"Reusing saved scene {n+1}/{len(plan['scenes'])}")
+                    lines.append(f'file clips/{n:05d}.mp4')
+                    continue
+                part = clips_dir / f'{n:05d}.part.mp4'
                 args = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y', '-threads', '2', '-protocol_whitelist', 'file,pipe']
                 if cue['kind'] == 'image':
                     args += ['-loop', '1', '-framerate', str(plan['fps'])]
@@ -312,8 +341,15 @@ class AssemblyService:
                     vf += f",tpad=stop_mode=clone:stop_duration={cue['frames']/plan['fps']}"
                 args += ['-vf', vf, '-filter_threads', '2', '-frames:v', str(cue['frames']),
                          '-c:v', 'libx264', '-preset', 'fast', '-crf', '20', '-threads', '4',
-                         '-video_track_timescale', '90000', clips_dir / f'{n:05d}.mp4']
+                         '-video_track_timescale', '90000', part]
                 await command(args, timeout=6*3600)
+                clip_info = await probe(part)
+                stream = next((s for s in clip_info['streams'] if s['codec_type']=='video'), {})
+                if stream.get('width') != width or stream.get('height') != height or int(stream.get('nb_frames',0)) != cue['frames']:
+                    raise ValueError(f'Scene {n+1} did not render all expected frames.')
+                part.replace(target)
+                checkpoints[str(n)] = {'key':key,'sha256':await asyncio.to_thread(render_cache.digest,target)}
+                render_cache.save(folder, checkpoints)
                 lines.append(f'file clips/{n:05d}.mp4')
         else:
             # Keep the existing image-only renderer, including plans queued by older releases.
@@ -372,6 +408,7 @@ class AssemblyService:
         (folder/'video.part.mp4').replace(folder/'video.mp4')
         shutil.rmtree(frames_dir)
         shutil.rmtree(folder/'clips', ignore_errors=True)
+        (folder/'checkpoints.json').unlink(missing_ok=True)
         self.update(jid, state='COMPLETED', phase='Completed', progress=100)
 
     async def process(self, jid):
@@ -390,12 +427,13 @@ class AssemblyService:
         finally:
             (self.output/jid/'video.part.mp4').unlink(missing_ok=True)
             shutil.rmtree(self.output/jid/'frames', ignore_errors=True)
-            shutil.rmtree(self.output/jid/'clips', ignore_errors=True)
+            for part in (self.output/jid/'clips').glob('*.part.mp4'):
+                part.unlink(missing_ok=True)
 
     async def run(self):
         self.stopping = False
         with self.db() as db:
-            db.execute("UPDATE assembly_jobs SET state='INTERRUPTED',phase='Interrupted',error='Backend restarted during rendering. Submit a new render.' WHERE state='RUNNING'")
+            db.execute("UPDATE assembly_jobs SET state='INTERRUPTED',phase='Interrupted',error='Backend restarted during rendering. Resume to reuse verified saved scenes.' WHERE state='RUNNING'")
         try:
             while True:
                 queued = [j for j in reversed(self.jobs()) if j['state']=='QUEUED']

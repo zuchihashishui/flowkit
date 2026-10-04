@@ -4,13 +4,13 @@
  const $=id=>document.getElementById(id),key=c=>`${c.project_id||''}/${c.video_id||''}`;
  const raw=(method,route,body)=>window.studio.api(method,route,body);
  const listings=new Set(['/api/elevenlabs/jobs','/api/whisperx/status','/api/srt/status','/api/assembly/status']);
- const scopedWrites=new Set(['/api/elevenlabs/jobs','/api/whisperx/jobs','/api/srt/jobs','/api/srt/analyze','/api/assembly/source','/api/assembly/preview','/api/assembly/jobs']);
+ const scopedWrites=new Set(['/api/elevenlabs/jobs','/api/whisperx/jobs','/api/srt/jobs','/api/srt/analyze','/api/assembly/source','/api/assembly/preview','/api/assembly/preflight','/api/assembly/scene-media','/api/assembly/jobs']);
  function requireContext(){if(!current.project_id||!current.video_id)throw Error('Select a project in Project and wait for it to load.');return {...current};}
  function assertCurrent(ctx){if(key(ctx)!==key(current))throw Error('The active project changed. Your result remains saved with its original project.');}
  async function api(method,route,body){
   const ctx={...current},ticket=generation;
   if(method==='GET'&&listings.has(route))route+='?'+new URLSearchParams(ctx.project_id&&ctx.video_id?ctx:{unassigned:'true'});
-  if(method==='POST'&&scopedWrites.has(route))body={...body,...requireContext()};
+  if(method==='POST'&&(scopedWrites.has(route)||/^\/api\/assembly\/jobs\/[a-f0-9-]{36}\/resume$/.test(route)))body={...body,...requireContext()};
   const result=await raw(method,route,body);
   if(ticket!==generation)throw Error('Active project changed; refreshing its sources.');
   return result;

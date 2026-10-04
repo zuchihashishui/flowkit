@@ -183,6 +183,11 @@ async def test_import_picker_context_and_assembly_keep_upstream_ids(env):
     assert {r['id'] for r in record['sources']} == {audio_asset['id'], srt_asset['id'], image.json()['id']}
     rejected = await env.client.post('/api/assembly/jobs', json={**body, **env.b})
     assert rejected.status_code == 409 and len(env.va.jobs()) == 1
+    env.va.update(render['id'],state='FAILED')
+    rejected = await env.client.post('/api/assembly/jobs/'+render['id']+'/resume',json=env.b)
+    assert rejected.status_code==409 and env.va.jobs()[0]['state']=='FAILED'
+    resumed = await post(env,'assembly/jobs/'+render['id']+'/resume',env.a)
+    assert resumed['id']==render['id'] and env.va.jobs()[0]['state']=='QUEUED'
     # Optional clips are project-scoped inputs and remain in immutable render lineage.
     from agent.services.assembly_service import command
     clip_path = env.va.output/'scope-test.mp4'
@@ -301,3 +306,44 @@ async def test_delete_api_cannot_orphan_saved_video_sources(env):
         assert response.status_code == 409 and 'preserve' in response.text
     assert await crud.get_video(env.a['video_id'])
     assert await crud.get_project(env.a['project_id'])
+
+@pytest.mark.asyncio
+async def test_scene_media_loads_current_project_copies_once_and_rejects_wrong_srt(env,tmp_path,monkeypatch):
+    from agent.services.concept_writer import Concept
+    from agent.services.assembly_service import command
+    from fastapi import UploadFile
+    root=tmp_path/'generated';root.mkdir()
+    monkeypatch.setattr(desktop,'ROOT',root)
+    monkeypatch.setattr(desktop,'get_flow_client',lambda:SimpleNamespace(connected=True))
+    vid=env.a['video_id']
+    await storyboard.save_document(vid,storyboard.DocumentBody(script_text='日本語です。'))
+    data=await storyboard.import_segments(vid,storyboard.ImportBody(format='srt',content=SRT))
+    segment=data['segments'][0]
+    await storyboard.save_concept(segment['id'],Concept(title='Sea',description='A calm sea.',image_prompt='Blue sea.',video_prompt='Waves move.'))
+    data=await storyboard.read_document(vid);segment=data['segments'][0]
+    result=await storyboard.generate_media(vid,storyboard.MediaBody(segment_ids=[segment['id']],kind='image'))
+    jid=result['ids'][0];path=root/'001.png'
+    await command(['ffmpeg','-v','error','-f','lavfi','-i','color=blue:s=64x36','-frames:v','1','-threads','1',path])
+    desktop.update(jid,state='COMPLETED',files=json.dumps([str(path)]))
+    subtitle=await env.va.import_upload('srt',UploadFile(filename='scenes.srt',file=io.BytesIO(SRT.encode())),env.a)
+    body={**env.a,'srt_id':subtitle['id'],'visual_mode':'images'}
+    first=await post(env,'assembly/scene-media',body)
+    assert len(first['assets'])==1 and not first['issues']
+    asset=first['assets'][0]
+    assert first['mapping']=={'1':asset['id']}
+    assert asset['metadata']['segment_id']==segment['id']
+    assert asset['metadata']['media_job_id']==jid
+    assert env.va.path(asset).read_bytes()==path.read_bytes()
+    path.unlink()  # Assembly owns its saved copy even if the original download moves.
+    second=await post(env,'assembly/scene-media',body)
+    assert second['mapping']==first['mapping'] and len(env.va.assets())==2
+    wrong=await env.client.post('/api/assembly/scene-media',json={**body,**env.b})
+    assert wrong.status_code==409
+    mismatch=await env.va.import_upload('srt',UploadFile(filename='other.srt',file=io.BytesIO(SRT.replace('日本語です。','Different text').encode())),env.a)
+    wrong=await env.client.post('/api/assembly/scene-media',json={**body,'srt_id':mismatch['id']})
+    assert wrong.status_code==409 and 'does not match' in wrong.text
+    # A new prompt invalidates the old generated media; no automatic regeneration.
+    await storyboard.save_concept(segment['id'],Concept(title='Forest',description='Trees.',image_prompt='Green forest.',video_prompt='Leaves move.'))
+    stale=await post(env,'assembly/scene-media',body)
+    assert not stale['assets'] and stale['mapping']=={'1':None} and stale['issues']
+    assert len(desktop.rows())==1

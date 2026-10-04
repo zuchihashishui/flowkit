@@ -235,3 +235,41 @@ async def test_chatgpt_concept_failure_requires_review(document, monkeypatch):
     stored = (await s.query('SELECT * FROM concept_job WHERE id=?',(job['id'],)))[0]
     assert stored['state']=='NEEDS_REVIEW'
     assert not await s.query('SELECT * FROM scene_concept')
+
+
+@pytest.mark.asyncio
+async def test_srt_duration_rounds_up_and_failed_media_retry_keeps_success(document):
+    data=await s.read_document(document)
+    first,second=data['segments']
+    for item in data['segments']:await s.save_concept(item['id'],CONCEPT)
+    result=await s.generate_media(document,s.MediaBody(segment_ids=[first['id'],second['id']],kind='video',duration_mode='srt'))
+    jobs={json.loads(j['payload'])['segment_id']:j for j in desktop.rows()}
+    assert json.loads(jobs[first['id']]['payload'])['duration']==10  # 8.4 -> 10
+    assert json.loads(jobs[second['id']]['payload'])['duration']==8
+    desktop.update(jobs[first['id']]['id'],state='FAILED',remote=json.dumps({'workflows':[{'id':'existing'}]}))
+    desktop.update(jobs[second['id']]['id'],state='COMPLETED')
+    retried=await s.retry_failed(document,s.RetryBody(segment_ids=[first['id'],second['id']],kind='video'))
+    assert retried['resumed']==[jobs[first['id']]['id']] and not retried['ids']
+    assert retried['skipped']==[second['id']]
+    assert len(desktop.rows())==2
+    desktop.update(jobs[first['id']]['id'],state='FAILED',remote=None)
+    with pytest.raises(HTTPException,match='409'):
+        await s.retry_failed(document,s.RetryBody(segment_ids=[first['id']],kind='video'))
+    retried=await s.retry_failed(document,s.RetryBody(segment_ids=[first['id']],kind='video',reviewed=True))
+    assert len(retried['ids'])==1 and len(desktop.rows())==3
+    assert json.loads(desktop.rows()[0]['payload'])['duration']==10
+    # A second click cannot submit duplicates while the retry is queued.
+    again=await s.retry_failed(document,s.RetryBody(segment_ids=[first['id']],kind='video',reviewed=True))
+    assert not again['ids'] and again['skipped']==[first['id']]
+
+
+@pytest.mark.asyncio
+async def test_retry_failed_concepts_skips_successful_scene(document,monkeypatch):
+    data=await s.read_document(document);first,second=data['segments']
+    await s.save_concept(second['id'],CONCEPT)
+    queued=await s.generate_concepts(document,s.GenerateBody(segment_ids=[first['id']]))
+    async with s.transaction() as db:
+        await db.execute("UPDATE concept_job SET state='FAILED' WHERE id=?",(queued['ids'][0],))
+    retry=await s.retry_failed(document,s.RetryBody(segment_ids=[first['id'],second['id']],kind='concept',reviewed=True))
+    assert len(retry['ids'])==1 and retry['skipped']==[second['id']]
+    assert (await s.read_document(document))['segments'][1]['active_concept_id'] is not None

@@ -98,9 +98,17 @@ They are not rounded to whole seconds or resliced to match Flow clip lengths.
 
 ## Limits and verification
 
-This release does not transcribe audio, stitch a finished video, guarantee consistent
-characters across generated images, or automate ChatGPT web. Flow clip duration is
-chosen separately from narration duration; automatic time-fitting is not implemented.
+Studio 0.7.52 supports up to 200 scenes per media batch. Scene video generation can
+round SRT duration up to 4/6/8/10 seconds; cues longer than 10 seconds are flagged.
+The original cue timestamps remain unchanged. Final assembly trims, holds or loops
+visuals to cover narration; it does not time-stretch narration. Character consistency
+across generated scenes is not guaranteed.
+
+Failed-only retry preserves completed/active scenes. Failed media jobs with a remote
+result resume retrieval under the same job ID; new submissions require review.
+Assembly copies completed media using project/document/segment/concept/timing
+associations and preserves media-job provenance in asset metadata. See
+[Video Assembly](VIDEO_ASSEMBLY.md) for manual loading, checks and render recovery.
 
 Tests use fake AI responses to verify persistence, invalid JSON handling, source
 revision conflicts, cancellation, duplicates and media-job snapshots. Real audio

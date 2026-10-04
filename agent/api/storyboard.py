@@ -172,7 +172,7 @@ async def read_document(video_id: str):
         for j in media:
             payload = json.loads(j['payload'])
             if payload.get('segment_id') == s['id']:
-                s['media_jobs'].append({'id': j['id'], 'state': j['state'], 'kind': payload['kind'], 'concept_id': payload.get('concept_id'), 'files': json.loads(j['files'])})
+                s['media_jobs'].append({'id': j['id'], 'state': j['state'], 'kind': payload['kind'], 'concept_id': payload.get('concept_id'), 'files': json.loads(j['files']), 'error': j['error'], 'can_resume': bool(j['remote'])})
         if s['start_ms'] > previous_end:
             warnings.append(f"Gap before segment {s['ordinal']}: {s['start_ms'] - previous_end} ms. Timestamps are preserved.")
         previous_end = s['end_ms']
@@ -403,10 +403,11 @@ async def get_audio(video_id: str):
 
 
 class MediaBody(BaseModel):
-    segment_ids: list[str] = Field(min_length=1, max_length=100)
+    segment_ids: list[str] = Field(min_length=1, max_length=200)
     kind: Literal['image','video']
     orientation: Literal['HORIZONTAL','VERTICAL'] = 'HORIZONTAL'
     duration: Literal[4,6,8,10] = 8
+    duration_mode: Literal['manual','srt'] = 'manual'
     image_model: str | None = None
     regenerate: bool = False
 
@@ -421,19 +422,73 @@ async def generate_media(video_id: str, body: MediaBody):
         selected = list(dict.fromkeys(body.segment_ids))
         if any(sid not in mapping or not mapping[sid]['ready'] for sid in selected):
             raise HTTPException(409, 'Every selected segment needs a current concept. Create or review concepts first.')
-        pending, skipped = [], []
+        pending, skipped, duration_notes = [], [], []
         previous = desktop.rows()
         for sid in selected:
             s = mapping[sid]
             c = s['active_concept']
+            seconds = (s['end_ms']-s['start_ms'])/1000
+            duration = next((d for d in (4,6,8,10) if d >= seconds), 10) if body.kind == 'video' and body.duration_mode == 'srt' else body.duration
+            if body.kind == 'video':
+                duration_notes.append({'segment_id':sid,'scene_seconds':seconds,'generation_seconds':duration,'short':duration < seconds})
             duplicate = False
             for old in previous:
                 p = json.loads(old['payload'])
-                if old['state'] in ('QUEUED','SUBMITTING','RUNNING','DOWNLOADING','COMPLETED') and p.get('concept_id') == c['id'] and p['kind'] == body.kind and p.get('orientation') == body.orientation and (body.kind == 'image' and p.get('image_model') == body.image_model or body.kind == 'video' and p.get('duration') == body.duration):
+                if old['state'] in ('QUEUED','SUBMITTING','RUNNING','DOWNLOADING','COMPLETED') and p.get('concept_id') == c['id'] and p['kind'] == body.kind and p.get('orientation') == body.orientation and (body.kind == 'image' and p.get('image_model') == body.image_model or body.kind == 'video' and p.get('duration') == duration):
                     duplicate = True
             if duplicate and not body.regenerate:
                 skipped.append(sid)
                 continue
-            pending.append(desktop.Job(kind=body.kind, project_id=data['video']['project_id'], document_id=data['document']['id'], segment_id=sid, concept_id=c['id'], start_ms=s['start_ms'], end_ms=s['end_ms'], label=f"Segment {s['ordinal']:03d}", prompt=c['image_prompt'] if body.kind=='image' else c['video_prompt'], orientation=body.orientation, duration=body.duration, image_model=body.image_model))
+            pending.append(desktop.Job(kind=body.kind, project_id=data['video']['project_id'], document_id=data['document']['id'], segment_id=sid, concept_id=c['id'], start_ms=s['start_ms'], end_ms=s['end_ms'], label=f"Segment {s['ordinal']:03d}", prompt=c['image_prompt'] if body.kind=='image' else c['video_prompt'], orientation=body.orientation, duration=duration, image_model=body.image_model))
         result = await desktop.enqueue(desktop.Batch(jobs=pending)) if pending else {'ids': []}
-        return {**result, 'skipped': skipped}
+        return {**result, 'skipped': skipped, 'durations': duration_notes}
+
+
+class RetryBody(GenerateBody):
+    kind: Literal['concept','image','video']
+    reviewed: bool = False
+
+
+@router.post('/videos/{video_id}/retry-failed')
+async def retry_failed(video_id: str, body: RetryBody):
+    from agent.api import desktop
+    data = await read_document(video_id)
+    segments = {s['id']:s for s in data['segments']}
+    selected = list(dict.fromkeys(body.segment_ids))
+    if any(sid not in segments for sid in selected):
+        raise HTTPException(400, 'All scenes must belong to the active project.')
+    terminal = {'FAILED','NEEDS_REVIEW','INTERRUPTED','CANCELLED'}
+    if body.kind == 'concept':
+        eligible = [sid for sid in selected if not segments[sid]['ready'] and segments[sid]['job'] and segments[sid]['job']['state'] in terminal]
+        if eligible and not body.reviewed:
+            raise HTTPException(409, 'Review failed ChatGPT requests before retrying. A new request may use credits.')
+        result = await generate_concepts(video_id, GenerateBody(segment_ids=eligible, provider=body.provider, model=body.model)) if eligible else {'ids':[], 'skipped':[]}
+        return {**result, 'skipped':list(set(selected)-set(eligible)) + result.get('skipped',[]), 'resumed':[]}
+    async with _db_lock:
+        data = await read_document(video_id)
+        segments = {s['id']:s for s in data['segments']}
+        if any(sid not in segments for sid in selected):
+            raise HTTPException(409, 'Scenes changed. Refresh before retrying.')
+        jobs = desktop.rows()
+        retry, skipped = [], []
+        for sid in selected:
+            segment = segments[sid]
+            matching = [j for j in jobs if (p:=json.loads(j['payload'])).get('segment_id') == sid
+                and p.get('project_id') == data['video']['project_id'] and p.get('concept_id') == segment['active_concept_id']
+                and p.get('kind') == body.kind and p.get('start_ms') == segment['start_ms'] and p.get('end_ms') == segment['end_ms']]
+            if not segment['ready'] or not matching or any(j['state'] in {'QUEUED','RUNNING','SUBMITTING','DOWNLOADING','COMPLETED'} for j in matching):
+                skipped.append(sid)
+            elif matching[0]['state'] in terminal:
+                retry.append(matching[0])
+            else:
+                skipped.append(sid)
+        if any(not j['remote'] or j['state'] != 'FAILED' for j in retry) and not body.reviewed:
+            raise HTTPException(409, 'Inspect failed scenes in Flow first. Confirm review before submitting a new generation.')
+        new_jobs = [desktop.Job.model_validate_json(j['payload']) for j in retry if not j['remote'] or j['state'] != 'FAILED']
+        result = await desktop.enqueue(desktop.Batch(jobs=new_jobs)) if new_jobs else {'ids':[]}
+        resumed = []
+        for job in retry:
+            if job['remote'] and job['state'] == 'FAILED':
+                await desktop.resume(job['id'])
+                resumed.append(job['id'])
+        return {**result,'resumed':resumed,'skipped':skipped}

@@ -103,3 +103,15 @@ test('assignment requires a concrete preview and confirmation; selecting video a
   assert(!calls.some(c=>c.method==='POST'&&c.route.endsWith('/jobs')));
  }finally{s.dom.window.close();}
 });
+
+
+test('assembly production actions carry the selected project ownership',async()=>{
+ const s=await studio(),{w,calls}=s;
+ try{
+  for(const route of ['/api/assembly/preflight','/api/assembly/scene-media','/api/assembly/jobs/12345678-1234-1234-1234-123456789abc/resume']){
+   await w.workflow.api('POST',route,{srt_id:'fixture'});
+   const call=calls.find(c=>c.route===route);
+   assert.equal(call.body.project_id,'project-a');assert.equal(call.body.video_id,'a');
+  }
+ }finally{s.dom.window.close();}
+});

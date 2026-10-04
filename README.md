@@ -1,3 +1,5 @@
+> **Studio 0.7.52:** Load generated scene media directly into assembly; inspect files, resolution and clip timing before rendering; retry only failed concepts/media; match generated clip duration to SRT; resume interrupted renders using verified scene checkpoints. Stages remain manual. Update the complete source and restart Studio/backend; extensions are unchanged. [Usage](docs/VIDEO_ASSEMBLY.md).
+
 > **Studio 0.7.51:** Final assembly uses one image or video per SRT scene. Choose **Images only** (default) or **Images + video** and review each scene before rendering. Video clips are optional. [Details](docs/VIDEO_ASSEMBLY.md). Update the complete source and restart Studio/backend.
 
 > **Studio 0.7.49:** WhisperX saves three JSON files: the unchanged full transcript, `transcript_video.json` for the opening section, and `transcript_image.json` for the remainder. **Video duration (seconds)** defaults to 100 and is editable. Existing completed jobs can use **Split saved JSON** without rerunning WhisperX. [Details](docs/WHISPERX.md#three-transcript-files-studio-0749). Restart Studio/backend after updating; extensions are unchanged.

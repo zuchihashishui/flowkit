@@ -83,7 +83,7 @@ class Job(BaseModel):
 
 
 class Batch(BaseModel):
-    jobs: list[Job] = Field(min_length=1, max_length=100)
+    jobs: list[Job] = Field(min_length=1, max_length=200)
 
 
 @router.post("/jobs")

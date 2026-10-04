@@ -24,7 +24,7 @@
     if (documentDirty || editorDirty) throw Error('Save or discard script/concept edits first.');
     if (!data?.document) throw Error('Save the script before importing audio or segments.');
   }
-  function selected(limit=100) {
+  function selected(limit=200) {
     assertSaved();
     const result = data.segments.filter(s => checked.has(s.id));
     if (!result.length || result.length > limit) throw Error(`Select 1–${limit} script segments.`);
@@ -179,6 +179,23 @@
   $('sb-audio').onerror=()=>notice('Audio playback is unavailable. Check the backend and audio format.',true);
   for(const kind of ['image','video'])$('sb-to-'+(kind==='image'?'images':'videos')).onclick=()=>{show(kind);$(kind+'-mode').value='storyboard';updateInputSummary();};
   document.querySelectorAll('[data-open-storyboard]').forEach(b=>b.onclick=()=>show('storyboard'));
+  function failedScene(s,kind){
+    const terminal=['FAILED','NEEDS_REVIEW','INTERRUPTED','CANCELLED'];
+    if(kind==='concept')return !s.ready&&terminal.includes(s.job?.state);
+    const jobs=(s.media_jobs||[]).filter(j=>j.kind===kind&&j.concept_id===s.active_concept_id);
+    return s.ready&&jobs.length&&!jobs.some(j=>['QUEUED','SUBMITTING','RUNNING','DOWNLOADING','COMPLETED'].includes(j.state))&&terminal.includes(jobs[0].state);
+  }
+  for(const kind of ['concept','image','video']){
+    const prefix=kind==='concept'?'sb':kind;
+    $(prefix+'-select-failed').onclick=()=>run(async()=>{assertSaved();checked.clear();for(const s of data.segments)if(failedScene(s,kind))checked.add(s.id);selectionChanged();});
+    $(prefix+'-retry-failed').onclick=()=>run(async()=>{
+      const items=selected(200).filter(s=>failedScene(s,kind));
+      if(!items.length)throw Error('No selected failed scenes need retry. Successful and active results are kept.');
+      if(!confirm(`Retry ${items.length} failed scene(s)? Saved remote media will resume without regeneration where possible. Inspect uncertain requests first; new requests may use credits.`))return;
+      const r=await api('POST',path('/retry-failed'),{segment_ids:items.map(s=>s.id),kind,reviewed:true,provider:$('sb-provider').value,model:$('sb-model').value.trim()||null});
+      await reload();await refreshJobs();notice(`${r.ids.length} new retries; ${r.resumed.length} saved remote results resumed; ${r.skipped.length} scenes skipped.`);
+    });
+  }
   window.storyboard={
     open,count:()=>checked.size,
     canChangeProject:()=>owner===$('project-select').value||discard(),
@@ -188,8 +205,8 @@
     generateMedia:async kind=>{
       const items=selected();if(items.some(s=>!s.ready))throw Error('Selected segments need current concepts. Create or update them in Text to Prompt.');
       if(!confirm(`Generate ${kind} for up to ${items.length} selected segment(s)? Uses Google Flow credits.`))return;
-      const r=await api('POST',path('/generate-media'),{segment_ids:items.map(s=>s.id),kind,orientation:$(kind+'-ratio').value,duration:Number($('duration').value),image_model:kind==='image'?$('image-model').value||null:null,regenerate:$(kind+'-regenerate').checked});
-      await reload();await refreshJobs();notice(`${r.ids.length} media job(s) queued; ${r.skipped.length} existing jobs/results skipped.`);
+      const r=await api('POST',path('/generate-media'),{segment_ids:items.map(s=>s.id),kind,orientation:$(kind+'-ratio').value,duration:Number($('duration').value),duration_mode:kind==='video'&&$('video-duration-auto').checked?'srt':'manual',image_model:kind==='image'?$('image-model').value||null:null,regenerate:$(kind+'-regenerate').checked});
+      await reload();await refreshJobs();notice(`${r.ids.length} media job(s) queued; ${r.skipped.length} existing jobs/results skipped.${r.durations?.some(d=>d.short)?' Some scenes exceed 10 seconds; their clips need hold/loop during assembly.':''}`);
     }
   };
   document.addEventListener('workflow-changed',()=>{

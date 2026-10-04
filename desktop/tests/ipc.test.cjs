@@ -42,6 +42,9 @@ test('actual main-process IPC supports scene edits and queue cancellation, rejec
     assert(main.requests.some(r=>r.url.endsWith('/api/chatgpt/message') && JSON.parse(r.options.body).prompt==='Hello'));
     await main.invoke('api','PUT','/api/storyboard/videos/video-123',{script_text:'Script'});
     await main.invoke('api','POST','/api/storyboard/videos/video-123/generate-media',{segment_ids:['segment'],kind:'image'});
+    await main.invoke('api','POST','/api/storyboard/videos/video-123/retry-failed',{segment_ids:['segment'],kind:'image'});
+    for(const route of ['preflight','scene-media','jobs/12345678-1234-1234-1234-123456789abc/resume'])await main.invoke('api','POST','/api/assembly/'+route,{});
+
     assert(main.requests.some(r=>r.url.endsWith('/api/storyboard/videos/video-123')&&r.options.method==='PUT'));
     assert(main.requests.some(r=>r.url.endsWith('/api/scenes/scene-123')&&r.options.method==='PATCH'));
     assert(main.requests.some(r=>r.url.endsWith('/api/desktop/jobs/cancel')));

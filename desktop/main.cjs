@@ -26,7 +26,7 @@ async function requireWorkflow(){
   }).finally(()=>{workflowCheck=null;});
   await workflowCheck;
 }
-const storyboardAllowed = /^\/api\/storyboard\/(providers|videos\/[a-zA-Z0-9_-]+(?:\/(segments|generate-concepts|cancel-concepts|generate-media))?|segments\/[a-zA-Z0-9_-]+(?:\/concepts)?|concepts\/[a-zA-Z0-9_-]+\/select)$/;
+const storyboardAllowed = /^\/api\/storyboard\/(providers|videos\/[a-zA-Z0-9_-]+(?:\/(segments|generate-concepts|cancel-concepts|generate-media|retry-failed))?|segments\/[a-zA-Z0-9_-]+(?:\/concepts)?|concepts\/[a-zA-Z0-9_-]+\/select)$/;
 const allowed = /^\/(health|api\/(projects(?:\/[a-zA-Z0-9_-]+)?|videos|scenes(?:\/[a-zA-Z0-9_-]+)?|models|materials|flow\/status|tts\/templates(?:\/[a-zA-Z0-9_-]+)?|desktop\/(jobs(?:\/cancel|\/[a-f0-9-]+\/resume)?|pause|diagnostics|flow-progress)))(\?[^#]*)?$/;
 function whisperxAllowed(method, route) {
   return method === 'GET' && /^\/api\/whisperx\/(status|jobs\/[a-f0-9-]{36}\/preview(?:\/(full|video|image))?)$/.test(route)
@@ -38,7 +38,7 @@ function srtAllowed(method, route) {
 }
 function assemblyAllowed(method, route) {
   return method === 'GET' && route === '/api/assembly/status'
-    || method === 'POST' && /^\/api\/assembly\/(source|preview|jobs|jobs\/[a-f0-9-]{36}\/cancel)$/.test(route);
+    || method === 'POST' && /^\/api\/assembly\/(source|preview|preflight|scene-media|jobs|jobs\/[a-f0-9-]{36}\/(cancel|resume))$/.test(route);
 }
 function elevenlabsAllowed(method, route) {
   return method === 'GET' && /^\/api\/elevenlabs\/(status|jobs(?:\/[a-f0-9-]{36})?)$/.test(route)
@@ -62,6 +62,7 @@ async function readBackendResponse(response, route) {
 }
 async function request(method, route, body, timeoutMs) {
   if(timeoutMs===undefined && method==='GET' && ['/api/srt/status','/api/whisperx/status','/api/chatgpt/status','/api/workflow/resources'].includes(route.split('?')[0]))timeoutMs=10000;
+  if(timeoutMs===undefined && method==='POST' && /^\/api\/assembly\/(preflight|scene-media|jobs)$/.test(route))timeoutMs=1800000;
   const response = await fetch(BASE + route, {method, headers:body ? {'Content-Type':'application/json'} : {}, body: body ? JSON.stringify(body) : undefined, signal:AbortSignal.timeout(timeoutMs ?? (route.startsWith('/api/chatgpt/')?720000:120000))});
   return readBackendResponse(response, route);
 }
