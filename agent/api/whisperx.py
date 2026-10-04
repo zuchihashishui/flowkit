@@ -57,6 +57,8 @@ async def enqueue(body: Job):
             with owner.db() as db:
                 parent_scope = scope.ownership(db, parent['kind'], str(body.source_id))
         ctx = await inputs(body, [parent], [parent_scope])
+        from agent.services.production_settings import apply_stage
+        body = await apply_stage(body, 'whisperx', ctx)
         return service.enqueue(str(body.source_id), body.model_dump(exclude={'source_id','project_id','video_id'}), context=ctx)
     except (KeyError, ValueError, FileNotFoundError) as error:
         raise HTTPException(409, str(error)) from error
@@ -67,6 +69,20 @@ async def cancel(jid: UUID):
         return await service.cancel(str(jid))
     except KeyError as error:
         raise HTTPException(404, str(error)) from error
+
+
+@router.post('/jobs/{jid}/retry')
+async def retry(jid: UUID, body: Scoped):
+    try:
+        service.job(str(jid))
+        with service.db() as db:
+            owner = scope.ownership(db, 'whisperx', str(jid))
+        await inputs(body, [scope.ref('whisperx', jid)], [owner])
+        return service.retry(str(jid))
+    except KeyError as error:
+        raise HTTPException(404, str(error)) from error
+    except (ValueError, OSError) as error:
+        raise HTTPException(409, str(error)) from error
 
 @router.get('/jobs/{jid}/result')
 @router.get('/jobs/{jid}/result/{variant}')

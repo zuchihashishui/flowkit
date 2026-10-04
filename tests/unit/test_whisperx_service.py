@@ -268,3 +268,93 @@ def test_split_default_and_saved_settings_are_persisted_per_new_job(service):
     job=restored.enqueue(SOURCE_ID,{**OPTIONS,'video_duration_seconds':75.5})
     restored.configure({'video_duration_seconds':200})
     assert restored.job(job['id'])['options']['video_duration_seconds']==75.5
+
+
+@pytest.mark.asyncio
+async def test_manual_retry_preserves_attempt_options_scope_and_completed_files(service,tmp_path,monkeypatch):
+    from agent.services import workflow_scope as scope
+    ctx = {'project_id':'project-one','video_id':'video-one'}
+    original = service.enqueue(SOURCE_ID,{**OPTIONS,'video_duration_seconds':65},context=ctx)
+    service.update(original['id'],state='FAILED',phase='FAILED',error='CUDA unavailable')
+    directory=service.output/original['id'];directory.mkdir(parents=True)
+    prior_file=directory/'transcript.json';prior_file.write_bytes(b'original partial output')
+    assert service.job(original['id'])['can_retry']
+    service.configure({'model':'tiny','device':'auto','video_duration_seconds':10})
+    result=service.retry(original['id']);new_id=result['id']
+    assert result['retried'] and new_id != original['id']
+    assert service.job(new_id)['options']==original['options']
+    assert service.job(new_id)['source_id']==original['source_id']
+    assert service.job(original['id'])['state']=='FAILED'
+    with service.db() as db:
+        owner=scope.ownership(db,'whisperx',new_id)
+    assert owner['project_id']==ctx['project_id'] and owner['video_id']==ctx['video_id']
+    assert scope.ref('whisperx',original['id']) in owner['sources']
+    with pytest.raises(ValueError,match='already queued'):
+        service.retry(original['id'])
+    stub_runner(tmp_path,monkeypatch,"""
+r=json.loads(Path(sys.argv[2]).read_text())
+assert r['options']['language']=='ja' and r['options']['video_duration_seconds']==65
+Path(r['output']).write_text(json.dumps({'segments':[], 'word_segments':[]}))
+""")
+    await service.step()
+    assert service.job(new_id)['state']=='COMPLETED'
+    assert prior_file.read_bytes()==b'original partial output'
+    assert not service.job(new_id)['can_retry']
+    with pytest.raises(ValueError,match='Only failed or interrupted'):
+        service.retry(new_id)
+
+
+@pytest.mark.asyncio
+async def test_restart_quarantines_whisperx_until_explicit_retry(service,monkeypatch):
+    original=service.enqueue(SOURCE_ID,OPTIONS)
+    service.update(original['id'],state='RUNNING')
+    stopped=asyncio.Event()
+    async def first_step():
+        assert service.job(original['id'])['state']=='INTERRUPTED'
+        assert not any(j['state']=='QUEUED' for j in service.jobs())
+        stopped.set()
+        raise asyncio.CancelledError
+    monkeypatch.setattr(service,'step',first_step)
+    with pytest.raises(asyncio.CancelledError):
+        await service.run()
+    assert stopped.is_set()
+    assert service.job(original['id'])['can_retry']
+    assert len(service.jobs())==1
+    result=service.retry(original['id'])
+    assert service.job(result['id'])['state']=='QUEUED'
+    assert service.job(original['id'])['state']=='INTERRUPTED'
+
+
+@pytest.mark.asyncio
+async def test_retry_endpoint_ownership_missing_audio_and_state_checks(service,tmp_path,monkeypatch):
+    import io
+    from starlette.datastructures import UploadFile
+    from httpx import AsyncClient, ASGITransport
+    from agent.db import schema, crud
+    monkeypatch.setattr(schema,'DB_PATH',tmp_path/'project.db')
+    await schema.init_db()
+    try:
+        project=await crud.create_project(name='Owned',material='realistic')
+        video=await crud.create_video(project_id=project['id'],title='One')
+        other=await crud.create_video(project_id=project['id'],title='Two')
+        ctx={'project_id':project['id'],'video_id':video['id']}
+        source=await service.import_audio(UploadFile(io.BytesIO(b'fixture'),filename='original.mp3'),ctx)
+        original=service.enqueue(source['id'],OPTIONS,context=ctx)
+        monkeypatch.setattr(api,'service',service)
+        app=FastAPI();app.include_router(api.router,prefix='/api')
+        route=f"/api/whisperx/jobs/{original['id']}/retry"
+        async with AsyncClient(transport=ASGITransport(app=app),base_url='http://test') as client:
+            assert (await client.post(route,json=ctx)).status_code==409
+            service.update(original['id'],state='INTERRUPTED')
+            response=await client.post(route,json={**ctx,'video_id':other['id']})
+            assert response.status_code==409
+            response=await client.post(route,json=ctx)
+            assert response.status_code==200, response.text
+            assert response.json()['id']!=original['id']
+            assert (await client.post(route,json=ctx)).status_code==409
+            await service.cancel(response.json()['id'])
+            service.resolve_source(source['id'])[1].unlink()
+            response=await client.post(route,json=ctx)
+            assert response.status_code==409 and 'original audio file is missing' in response.text
+    finally:
+        await schema.close_db()

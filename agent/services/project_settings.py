@@ -6,6 +6,7 @@ from contextvars import ContextVar
 from pydantic import BaseModel, Field, field_validator
 from fastapi import HTTPException
 from agent.db.schema import get_db, _db_lock
+from agent.services.production_settings import Production
 
 DEFAULTS = {'chatgpt_url':'https://chatgpt.com/', 'image_prompt_url':'https://chatgpt.com/',
             'video_prompt_url':'https://chatgpt.com/',
@@ -50,6 +51,7 @@ class URLs(BaseModel):
 
 class SettingsBody(URLs):
     revision: int=Field(default=0,ge=0)
+    production: Production = Field(default_factory=Production)
 
 
 async def get(project_id):
@@ -57,7 +59,9 @@ async def get(project_id):
     project=await (await db.execute("SELECT id FROM project WHERE id=? AND status!='DELETED'",(project_id,))).fetchone()
     if not project:raise HTTPException(404,'Project not found.')
     row=await (await db.execute('SELECT value,revision FROM project_settings WHERE project_id=?',(project_id,))).fetchone()
-    return {**DEFAULTS,**(json.loads(row['value']) if row else {}),'revision':row['revision'] if row else 0}
+    value = json.loads(row['value']) if row else {}
+    return {**DEFAULTS, **value, 'production': Production.model_validate(value.get('production', {})).model_dump(),
+            'revision': row['revision'] if row else 0}
 
 
 async def save(project_id,body):
@@ -65,6 +69,9 @@ async def save(project_id,body):
         current=await get(project_id)
         if current['revision']!=body.revision:raise HTTPException(409,'Project settings changed. Reload settings before saving.')
         data=body.model_dump(exclude={'revision'})
+        # Older URL-only clients must not reset production configuration.
+        if 'production' not in body.model_fields_set:
+            data['production'] = current['production']
         db=await get_db()
         await db.execute('INSERT INTO project_settings(project_id,value,revision) VALUES(?,?,?) ON CONFLICT(project_id) DO UPDATE SET value=excluded.value,revision=excluded.revision',
                          (project_id,json.dumps(data),body.revision+1))
@@ -73,7 +80,17 @@ async def save(project_id,body):
 
 
 async def snapshot(ctx):
-    return await get(ctx['project_id']) if ctx.get('project_id') else {}
+    if not ctx.get('project_id'):
+        return {}
+    settings = await get(ctx['project_id'])
+    if ctx.get('video_id'):
+        from agent.services.production_settings import get as video_settings
+        video = await video_settings(ctx['video_id'], project=settings)
+        if video['project_id'] != ctx['project_id']:
+            raise HTTPException(409, 'The selected video belongs to another project.')
+        settings['production'] = video['effective']
+        settings['video_settings_revision'] = video['revision']
+    return settings
 
 
 def flow_project(url,fallback):

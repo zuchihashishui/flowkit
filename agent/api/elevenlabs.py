@@ -19,7 +19,8 @@ class TextBody(BaseModel):
 
 class JobBody(TextBody, Scoped):
     title: str = Field(default='', max_length=200)
-    model: str = Field(default=DEFAULT_MODEL, max_length=100)
+    model: str = Field(default=DEFAULT_MODEL, min_length=1, max_length=100)
+    expected_voice: str = Field(default='', max_length=200)
 
 class ControlBody(BaseModel):
     action: Literal['pause', 'resume', 'review']
@@ -55,7 +56,14 @@ async def enqueue(body: JobBody):
     try:
         ctx=await inputs(body)
         from agent.services.project_settings import snapshot
-        return bridge.enqueue(body.text, body.title, body.model, body.max_chunk_characters, ctx, project_settings=await snapshot(ctx))
+        frozen = await snapshot(ctx)
+        from agent.services.production_settings import TTS
+        inherited = frozen.get('production', {}).get('tts', TTS().model_dump())
+        values = {key: value for key, value in inherited.items() if key not in body.model_fields_set}
+        body = JobBody.model_validate({**body.model_dump(), **values})
+        actual = TTS(model=body.model, expected_voice=body.expected_voice, max_chunk_characters=body.max_chunk_characters).model_dump()
+        frozen.setdefault('production', {})['tts'] = actual
+        return bridge.enqueue(body.text, body.title, actual['model'], actual['max_chunk_characters'], ctx, project_settings=frozen)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 

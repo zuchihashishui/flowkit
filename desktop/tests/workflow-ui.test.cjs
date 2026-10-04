@@ -7,6 +7,28 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const flush=async()=>{for(let i=0;i<10;i++)await tick();await new Promise(r=>setTimeout(r,30));};
 const ctx=video_id=>({project_id:'project-'+video_id,video_id});
 
+test('blocked preflight never submits a paid job; successful checks freeze the original video',async()=>{
+ const s=await studio(),{w,calls}=s;
+ try{
+  const checks=[];
+  w.production={check:async(stage,body)=>{checks.push({stage,body});return false;}};
+  await assert.rejects(w.workflow.api('POST','/api/elevenlabs/jobs',{text:'Narration'}),/Preflight blocked/);
+  assert.equal(checks[0].stage,'elevenlabs');assert.equal(checks[0].body.video_id,'a');
+  assert(!calls.some(c=>c.method==='POST'&&c.route==='/api/elevenlabs/jobs'));
+  let release;
+  w.production.check=()=>new Promise(resolve=>{release=resolve;});
+  const pending=w.workflow.api('POST','/api/srt/jobs',{source_id:'json-a',prompt:'Convert this'});
+  const rejected=assert.rejects(pending,/active project or video changed/i);
+  await tick();await s.select('b');release(true);await rejected;
+  assert(!calls.some(c=>c.method==='POST'&&c.route==='/api/srt/jobs'));
+  w.production.check=async(stage,body)=>{checks.push({stage,body});return true;};
+  await w.workflow.api('POST','/api/whisperx/jobs',{source_id:'el-b',device:'cpu'});
+  assert.equal(checks.at(-1).body.device,'cpu');
+  const submitted=calls.find(c=>c.method==='POST'&&c.route==='/api/whisperx/jobs');
+  assert.equal(submitted.body.video_id,'b');assert.equal(submitted.body.source_id,'el-b');
+ }finally{s.dom.window.close();}
+});
+
 async function studio(sameProject=false){
  const context=id=>sameProject?{project_id:'shared-project',video_id:id}:ctx(id);
  const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'../ui/index.html'),'utf8'),{runScripts:'outside-only',url:'https://studio.test'});

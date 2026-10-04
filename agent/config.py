@@ -62,7 +62,8 @@ MAX_CONCURRENT_REQUESTS = int(os.environ.get("MAX_CONCURRENT_REQUESTS", "5"))  #
 STALE_PROCESSING_TIMEOUT = int(os.environ.get("STALE_PROCESSING_TIMEOUT", "600"))  # 10 min
 
 # ─── Model Keys (loaded from models.json for easy updates) ──
-_MODELS_FILE = Path(__file__).parent / "models.json"
+_RESTORED_MODELS_FILE = BASE_DIR / "config" / "models.json"
+_MODELS_FILE = _RESTORED_MODELS_FILE if _RESTORED_MODELS_FILE.is_file() else Path(__file__).parent / "models.json"
 with open(_MODELS_FILE) as _f:
     _MODELS = json.load(_f)
 
@@ -95,7 +96,8 @@ REVIEW_SHEET_COLS = int(os.environ.get("REVIEW_SHEET_COLS", "3"))
 REVIEW_SHEET_ROWS = int(os.environ.get("REVIEW_SHEET_ROWS", "3"))
 
 # ─── CLI Providers (video review vision analysis) ────────────
-_PROVIDERS_FILE = Path(__file__).parent / "providers.json"
+_RESTORED_PROVIDERS_FILE = BASE_DIR / "config" / "providers.json"
+_PROVIDERS_FILE = _RESTORED_PROVIDERS_FILE if _RESTORED_PROVIDERS_FILE.is_file() else Path(__file__).parent / "providers.json"
 with open(_PROVIDERS_FILE) as _pvf:
     CLI_PROVIDERS = json.load(_pvf)  # mutable dict, hot-reloaded like VIDEO_MODELS
 REVIEW_CLI_TIMEOUT_S = float(os.environ.get("REVIEW_CLI_TIMEOUT_S", "120"))

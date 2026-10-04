@@ -1,7 +1,20 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const api = (method, path, body) => {
-  if(method==='POST'&&(path==='/api/desktop/jobs'||/^\/api\/storyboard\/videos\/[^/]+\/(generate-concepts|generate-media|retry-failed)$/.test(path)))window.projectSettings?.assertSaved();
+const api = async (method, path, body) => {
+  const productionWrite=method==='POST'&&(path==='/api/desktop/jobs'||/^\/api\/storyboard\/videos\/[^/]+\/(generate-concepts|generate-media|retry-failed)$/.test(path));
+  if(productionWrite){
+    window.projectSettings?.assertSaved();window.videoSettings?.assertSaved();
+    const ctx=window.workflow?.context();let stage,options={...body};
+    if(path==='/api/desktop/jobs'){
+      const media=body.jobs?.filter(j=>j.kind!=='voice')||[];
+      if(media.length){stage=media[0].kind==='image'?'images':'videos';options={direct_jobs:media};}
+    }else if(path.endsWith('/generate-concepts')||body.kind==='concept')stage=body.prompt_kind==='video'?'video_prompts':'image_prompts';
+    else stage=body.kind==='image'?'images':'videos';
+    if(stage&&window.production&&ctx?.video_id){
+      if(!await window.production.check(stage,{...options,...ctx,silentOnSuccess:true}))throw Error('Preflight blocked this request. Resolve the listed checks before starting.');
+      window.workflow.assertCurrent(ctx);
+    }
+  }
   return window.studio.api(method, path, body);
 };
 const ACTIVE = ['RUNNING', 'SUBMITTING', 'DOWNLOADING'];
@@ -32,6 +45,7 @@ function notice(text, error = false) {
 }
 function show(page) {
   if (page === 'storyboard') action(() => window.storyboard?.open());
+  if (page === 'scene-board') action(() => window.sceneBoard?.open());
   document.querySelectorAll('[data-view]').forEach(e => e.hidden = e.dataset.view !== page);
   document.querySelectorAll('[data-page]').forEach(e => e.classList.toggle('active', e.dataset.page === page));
   $('heading').textContent = document.querySelector(`[data-page="${page}"]`).textContent;
@@ -112,6 +126,8 @@ async function refreshProjects() {
 }
 async function selectProject(reload=false) {
   if(!reload&&$('project-select').value===loadedProject){syncProjectContext();return;}
+  if(window.sceneBoard?.canChangeProject&&!window.sceneBoard.canChangeProject()){$('project-select').value=loadedProject;notice('Wait for the Scene Board action to finish before changing projects.',true);return;}
+  if(window.videoSettings&&!window.videoSettings.canChangeProject($('project-select').value)){$('project-select').value=loadedProject;return;}
   if(window.projectSettings&&!window.projectSettings.canChangeProject($('project-select').value)){$('project-select').value=loadedProject;return;}
   if(sceneSaving){$('project-select').value=loadedProject;notice('Wait for the scene to finish saving.',true);return;}
   if(editorDirty&&!confirm('Discard unsaved scene changes?')){$('project-select').value=loadedProject;return;}
@@ -159,13 +175,42 @@ async function refreshVideos(preferred){
   await loadScenes();renderVideos();syncProjectContext();
 }
 async function selectVideo(id){
+  if(id!==loadedCollection&&window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){$('video-select').value=loadedCollection;notice('Wait for the Scene Board action to finish before changing videos.',true);return;}
   if(!discardSceneEdit())return;
   $('video-select').value=id;
   await loadScenes();renderVideos();
 }
 
+window.selectProductionVideo=async(id,page)=>{
+  const destination=[...document.querySelectorAll('[data-page]')].find(el=>el.dataset.page===page);
+  if(!destination)throw Error('Unknown production stage.');
+  const pid=loadedProject,projectVersion=projectRequest;
+  if(!pid||!videos.some(v=>v.id===id))throw Error('Video does not belong to the active project. Refresh Project.');
+  if(id!==loadedCollection)await selectVideo(id);
+  if(loadedProject!==pid||projectVersion!==projectRequest||loadedCollection!==id)return false;
+  if(page==='image'||page==='video'){
+    await window.storyboard?.open();
+    if(loadedProject!==pid||projectVersion!==projectRequest||loadedCollection!==id)return false;
+    $(page+'-mode').value='storyboard';updateInputSummary();
+  }
+  destination.click();return true;
+};
+window.focusProductionJob=async id=>{
+  const pid=loadedProject,vid=loadedCollection;
+  await refreshJobs();
+  if(pid!==loadedProject||vid!==loadedCollection)return false;
+  const job=jobs.find(j=>j.id===id&&j.payload.project_id===pid&&j.payload.video_id===vid);
+  if(!job)throw Error('This job does not belong to the active video, or is no longer available.');
+  $('job-scope').value='video';$('job-kind').value='';$('job-state').value='';$('job-search').value=id;
+  renderJobs();showJobDetails(job);$('job-details').scrollIntoView?.({block:'nearest'});return true;
+};
+window.refreshStudioProjects=refreshProjects;
+
 async function loadScenes() {
-  const id = $('video-select').value, request = ++sceneRequest;
+  const id = $('video-select').value;
+  if(id!==loadedCollection&&window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){$('video-select').value=loadedCollection;notice('Wait for the Scene Board action to finish before changing videos.',true);return;}
+  const request = ++sceneRequest;
+  if(window.videoSettings&&!window.videoSettings.canChangeVideo(id)){$('video-select').value=loadedCollection;return;}
   if(id!==loadedCollection&&window.storyboard?.canChangeVideo&&!window.storyboard.canChangeVideo(id)){$('video-select').value=loadedCollection;return;}
   if(loadedCollection!==id){
     detailId=null;
@@ -319,7 +364,7 @@ onForm('project-form', async () => {
 });
 onForm('edit-project', async () => { await api('PATCH', '/api/projects/' + projectId(), {name: $('edit-name').value}); await refreshProjects(); notice('Project updated.'); });
 onForm('create-video',async()=>{
-  const pid=projectId();if(!discardSceneEdit()||window.storyboard?.canChangeVideo&&!window.storyboard.canChangeVideo(''))return;
+  const pid=projectId();if(window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){notice('Wait for the Scene Board action to finish before creating a video.',true);return;}if(!discardSceneEdit()||window.storyboard?.canChangeVideo&&!window.storyboard.canChangeVideo(''))return;
   const title=$('new-video-title').value.trim();if(!title)throw Error('Enter a video title.');
   const created=await api('POST','/api/videos',{project_id:pid,title,orientation:$('new-video-orientation').value});
   if(pid!==loadedProject){notice('Video created in its original project.');return;}
@@ -373,7 +418,7 @@ onForm('voice-form', async () => {
   await api('POST', '/api/desktop/jobs', {jobs: payload}); await refreshJobs(); notice(`${payload.length} narration job(s) queued.`);
 });
 $('project-select').onchange = () => action(selectProject);
-$('video-select').onchange = () => action(async () => { if (!discardSceneEdit()) { $('video-select').value = loadedCollection; return; } await loadScenes(); });
+$('video-select').onchange = () => action(async () => { if($('video-select').value!==loadedCollection&&window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){$('video-select').value=loadedCollection;notice('Wait for the Scene Board action to finish before changing videos.',true);return;} if (!discardSceneEdit()) { $('video-select').value = loadedCollection; return; } await loadScenes(); });
 $('refresh-projects').onclick = () => action(refreshProjects);
 $('refresh-videos').onclick=()=>action(async()=>{if(discardSceneEdit())await refreshVideos();},$('refresh-videos'));
 $('refresh-jobs').onclick = () => action(refreshJobs);
@@ -438,6 +483,7 @@ async function initialize() {
       const mats = await api('GET', '/api/materials'); $('material').replaceChildren(...mats.map(m => option(m.id, m.name)));
       const models = await api('GET', '/api/models');
       $('image-model').replaceChildren(option('', 'Backend default'), ...Object.entries(models.image_models || {}).map(([name, key]) => option(key, name)));
+      window.productionDefaults?.restore('image-model');
       notice('Ready. Connect the Chrome extension to create images and videos.'); await heartbeat(); return;
     } catch (e) { if (attempt === 14) throw e; await new Promise(r => setTimeout(r, 1000)); }
   }

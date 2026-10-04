@@ -449,6 +449,9 @@ class MediaBody(BaseModel):
 
 @router.post('/videos/{video_id}/generate-media')
 async def generate_media(video_id: str, body: MediaBody):
+    from agent.services.production_settings import apply_stage
+    video=await one('SELECT project_id FROM video WHERE id=?',(video_id,))
+    body=await apply_stage(body,'media',{'project_id':video['project_id'],'video_id':video_id})
     # Freeze the selected source revisions until their immutable jobs are saved.
     async with _db_lock:
         from agent.api import desktop

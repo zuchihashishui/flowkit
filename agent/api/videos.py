@@ -68,3 +68,18 @@ async def delete(vid: str):
     if not await _repo.delete("video", vid):
         raise HTTPException(404, "Video not found")
     return {"ok": True}
+
+
+from agent.services.production_settings import VideoSettingsBody
+
+
+@router.get('/{vid}/settings')
+async def read_settings(vid: str):
+    from agent.services.production_settings import get
+    return await get(vid)
+
+
+@router.put('/{vid}/settings')
+async def write_settings(vid: str, body: VideoSettingsBody):
+    from agent.services.production_settings import save
+    return await save(vid, body)

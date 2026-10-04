@@ -11,7 +11,7 @@ router = APIRouter(prefix='/srt', tags=['srt'])
 
 class Job(Scoped):
     source_id: UUID
-    prompt: str = Field(min_length=1, max_length=100000)
+    prompt: str | None = Field(default=None, min_length=1, max_length=100000)
     model: str = Field(default='GPT-6 Astra', min_length=1, max_length=100)
     timeout: int = Field(default=1800, ge=60, le=1800)
     duration_seconds: float | None = Field(default=None, gt=0, le=86400)
@@ -38,12 +38,13 @@ async def import_json(file: UploadFile = File(...), project_id: str | None = For
 @router.post('/jobs')
 async def enqueue(body: Job):
     try:
-        if not body.prompt.strip() or not body.model.strip():
-            raise ValueError('Enter a prompt and model name.')
         kind = 'json' if any(s['id'] == str(body.source_id) for s in service.sources()) else 'whisperx'
         ctx = await inputs(body, [scope.ref(kind, body.source_id)])
         from agent.services.project_settings import snapshot
-        return service.enqueue(str(body.source_id), body.prompt, body.model.strip(), body.timeout, ctx, duration_seconds=body.duration_seconds, project_settings=await snapshot(ctx))
+        settings=await snapshot(ctx)
+        prompt=body.prompt if body.prompt is not None else settings.get('production',{}).get('srt',{}).get('instructions','')
+        if not prompt.strip() or not body.model.strip():raise ValueError('Enter a prompt and model name, or save SRT instructions in Project Settings.')
+        return service.enqueue(str(body.source_id), prompt, body.model.strip(), body.timeout, ctx, duration_seconds=body.duration_seconds, project_settings=settings)
     except (ValueError, KeyError, FileNotFoundError) as e:
         raise HTTPException(409, str(e)) from e
 

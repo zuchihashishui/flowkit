@@ -577,7 +577,11 @@ class ElevenLabsBridge:
         not_submitted = False
         remote_locked = False
         try:
-            page_url = scope.load_settings(self,'elevenlabs',job['job_id']).get('elevenlabs_url')
+            frozen = scope.load_settings(self, 'elevenlabs', job['job_id'])
+            page_url = frozen.get('elevenlabs_url')
+            # The first chunk checks the configured label. Later chunks must
+            # retain the actual voice used in the first saved chunk.
+            expected_voice = expected_voice or frozen.get('production', {}).get('tts', {}).get('expected_voice') or None
             if page_url and not self.project_urls:
                 not_submitted=True
                 raise BridgeError('Reload the updated ElevenLabs extension for project URLs. No speech was generated.')

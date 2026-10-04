@@ -9,9 +9,17 @@
  function assertCurrent(ctx){if(key(ctx)!==key(current))throw Error('The active project or video changed. Your result remains saved with its original video.');}
  async function api(method,route,body){
   const ctx={...current},ticket=generation;
-  if(method==='POST'&&['/api/elevenlabs/jobs','/api/srt/jobs'].includes(route))window.projectSettings?.assertSaved();
+  const stage=method==='POST'?({'/api/elevenlabs/jobs':'elevenlabs','/api/whisperx/jobs':'whisperx','/api/srt/jobs':'srt','/api/assembly/jobs':'assembly'})[route]:null;
+  if(stage||method==='POST'&&/^\/api\/whisperx\/jobs\/[a-f0-9-]{36}\/retry$/.test(route)){
+   window.projectSettings?.assertSaved();window.videoSettings?.assertSaved();
+   if(stage&&window.production){
+    const options=stage==='assembly'?{plan:body}:body;
+    if(!await window.production.check(stage,{...options,...requireContext(),silentOnSuccess:true}))throw Error('Preflight blocked this request. Resolve the listed checks before starting.');
+    assertCurrent(ctx);
+   }
+  }
   if(method==='GET'&&listings.has(route))route+='?'+new URLSearchParams(ctx.project_id&&ctx.video_id?ctx:{unassigned:'true'});
-  if(method==='POST'&&(scopedWrites.has(route)||/^\/api\/assembly\/jobs\/[a-f0-9-]{36}\/resume$/.test(route)))body={...body,...requireContext()};
+  if(method==='POST'&&(scopedWrites.has(route)||/^\/api\/whisperx\/jobs\/[a-f0-9-]{36}\/retry$/.test(route)||/^\/api\/assembly\/jobs\/[a-f0-9-]{36}\/resume$/.test(route)))body={...body,...requireContext()};
   const result=await raw(method,route,body);
   if(ticket!==generation)throw Error('Active project or video changed; refreshing its sources.');
   return result;

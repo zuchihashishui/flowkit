@@ -22,6 +22,31 @@ EXTENSIONS = {'srt': {'.srt'}, 'audio': {'.mp3', '.wav', '.m4a', '.aac', '.flac'
 SIZES = {'1080p': (1920, 1080), '720p': (1280, 720), 'vertical': (1080, 1920)}
 
 
+def image_motion_filter(width, height, fps, frames, fit, motion):
+    """A centered 10% zoom over exactly one scene, sampled at output frame times.
+
+    Work at double resolution to reduce integer crop jitter. Fit scales the image
+    inside a padded canvas so even the closest frame retains the whole image;
+    crop fills the canvas throughout. One-frame scenes use the starting framing.
+    """
+    if motion not in {'zoom_in', 'zoom_out'}:
+        raise ValueError('Choose None, Slow zoom in or Slow zoom out for still images.')
+    work_width, work_height = width * 2, height * 2
+    if fit == 'fit':
+        fit_width = 2 * math.floor(work_width / 1.1 / 2)
+        fit_height = 2 * math.floor(work_height / 1.1 / 2)
+        framing = (f'scale={fit_width}:{fit_height}:force_original_aspect_ratio=decrease,'
+                   f'pad={work_width}:{work_height}:(ow-iw)/2:(oh-ih)/2:color=black')
+    else:
+        framing = (f'scale={work_width}:{work_height}:force_original_aspect_ratio=increase,'
+                   f'crop={work_width}:{work_height}')
+    progress = f'min(on/{max(1, frames-1)},1)'
+    zoom = f'1+0.1*{progress}' if motion == 'zoom_in' else f'1.1-0.1*{progress}'
+    return (f"{framing},setsar=1,zoompan=z='{zoom}':x='iw/2-iw/zoom/2':"
+            f"y='ih/2-ih/zoom/2':d={frames}:s={width}x{height}:fps={fps},"
+            'setsar=1,format=yuv420p')
+
+
 def cues_from_srt(data):
     text, _ = parse_srt(data.decode('utf-8-sig'))
     cues = []
@@ -188,6 +213,9 @@ class AssemblyService:
             return await self.import_upload(kind, Reader(), context, [parent])
 
     def plan(self, body):
+        image_motion = body.get('image_motion', 'none')
+        if image_motion not in {'none', 'zoom_in', 'zoom_out'}:
+            raise ValueError('Choose None, Slow zoom in or Slow zoom out for still images.')
         audio = self.asset(body['audio_id'], 'audio')
         subtitle = self.asset(body['srt_id'], 'srt')
         _, cues = cues_from_srt(self.path(subtitle).read_bytes())
@@ -235,13 +263,15 @@ class AssemblyService:
                     warnings.append(f'Scene {key}: short clip will {"hold its last frame" if clip_action == "freeze" else "loop"}.')
             scenes.append({**cue, 'scene_key': key, 'asset_id': aid, 'kind': kind, 'allowed_kind': 'image' if mode == 'images' else 'any',
                 'image_id': aid if kind == 'image' else None, 'clip_action': clip_action,
+                'image_motion': image_motion if kind == 'image' else 'none',
                 'start_frame': start, 'frames': end-start, 'visual_start': start/body['fps'], 'visual_end': end/body['fps'],
                 'image_start': start/body['fps'], 'image_end': end/body['fps']})
         used = {c['asset_id'] for c in scenes}
-        return {**body, 'duration': duration, 'audio_title': audio['title'], 'srt_title': subtitle['title'],
+        return {**body, 'image_motion': image_motion, 'duration': duration, 'audio_title': audio['title'], 'srt_title': subtitle['title'],
             'scenes': scenes, 'missing': [c['index'] for c in scenes if not c['asset_id']],
             'unused': [a['title'] for a in visuals if a['id'] not in used], 'warnings': warnings,
-            'timeline_note': 'Each SRT scene uses one image or video. Visuals cover the full narration; each stays until the next cue starts. The SRT is unchanged. Boundaries are rounded to the frame rate. Clip audio is muted; only narration is used.'}
+            'timeline_note': 'Each SRT scene uses one image or video. Visuals cover the full narration; each stays until the next cue starts. The SRT is unchanged. Boundaries are rounded to the frame rate. Clip audio is muted; only narration is used.' +
+                (f' Still images use slow zoom {"in" if image_motion == "zoom_in" else "out"}; video clips keep their original motion.' if image_motion != 'none' else '')}
 
     def enqueue(self, body, context=None):
         plan = self.plan(body)
@@ -309,7 +339,7 @@ class AssemblyService:
         mode = plan['fit']
         scale = (f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black' if mode == 'fit'
                  else f'scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}') + ',setsar=1'
-        has_video = plan.get('render_version') == 2 or any(c.get('kind') == 'video' for c in plan['scenes'])
+        has_video = plan.get('render_version') == 2 or plan.get('image_motion', 'none') != 'none' or any(c.get('kind') == 'video' for c in plan['scenes'])
         lines = ['ffconcat version 1.0']
         render_start = 55 if has_video else 10
         if has_video:
@@ -337,6 +367,8 @@ class AssemblyService:
                     args += ['-stream_loop', '-1']
                 args += ['-i', self.path(asset), '-map', '0:v:0', '-an', '-sn', '-dn']
                 vf = f"setpts=PTS-STARTPTS,{scale},fps={plan['fps']},format=yuv420p"
+                if cue['kind'] == 'image' and plan.get('image_motion', 'none') != 'none':
+                    vf = image_motion_filter(width, height, plan['fps'], cue['frames'], mode, plan['image_motion'])
                 if cue['kind'] == 'video' and plan.get('clip_end', 'freeze') == 'freeze':
                     vf += f",tpad=stop_mode=clone:stop_duration={cue['frames']/plan['fps']}"
                 args += ['-vf', vf, '-filter_threads', '2', '-frames:v', str(cue['frames']),

@@ -160,6 +160,12 @@ CREATE INDEX IF NOT EXISTS idx_request_status ON request(status);
 CREATE INDEX IF NOT EXISTS idx_request_scene ON request(scene_id);
 CREATE INDEX IF NOT EXISTS idx_video_project ON video(project_id);
 
+CREATE TABLE IF NOT EXISTS video_settings (
+    video_id TEXT PRIMARY KEY REFERENCES video(id) ON DELETE CASCADE,
+    value TEXT NOT NULL DEFAULT '{}',
+    revision INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS project_settings (
     project_id TEXT PRIMARY KEY REFERENCES project(id) ON DELETE CASCADE,
     value TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0

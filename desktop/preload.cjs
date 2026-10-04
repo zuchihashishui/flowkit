@@ -1,5 +1,7 @@
 const {contextBridge, ipcRenderer} = require('electron');
 contextBridge.exposeInMainWorld('studio', Object.freeze({
+  maintenanceSaveBackup: id => ipcRenderer.invoke('maintenance-save-backup', id),
+  maintenanceRestore: () => ipcRenderer.invoke('maintenance-restore'),
   openProjectPage: (projectId, key) => ipcRenderer.invoke('open-project-page', projectId, key),
   assemblyImport: (kind, context) => ipcRenderer.invoke('assembly-import', kind, context),
   assemblyMedia: (id, action) => ipcRenderer.invoke('assembly-media', id, action),

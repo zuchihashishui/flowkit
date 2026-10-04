@@ -86,13 +86,23 @@ class WorkerController:
             logger.warning("Drain timeout: %d tasks still active after %.0fs", len(self._active_ids), timeout)
 
     async def _cleanup_stale_processing(self):
-        """Reset any requests stuck in PROCESSING state from a previous run."""
+        """Resume saved operation polling; quarantine uncertain submissions."""
         try:
             stale = await crud.list_requests(status="PROCESSING")
             for req in stale:
-                await crud.update_request(req["id"], status="PENDING",
-                                          error_message="reset: stale PROCESSING on startup")
-                logger.warning("Stale request reset: %s type=%s", req["id"][:8], req.get("type"))
+                # These operations have a durable provider operation ID and
+                # explicitly re-poll it before any submit call. Image generation
+                # has no such checkpoint: resubmitting after a crash costs again.
+                can_poll = (req.get('type') in {'GENERATE_VIDEO', 'REGENERATE_VIDEO', 'GENERATE_VIDEO_REFS', 'UPSCALE_VIDEO'}
+                            and isinstance(req.get('request_id'), str) and bool(req['request_id'].strip()))
+                status = 'PENDING' if can_poll else 'FAILED'
+                message = ('Backend restarted; resume polling the saved operation without generating again.' if can_poll else
+                           'NEEDS_REVIEW: Backend restarted during generation. Inspect the Google Flow page and saved media before manually retrying; credits may already have been used.')
+                # FAILED is the legacy schema's terminal state. Preserve all
+                # provider IDs and URLs so review never discards saved work.
+                await crud.update_request(req['id'], status=status, error_message=message)
+                await event_bus.emit('request_update', {'id':req['id'], 'status':status, 'error':message})
+                logger.warning("Stale request recovered: %s type=%s status=%s", req["id"][:8], req.get("type"), status)
             if stale:
                 logger.info("Cleaned up %d stale PROCESSING requests", len(stale))
         except Exception as e:

@@ -28,4 +28,9 @@ def save(folder, data):
 def key(plan, cue, source_digest):
     payload = {'version':1,'source':source_digest,'kind':cue['kind'],'frames':cue['frames'],
                **{k:plan.get(k) for k in ['size','fps','fit','clip_end']}}
+    # Preserve existing no-motion checkpoints and never invalidate video clips
+    # for an image-only setting. Motion frames use a distinct renderer version.
+    motion = plan.get('image_motion', 'none')
+    if cue['kind'] == 'image' and motion != 'none':
+        payload.update(image_motion=motion, image_motion_version=1)
     return hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).hexdigest()
