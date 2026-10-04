@@ -9,6 +9,7 @@
  function assertCurrent(ctx){if(key(ctx)!==key(current))throw Error('The active project or video changed. Your result remains saved with its original video.');}
  async function api(method,route,body){
   const ctx={...current},ticket=generation;
+  if(method==='POST'&&['/api/elevenlabs/jobs','/api/srt/jobs'].includes(route))window.projectSettings?.assertSaved();
   if(method==='GET'&&listings.has(route))route+='?'+new URLSearchParams(ctx.project_id&&ctx.video_id?ctx:{unassigned:'true'});
   if(method==='POST'&&(scopedWrites.has(route)||/^\/api\/assembly\/jobs\/[a-f0-9-]{36}\/resume$/.test(route)))body={...body,...requireContext()};
   const result=await raw(method,route,body);

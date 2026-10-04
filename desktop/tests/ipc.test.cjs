@@ -6,7 +6,7 @@ const os = require('node:os');
 const vm = require('node:vm');
 const {pathToFileURL} = require('node:url');
 
-const compatibleHealth = {studio_api:3,studio_features:{project_multi_video:true,project_video_sources:true,elevenlabs_native_download_files:true,elevenlabs_unlimited_native_audio:true,elevenlabs_recover_downloads:true,elevenlabs_safe_pre_submit_failures:true,elevenlabs_auto_prepare_tab:true}};
+const compatibleHealth = {studio_api:3,studio_features:{project_multi_video:true,project_provider_urls:true,project_video_sources:true,elevenlabs_native_download_files:true,elevenlabs_unlimited_native_audio:true,elevenlabs_recover_downloads:true,elevenlabs_safe_pre_submit_failures:true,elevenlabs_auto_prepare_tab:true}};
 async function mainProcess(folder, reply, health=compatibleHealth) {
   const handlers = new Map(), requests = [];
   let win, ready;
@@ -17,7 +17,7 @@ async function mainProcess(folder, reply, health=compatibleHealth) {
   }
   const electron = {
     app:{whenReady:()=>Promise.resolve(),getPath:()=>folder,on(){}},
-    BrowserWindow:Window,ipcMain:{handle:(name,fn)=>handlers.set(name,fn)},dialog:{showSaveDialog:async()=>({canceled:false,filePath:path.join(folder,'chat-results.json')}),showOpenDialog:async()=>({canceled:false,filePaths:[path.join(folder,'sample.mp3')]})},shell:{}
+    BrowserWindow:Window,ipcMain:{handle:(name,fn)=>handlers.set(name,fn)},dialog:{showSaveDialog:async()=>({canceled:false,filePath:path.join(folder,'chat-results.json')}),showOpenDialog:async()=>({canceled:false,filePaths:[path.join(folder,'sample.mp3')]})},shell:{openExternal:async url=>{requests.push({opened:url});}}
   };
   const root=path.resolve(__dirname,'..');
   const source=await fs.readFile(path.join(root,'main.cjs'),'utf8');
@@ -309,5 +309,20 @@ test('multi-video creation cannot fall back to an old one-video backend',async()
   const main=await mainProcess(folder,undefined,health);
   await assert.rejects(main.invoke('api','POST','/api/videos',{project_id:'p',title:'New topic'}),/multiple videos per project/);
   assert.equal(main.requests.some(r=>r.url.endsWith('/api/videos')),false);
+ }finally{await fs.rm(folder,{recursive:true,force:true});}
+});
+
+test('Project Settings IPC opens only the saved service URL and rejects an older backend before submitting prompts',async()=>{
+ const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-project-settings-'));
+ try{
+  const main=await mainProcess(folder,{ok:true,text:async()=>JSON.stringify({image_prompt_url:'https://chatgpt.com/g/g-channel-image'})});
+  await main.invoke('api','GET','/api/projects/project-a/settings');
+  await main.invoke('api','PUT','/api/projects/project-a/settings',{revision:0,image_prompt_url:'https://chatgpt.com/g/g-channel-image'});
+  await main.invoke('open-project-page','project-a','image_prompt_url');
+  assert.ok(main.requests.some(r=>r.opened==='https://chatgpt.com/g/g-channel-image'));
+  await assert.rejects(main.invoke('open-project-page','project-a','https://example.com'),/supported service/);
+  const stale=await mainProcess(folder,undefined,{...compatibleHealth,studio_features:{...compatibleHealth.studio_features,project_provider_urls:false}});
+  await assert.rejects(stale.invoke('api','POST','/api/storyboard/videos/video-a/generate-concepts',{prompt_kind:'image'}),/project URLs/);
+  assert.equal(stale.requests.some(r=>r.url.endsWith('/generate-concepts')),false);
  }finally{await fs.rm(folder,{recursive:true,force:true});}
 });

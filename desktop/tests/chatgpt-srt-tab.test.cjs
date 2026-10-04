@@ -125,3 +125,26 @@ test('closed managed text slots remain ready after extension restart',async()=>{
  assert.equal(b.saved.workers[0].state,'IDLE');
  await b.request('reopened','worker-1',{freshTab:false,attachment:undefined,composerMode:'chat',temporary:true});await until(()=>b.messages.length===1);await b.complete('reopened');
 });
+
+test('project GPT jobs allocate three windows once and reuse each tab with the request URL',async()=>{
+ const b=await bridge();await b.send({type:'ensureTextWorkers',controlId:'prepare'});
+ assert.equal(b.saved.workers.length,3);assert.equal(b.created.length,0);
+ const image='https://chatgpt.com/g/g-image-project',video='https://chatgpt.com/g/g-video-project';
+ const opts=url=>({freshTab:false,attachment:undefined,composerMode:'chat',temporary:false,model:'auto',pageUrl:url});
+ for(let i=1;i<=3;i++)await b.request('gpt-'+i,'worker-'+i,opts(image));
+ await until(()=>b.messages.length===3);
+ assert.equal(b.created.length,3);assert.ok(b.created.every(t=>t.url===image));
+ assert.ok(b.messages.every(m=>m.customGPT&&m.pageUrl===image&&!m.attachment&&m.temporary===false));
+ for(let i=1;i<=3;i++){await b.complete('gpt-'+i);await b.send({type:'commit',requestId:'gpt-'+i,controlId:'c'+i,ok:true});}
+ await b.request('next-project','worker-1',opts(video));await until(()=>b.messages.length===4);
+ assert.equal(b.created.length,3);assert.equal(b.updated.at(-1).url,video);assert.equal(b.messages.at(-1).pageUrl,video);
+ assert.equal(b.messages[0].id,b.messages[3].id);await b.complete('next-project');
+});
+test('invalid project destinations are rejected before opening a tab or typing',async()=>{
+ const b=await bridge();await b.send({type:'ensureTextWorkers',controlId:'prepare'});
+ for(const pageUrl of ['https://example.com/','https://chatgpt.com/c/old']){
+  await b.request('bad','worker-1',{freshTab:false,attachment:undefined,temporary:false,pageUrl});
+  assert.equal(b.replies.at(-1).not_submitted,true);
+ }
+ assert.equal(b.created.length,0);assert.equal(b.messages.length,0);
+});

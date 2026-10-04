@@ -248,7 +248,7 @@ class SRTService:
             db.execute('UPDATE srt_quality SET approved_at=? WHERE job_id=?', (time.time(), jid))
         return self.quality(jid)
 
-    def enqueue(self, source_id, prompt, model, timeout, context=None, *, method=alignment.METHOD, duration_seconds=None):
+    def enqueue(self, source_id, prompt, model, timeout, context=None, *, method=alignment.METHOD, duration_seconds=None, project_settings=None):
         plan = self.analyze(source_id, duration_seconds) if method == alignment.METHOD else None
         if plan and plan['report']['status'] == 'BLOCKED':
             raise ValueError('Transcript checks failed. Use Check transcript to inspect missing or inconsistent source data.')
@@ -269,6 +269,7 @@ class SRTService:
                            (jid, method, json.dumps(plan['report'], ensure_ascii=False), json.dumps(quality_summary(plan['report']), ensure_ascii=False)))
             db.execute('INSERT INTO srt_jobs VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                        (jid, source['id'], source['title'], prompt, model, timeout, 'QUEUED', None, None, now, now))
+            scope.save_settings(db,'srt',jid,project_settings)
             scope.record(db, 'srt', jid, context, [scope.ref('json', source['id'])])
         return {'id': jid}
 
@@ -335,7 +336,10 @@ class SRTService:
                 return srt
             await gateway.complete(job['prompt'] + (alignment.instruction(plan) if plan else OUTPUT_INSTRUCTION), job['model'], validate=save,
                 attachment={'name': 'transcript-' + job['source_id'] + '.json', 'base64': base64.b64encode(data).decode()},
-                composer_mode='work', temporary=False, timeout_seconds=job['timeout'], fresh_tab=True)
+                composer_mode='work', temporary=False, timeout_seconds=job['timeout'], fresh_tab=True,
+                **({'page_url':scope.load_settings(self,'srt',jid)['chatgpt_url']} if scope.load_settings(self,'srt',jid).get('chatgpt_url') else {}))
+        except gateway.GatewayNotSubmitted as e:
+            self.update(jid, 'FAILED', str(e))
         except gateway.GatewayBusy as e:
             self.update(jid, 'QUEUED', str(e))
         except BaseException as e:

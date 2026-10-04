@@ -35,3 +35,14 @@ test('next Flow operation waits for tab cleanup, then gets a fresh window',async
  const close=b.run('closeSavedFlowTabs()');await tick();const next=b.run('openFlowWindow()');await tick();assert.equal(b.windows.length,1);
  release();await close;const reopened=await next;assert.notEqual(reopened.id,first.id);assert.equal(b.windows.length,2);
 });
+
+test('Flow routes each project to its configured page and deduplicates concurrent opens',async()=>{
+ const b=await setup();const a='https://flow.google.com/project/11111111-2222-3333-4444-555555555555',other='https://flow.google.com/project/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+ const [x,y]=await b.run(`Promise.all([openFlowWindow({url:${JSON.stringify(a)}}),openFlowWindow({url:${JSON.stringify(a)}})])`);
+ assert.equal(x.id,y.id);assert.equal(b.windows.length,1);assert.equal(b.windows[0].url,a);
+ const z=await b.run(`openFlowWindow({url:${JSON.stringify(other)}})`);assert.notEqual(z.id,x.id);
+ const root=await b.run('openFlowWindow()');assert.notEqual(root.id,x.id);assert.notEqual(root.id,z.id);
+ b.tabs.get(x.id).url=other;
+ const fresh=await b.run(`openFlowWindow({url:${JSON.stringify(a)}})`);assert.notEqual(fresh.id,x.id);assert.equal(fresh.url,a);
+ await b.run('closeSavedFlowTabs()');assert.ok(b.tabs.has(2));assert.equal(b.saved.ownedFlowTabs.length,0);
+});

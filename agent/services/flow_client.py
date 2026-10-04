@@ -33,6 +33,7 @@ from agent.config import (
 )
 from agent import config as _config
 from agent.services import flow_batch as fb
+from agent.services.project_settings import flow_page_url
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +270,7 @@ class FlowClient:
             if source_ws is not None and source_ws in self._extensions:
                 self._extensions[source_ws]["extension_version"] = version
                 self._extensions[source_ws]["flow_url_supported"] = flow_supported
+                self._extensions[source_ws]["project_urls"] = data.get("projectUrls") is True
             logger.info(
                 "Extension ready, flowKey=%s version=%s flow.google.com=%s",
                 "yes" if data.get("flowKeyPresent") else "no",
@@ -477,6 +479,10 @@ class FlowClient:
         if not extension_candidates:
             return {"error": "Extension not connected"}
 
+        if flow_page_url.get():
+            extension_candidates=[ws for ws in extension_candidates if self._extensions[ws].get("project_urls")]
+            if not extension_candidates:
+                return {"error":"Reload the updated Google Flow extension for project URLs. No generation was sent."}
         last_result = {"error": "Extension not connected"}
         # Only known read-only RPCs can be replayed after losing a response.
         # Generations, uploads, upscales and project creation may already have
@@ -499,7 +505,7 @@ class FlowClient:
                 await extension_ws.send(json.dumps({
                     "id": req_id,
                     "method": method,
-                    "params": params,
+                    "params": {**params, **({"pageUrl": flow_page_url.get()} if flow_page_url.get() else {})},
                 }))
                 last_result = await asyncio.wait_for(future, timeout=timeout)
             except asyncio.TimeoutError:

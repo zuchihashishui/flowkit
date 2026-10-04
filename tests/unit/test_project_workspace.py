@@ -98,3 +98,30 @@ async def test_legacy_jobs_backfilled_before_second_video_and_never_guessed_afte
     await backfill()
     assert not json.loads(desktop.rows()[0]['payload']).get('video_id')
     assert len((await select(project['id']))['videos'])==2
+
+
+@pytest.mark.asyncio
+async def test_project_settings_shared_by_videos_isolated_and_revision_safe(project):
+    from agent.services import project_settings as settings
+    from pydantic import ValidationError
+    a=project['id'];other=await crud.create_project(name='Other channel')
+    await create(VideoCreate(project_id=a,title='Topic 1'))
+    await create(VideoCreate(project_id=a,title='Topic 2'))
+    app=FastAPI();app.include_router(projects.router,prefix='/api')
+    async with AsyncClient(transport=ASGITransport(app=app),base_url='http://test') as client:
+        path='/api/projects/'+a+'/settings'
+        original=(await client.get(path)).json()
+        saved=await client.put(path,json={**original,'image_prompt_url':'https://chatgpt.com/g/g-123-image-writer','elevenlabs_url':settings.DEFAULTS['elevenlabs_url']+'?voiceId=voice-a'})
+        assert saved.status_code==200 and saved.json()['revision']==1
+        assert (await client.put(path,json=original)).status_code==409
+        assert (await settings.get(other['id']))['image_prompt_url']=='https://chatgpt.com/'
+        await schema.close_db();await schema.init_db()
+        assert (await settings.get(a))['image_prompt_url'].endswith('g-123-image-writer')
+        invalid=['https://evil.example/g/g-123','http://chatgpt.com/','https://chatgpt.com/c/conversation','https://user@chatgpt.com/','https://chatgpt.com/g/g-a#fragment']
+        for value in invalid:
+            r=await client.put(path,json={**saved.json(),'image_prompt_url':value})
+            assert r.status_code==422,value
+        assert (await client.get('/api/projects/missing/settings')).status_code==404
+    remote='11111111-2222-3333-4444-555555555555'
+    for url in ['https://flow.google.com/project/'+remote,'https://labs.google/fx/tools/flow/project/'+remote]:
+        assert settings.flow_project(settings.validate_url('google_flow_url',url),'local')==remote

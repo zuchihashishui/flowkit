@@ -1,6 +1,9 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const api = (method, path, body) => window.studio.api(method, path, body);
+const api = (method, path, body) => {
+  if(method==='POST'&&(path==='/api/desktop/jobs'||/^\/api\/storyboard\/videos\/[^/]+\/(generate-concepts|generate-media|retry-failed)$/.test(path)))window.projectSettings?.assertSaved();
+  return window.studio.api(method, path, body);
+};
 const ACTIVE = ['RUNNING', 'SUBMITTING', 'DOWNLOADING'];
 let projects = [], videos = [], scenes = [], jobs = [], paused = false, refreshing = false;
 let loadedProject = '', loadedCollection = '', sceneRequest = 0, projectRequest = 0;
@@ -109,6 +112,7 @@ async function refreshProjects() {
 }
 async function selectProject(reload=false) {
   if(!reload&&$('project-select').value===loadedProject){syncProjectContext();return;}
+  if(window.projectSettings&&!window.projectSettings.canChangeProject($('project-select').value)){$('project-select').value=loadedProject;return;}
   if(sceneSaving){$('project-select').value=loadedProject;notice('Wait for the scene to finish saving.',true);return;}
   if(editorDirty&&!confirm('Discard unsaved scene changes?')){$('project-select').value=loadedProject;return;}
   if (window.storyboard && !window.storyboard.canChangeProject()) { $('project-select').value = loadedProject; return; }
@@ -411,7 +415,7 @@ $('auto-export').onchange = () => action(async () => {
 });
 $('choose-output').onclick = () => action(async () => { const s = await window.studio.chooseOutput(); $('output-dir').value = s.output; exported.clear(); exportFailed.clear(); });
 $('open-output').onclick = () => action(() => window.studio.openOutput());
-$('open-flow').onclick = () => action(() => window.studio.openFlow());
+$('open-flow').onclick = () => action(() => $('project-select').value ? window.studio.openProjectPage($('project-select').value,'google_flow_url') : window.studio.openFlow());
 $('extension-folder').onclick = () => action(() => window.studio.openExtension());
 $('diagnostics').onclick = () => action(async () => {
   $('diagnostic-result').textContent = 'Checking…'; const d = await api('GET', '/api/desktop/diagnostics');

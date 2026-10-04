@@ -42,7 +42,8 @@ async def enqueue(body: Job):
             raise ValueError('Enter a prompt and model name.')
         kind = 'json' if any(s['id'] == str(body.source_id) for s in service.sources()) else 'whisperx'
         ctx = await inputs(body, [scope.ref(kind, body.source_id)])
-        return service.enqueue(str(body.source_id), body.prompt, body.model.strip(), body.timeout, ctx, duration_seconds=body.duration_seconds)
+        from agent.services.project_settings import snapshot
+        return service.enqueue(str(body.source_id), body.prompt, body.model.strip(), body.timeout, ctx, duration_seconds=body.duration_seconds, project_settings=await snapshot(ctx))
     except (ValueError, KeyError, FileNotFoundError) as e:
         raise HTTPException(409, str(e)) from e
 

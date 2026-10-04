@@ -1,6 +1,6 @@
 // The bridge operates only the visible TTS UI; it never reads session tokens or calls private APIs.
 (() => {
-  const bridgeVersion = '1.0.22', previous = window.__flowkitElevenLabsBridge;
+  const bridgeVersion = '1.0.23', previous = window.__flowkitElevenLabsBridge;
   const documentToken = window.__flowkitElevenLabsDocumentToken ||= crypto.randomUUID();
   // A boolean left by 1.0.0 or an invalidated extension context must not block repair.
   try {

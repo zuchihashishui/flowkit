@@ -50,6 +50,10 @@ const server=createServer(async(req,res)=>{
   if(active.size)return json(res,409,{error:'Requests still active'});
   try{await control('reviewReset');held.clear();accountPaused=false;return json(res,200,{ok:true});}catch(e){return json(res,409,{error:e.message});}
  }
+ if(req.url==='/workers/ensure'){
+  if(!capabilities.includes('project-urls-v1'))return json(res,409,{error:'Reload ChatGPT Bridge for project URLs.'});
+  try{await control('ensureTextWorkers');return json(res,200,{ok:true});}catch(e){return json(res,409,{error:e.message});}
+ }
  if(req.url==='/workers/close'){
   if(!capabilities.includes('worker-lifecycle-v1'))return json(res,200,{ok:true,skipped:true});
   if(textCleanupActive||inspectionActive||extensionInspecting||[...active.values(),...held.values()].some(r=>!isSrt(r.worker)))return json(res,409,{error:'Text workers still busy or require review'});
@@ -67,6 +71,12 @@ const server=createServer(async(req,res)=>{
   }catch(e){return json(res,409,{error:e.message});}
  }
  if(req.url!=='/v1/chat/completions')return json(res,404,{error:'Not found'});
+ if(p.pageUrl!==undefined){
+  try{const u=new URL(p.pageUrl);if(u.origin!=='https://chatgpt.com'||u.username||u.password||u.hash||!(u.pathname==='/'||/^\/g\/g-[A-Za-z0-9_-]+\/?$/.test(u.pathname)))throw Error();
+   if(u.pathname.startsWith('/g/')&&(p.temporary!==false||p.attachment))throw Error();
+  }catch{return json(res,400,{error:'Use a ChatGPT home or GPT URL; GPT requests require regular text-only chat.',not_submitted:true});}
+  if(!capabilities.includes('project-urls-v1'))return json(res,400,{error:'Reload ChatGPT Bridge for project URLs.',not_submitted:true});
+ }
  if(p.stream)return json(res,400,{error:'Streaming not supported'});
  if(!Array.isArray(p.messages)||p.messages.length!==1||p.messages[0].role!=='user'||typeof p.messages[0].content!=='string'||!p.messages[0].content.trim())return json(res,400,{error:'Exactly one non-empty user message required'});
  if(p.composerMode!==undefined&&!['chat','work'].includes(p.composerMode))return json(res,400,{error:'Invalid composer mode',not_submitted:true});
@@ -92,7 +102,7 @@ const server=createServer(async(req,res)=>{
   const timer=setTimeout(()=>fail(requestId,'Response deadline exceeded; review the worker tab.'),timeout+(p.attachment?210000:65000));
   active.set(requestId,{resolve,timer,worker});
   res.on('close',()=>{if(!res.writableEnded)fail(requestId,'Client disconnected; submission may have completed.');});
-  try{send({type:'chat',requestId,workerId:worker.id,messages:p.messages,model:p.model||'auto',timeout,temporary:p.temporary!==false,attachment:p.attachment,composerMode:p.composerMode,freshTab:p.freshTab===true});}catch(e){fail(requestId,e.message);}
+  try{send({type:'chat',requestId,workerId:worker.id,messages:p.messages,model:p.model||'auto',timeout,temporary:p.temporary!==false,attachment:p.attachment,composerMode:p.composerMode,freshTab:p.freshTab===true,pageUrl:p.pageUrl});}catch(e){fail(requestId,e.message);}
  });
  if(result.not_submitted)return json(res,409,result);
  if(!result.ok)return json(res,502,result);
@@ -110,7 +120,7 @@ wss.on('connection',ws=>{
  ws.on('message',raw=>{
   let m;try{m=JSON.parse(raw);}catch{return;}
   if(m.type==='pool'&&m.protocol===2){
-   capabilities=Array.isArray(m.capabilities)?m.capabilities.filter(x=>['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1'].includes(x)):[];
+   capabilities=Array.isArray(m.capabilities)?m.capabilities.filter(x=>['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1'].includes(x)):[];
    const seen=new Set(),ids=new Set();workers=(Array.isArray(m.workers)?m.workers:[]).filter(w=>{
     if(!w||typeof w.id!=='string'||w.id===SRT_WORKER_ID||w.kind==='srt'||(!Number.isInteger(w.tabId)&&w.tabId!==null)||ids.has(w.id))return false;
     if(w.tabId!==null&&seen.has(w.tabId))return false;

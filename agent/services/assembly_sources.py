@@ -28,7 +28,7 @@ async def load_scene_media(service, ctx, srt_id, visual_mode):
                 p = json.loads(job['payload'])
                 if (job['state'] == 'COMPLETED' and p.get('project_id') == ctx['project_id']
                     and p.get('document_id') == data['document']['id'] and p.get('segment_id') == segment['id']
-                    and p.get('concept_id') == segment['active_concept_id'] and p['kind'] == kind
+                    and storyboard.media_is_current(data['video'], data['document'], segment, p) and p['kind'] == kind
                     and p.get('start_ms') == segment['start_ms'] and p.get('end_ms') == segment['end_ms']):
                     matching.append(job)
             if not segment['ready']:
@@ -49,7 +49,7 @@ async def load_scene_media(service, ctx, srt_id, visual_mode):
                             with path.open('rb') as stream:
                                 previous = await service.import_upload(kind, Reader(), ctx, [scope.ref('asset', srt_id)], metadata_extra={
                                     'media_job_id':job['id'], 'file_index':index, 'segment_id':segment['id'],
-                                    'concept_id':segment['active_concept_id'], 'ordinal':cue['index']})
+                                    'concept_id':json.loads(job['payload']).get('concept_id'), 'ordinal':cue['index']})
                             copied.append(previous)
                         results.append(previous)
                         candidates.append(previous)

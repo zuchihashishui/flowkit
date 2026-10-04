@@ -374,3 +374,19 @@ async def test_two_videos_in_one_project_keep_sources_jobs_and_media_separate(en
     result=await desktop.enqueue(desktop.Batch(jobs=[desktop.Job(kind='image',prompt='Correct video',**env.a,scene_id=scene['id'])]))
     saved=json.loads(next(j['payload'] for j in desktop.rows() if j['id']==result['ids'][0]))
     assert saved['video_id']==env.a['video_id']
+
+
+@pytest.mark.asyncio
+async def test_narration_and_srt_freeze_project_urls(env):
+    from agent.services import project_settings
+    config=await project_settings.get(env.a['project_id'])
+    config=await project_settings.save(env.a['project_id'],project_settings.SettingsBody(**{**config,'elevenlabs_url':project_settings.DEFAULTS['elevenlabs_url']+'?voiceId=project-a','chatgpt_url':'https://chatgpt.com/?model=project-model'}))
+    el=await post(env,'elevenlabs/jobs',{**env.a,'text':'日本語です。'})
+    finish_audio(env,el['id']);await env.wx.discover()
+    wx=await post(env,'whisperx/jobs',{**env.a,'source_id':el['id'],**OPTIONS});finish_json(env,wx['id'])
+    sub=await post(env,'srt/jobs',{**env.a,'source_id':wx['id'],'prompt':'Keep timing.'})
+    await project_settings.save(env.a['project_id'],project_settings.SettingsBody(**{**config,'elevenlabs_url':project_settings.DEFAULTS['elevenlabs_url']}))
+    assert scope.load_settings(env.el,'elevenlabs',el['id'])['elevenlabs_url'].endswith('voiceId=project-a')
+    assert scope.load_settings(env.srt,'srt',sub['id'])['chatgpt_url'].endswith('model=project-model')
+    other=await post(env,'elevenlabs/jobs',{**env.b,'text':'Other project'})
+    assert scope.load_settings(env.el,'elevenlabs',other['id'])['elevenlabs_url']==project_settings.DEFAULTS['elevenlabs_url']

@@ -526,14 +526,19 @@
       }
 
       const composerMode = msg.composerMode ?? 'chat';
+      const customGPT=msg.customGPT===true;
+      if(customGPT){
+        const target=new URL(msg.pageUrl),here=new URL(window.location.href);
+        if(target.origin!=='https://chatgpt.com'||!/^\/g\/g-[A-Za-z0-9_-]+\/?$/.test(target.pathname)||here.origin!==target.origin||here.pathname.replace(/\/$/,'')!==target.pathname.replace(/\/$/,'')||msg.attachment||msg.temporary)throw Error('The requested GPT is not ready. No text was sent.');
+      }
       // Temporary mode may hide the Chat/Work switch, so exit before choosing Work.
       if (msg.temporary === false && temporaryEnabled()) {progress('DISABLING_TEMPORARY');await disableTemporaryChat();}
       progress('SELECTING_MODE');
-      await selectComposerMode(composerMode);
+      if(!customGPT)await selectComposerMode(composerMode);
       if (msg.temporary){progress('ENABLING_TEMPORARY');await enableTemporaryChat();}
       progress('SELECTING_MODEL');
-      const selectedModel = await selectModel(msg.model);
-      checkComposerStillSelected(composerMode);
+      const selectedModel = await selectModel(customGPT?'auto':msg.model);
+      if(!customGPT)checkComposerStillSelected(composerMode);
       if (msg.temporary === false && temporaryEnabled()) throw new Error('Temporary Chat is still active for a regular-chat request. No prompt was sent.');
       checkModelSelection(selectedModel);
       const beforeMessages = new Set(assistantMessages().map(messageKey));
@@ -543,7 +548,7 @@
       if (msg.attachment) {progress('ATTACHING_FILE');await attachJSON(msg.attachment);}
       if (msg.temporary && !temporaryEnabled()) throw new Error("Temporary Chat is no longer confirmed. No prompt was sent.");
       if (msg.temporary === false && temporaryEnabled()) throw new Error('Temporary Chat became active during setup. No prompt was sent.');
-      checkComposerStillSelected(composerMode);
+      if(!customGPT)checkComposerStillSelected(composerMode);
       checkModelSelection(selectedModel);
       progress('SENDING');
       await clickSend(msg.userMessage, msg.attachment?.name);

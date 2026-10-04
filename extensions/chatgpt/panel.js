@@ -24,7 +24,7 @@ async function refresh(){
   const text=document.createElement('div');text.textContent=`${w.id} · ${Number.isInteger(w.tabId)?'Tab '+w.tabId:'Window opens on next job'} · ${w.state}${w.state==='RUNNING'&&w.started?' · '+Math.round((Date.now()-w.started)/1000)+'s':''}${w.progress?' · '+w.progress.phase.replaceAll('_',' ')+' · '+(w.progress.chars||0)+' chars':''}${w.error?' · '+w.error:''}`;
   const button=document.createElement('button');button.textContent='Focus';button.disabled=!Number.isInteger(w.tabId);button.onclick=async()=>{try{const t=await chrome.tabs.update(w.tabId,{active:true});await chrome.windows.update(t.windowId,{focused:true});}catch(e){$('notice').textContent=e.message;}};
   row.append(text);
-  if(w.requestOptions){const o=w.requestOptions,options=document.createElement('p');options.textContent=`${o.composerMode==='work'?'Work':'Chat'} · Temporary ${o.temporary?'ON':'OFF'} · Model: ${o.model==='auto'?'Current model':o.model} · ${o.hasAttachment?'Text + JSON':'Text only'}`;row.append(options);}
+  if(w.requestOptions){const o=w.requestOptions,options=document.createElement('p');options.textContent=`${o.composerMode==='work'?'Work':'Chat'} · Temporary ${o.temporary?'ON':'OFF'} · Model: ${o.model==='auto'?'Current model':o.model} · ${o.hasAttachment?'Text + JSON':'Text only'}`;row.append(options);if(o.pageUrl){const destination=document.createElement('small');destination.textContent='Destination: '+o.pageUrl;row.append(destination);}}
   row.append(button);return row;};
  $('pool').replaceChildren(...(state.workers||[]).map(workerCard));
  $('srt-worker').replaceChildren(...(state.srtWorker?[workerCard(state.srtWorker)]:[document.createTextNode('Ready. Studio will open and bind one new Work tab when you start an SRT job.')]));

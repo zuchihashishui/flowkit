@@ -36,7 +36,7 @@
   }
   function segmentStatus(s) {
     if (s.job && ['QUEUED','RUNNING'].includes(s.job.state)) return 'Concept '+s.job.state;
-    if (s.ready) return 'Ready · v'+s.active_concept.version;
+    if (s.ready) return 'v'+s.active_concept.version+' · Image '+(s.active_concept.image_prompt?'ready':'missing')+' · Video '+(s.active_concept.video_prompt?'ready':'missing');
     if (s.active_concept) return 'Outdated concept';
     return s.job?.state || 'No concept';
   }
@@ -50,10 +50,10 @@
       const td=element('td');td.append(box);tr.append(td);
       tr.append(element('td',String(s.ordinal).padStart(3,'0')+'\n'+timestamp(s.start_ms)+'\n'+timestamp(s.end_ms)+'\n'+((s.end_ms-s.start_ms)/1000).toFixed(3)+' s'));
       const text=element('td');text.append(element('p',s.text));tr.append(text);
-      const concept=element('td');concept.append(element('p',s.active_concept ? (mode==='video'?s.active_concept.video_prompt:s.active_concept.image_prompt) : 'Create a concept first.'));tr.append(concept);
+      const concept=element('td');concept.append(element('p',s.active_concept ? ((mode==='video'||mode==='editor'&&$('sb-prompt-kind').value==='video')?s.active_concept.video_prompt:s.active_concept.image_prompt) : 'Create a concept first.'));tr.append(concept);
       const status=element('td',segmentStatus(s));
       if(s.job?.error)status.append(element('small',s.job.error));
-      for(const j of s.media_jobs||[])status.append(element('small',j.kind+' · '+j.state+(j.concept_id!==s.active_concept_id?' · older concept':'')));
+      for(const j of s.media_jobs||[])status.append(element('small',j.kind+' · '+j.state+((j.current??(j.concept_id===s.active_concept_id))?'':' · older prompt')));
       tr.append(status);
       if(mode==='editor') {
         const actions=element('td'), group=element('div',undefined,'actions');
@@ -149,6 +149,9 @@
     await api('POST',path('/segments'),{format:f.name.toLowerCase().endsWith('.srt')?'srt':'json',content:f.text});await reload();notice('Segments imported with original timestamps.');
   });
   $('sb-collection').onchange=()=>{const next=$('sb-collection').value;if(!discard()){$('sb-collection').value=collection;return;}collection=next;data=null;checked.clear();if(collection)action(()=>reload(true));else render();};
+  $('sb-prompt-kind').onchange=()=>{$('sb-prompt-heading').textContent=$('sb-prompt-kind').value==='video'?'Video prompt':'Image prompt';render();};
+  function providerChanged(){const web=$('sb-provider').value==='chatgpt-web';$('sb-model').disabled=web;$('sb-model').placeholder=web?'Uses the GPT / page model':'Provider default';$('sb-prompt-kind').disabled=!web;}
+  $('sb-provider').onchange=providerChanged;providerChanged();
   $('sb-refresh').onclick=()=>action(()=>open());
   $('sb-check-provider').onclick=()=>run(async()=>{
     const result=await api('GET','/api/storyboard/providers');$('sb-provider-status').textContent=result.providers.map(p=>p.id+': '+(p.status || (p.installed?'installed (sign-in not verified)':'not on PATH'))).join(' · ');
@@ -157,7 +160,7 @@
   $('sb-select-none').onclick=()=>{checked.clear();selectionChanged();};
   $('sb-create-concepts').onclick=()=>run(async()=>{
     const items=selected(200);if(!confirm(`Create concepts for up to ${items.length} segment(s) using ${$('sb-provider').value}? One AI request per segment; provider quotas apply.`))return;
-    const result=await api('POST',path('/generate-concepts'),{segment_ids:items.map(s=>s.id),provider:$('sb-provider').value,model:$('sb-model').value.trim()||null,regenerate:$('sb-regenerate').checked});
+    const result=await api('POST',path('/generate-concepts'),{segment_ids:items.map(s=>s.id),provider:$('sb-provider').value,prompt_kind:$('sb-provider').value==='chatgpt-web'?$('sb-prompt-kind').value:'both',model:$('sb-model').value.trim()||null,regenerate:$('sb-regenerate').checked});
     await reload();notice(`${result.ids.length} concept job(s) queued; ${result.skipped.length} skipped because current or pending concepts already exist.`);
   });
   $('sb-cancel-concepts').onclick=()=>run(async()=>{assertCollection();if(!confirm('Cancel all queued concept jobs in this script? The active job continues.'))return;const r=await api('POST',path('/cancel-concepts'),{});await reload();notice(`${r.cancelled} queued concept job(s) cancelled.`);});
@@ -171,7 +174,7 @@
   $('sb-editor').onsubmit=e=>{e.preventDefault();run(async()=>{
     const s=editedSegment();if(s.text!==$('sb-text').value||s.start_ms!==Number($('sb-start').value)||s.end_ms!==Number($('sb-end').value))throw Error('Save segment text and timing first.');
     const body={title:$('sb-concept-title').value,description:$('sb-description').value,image_prompt:$('sb-image-prompt').value,video_prompt:$('sb-video-prompt').value};
-    if(Object.values(body).some(v=>!v.trim()))throw Error('Complete all concept fields.');
+    if(!body.title.trim()||!body.description.trim()||(!body.image_prompt.trim()&&!body.video_prompt.trim()))throw Error('Enter a title, description and at least one prompt.');
     await api('POST','/api/storyboard/segments/'+s.id+'/concepts',body);editorDirty=false;await reload();openEditor(data.segments.find(x=>x.id===s.id));notice('New concept version saved and selected.');
   });};
   $('sb-activate').onclick=()=>run(async()=>{const s=editedSegment();if(editorDirty)throw Error('Save or discard edits before switching versions.');const id=$('sb-version').value;if(!id)throw Error('Choose a saved version.');await api('POST','/api/storyboard/concepts/'+id+'/select',{});await reload();openEditor(data.segments.find(x=>x.id===s.id));notice('Concept version selected.');});
@@ -181,8 +184,8 @@
   document.querySelectorAll('[data-open-storyboard]').forEach(b=>b.onclick=()=>show('storyboard'));
   function failedScene(s,kind){
     const terminal=['FAILED','NEEDS_REVIEW','INTERRUPTED','CANCELLED'];
-    if(kind==='concept')return !s.ready&&terminal.includes(s.job?.state);
-    const jobs=(s.media_jobs||[]).filter(j=>j.kind===kind&&j.concept_id===s.active_concept_id);
+    if(kind==='concept')return (!s.ready||!s.active_concept?.[$('sb-prompt-kind').value+'_prompt'])&&terminal.includes(s.job?.state);
+    const jobs=(s.media_jobs||[]).filter(j=>j.kind===kind&&(j.current??(j.concept_id===s.active_concept_id)));
     return s.ready&&jobs.length&&!jobs.some(j=>['QUEUED','SUBMITTING','RUNNING','DOWNLOADING','COMPLETED'].includes(j.state))&&terminal.includes(jobs[0].state);
   }
   for(const kind of ['concept','image','video']){
@@ -192,7 +195,7 @@
       const items=selected(200).filter(s=>failedScene(s,kind));
       if(!items.length)throw Error('No selected failed scenes need retry. Successful and active results are kept.');
       if(!confirm(`Retry ${items.length} failed scene(s)? Saved remote media will resume without regeneration where possible. Inspect uncertain requests first; new requests may use credits.`))return;
-      const r=await api('POST',path('/retry-failed'),{segment_ids:items.map(s=>s.id),kind,reviewed:true,provider:$('sb-provider').value,model:$('sb-model').value.trim()||null});
+      const r=await api('POST',path('/retry-failed'),{segment_ids:items.map(s=>s.id),kind,reviewed:true,provider:$('sb-provider').value,prompt_kind:$('sb-provider').value==='chatgpt-web'?$('sb-prompt-kind').value:'both',model:$('sb-model').value.trim()||null});
       await reload();await refreshJobs();notice(`${r.ids.length} new retries; ${r.resumed.length} saved remote results resumed; ${r.skipped.length} scenes skipped.`);
     });
   }
@@ -203,7 +206,7 @@
     canImportSource:()=>discard(),
     projectChanged:()=>{if(owner!==$('project-select').value){++requestId;owner='';collection='';data=null;checked.clear();$('sb-script').value='';$('sb-style').value='';$('sb-collection').replaceChildren(option('','Select a collection'));showAudio();render();}},
     generateMedia:async kind=>{
-      const items=selected();if(items.some(s=>!s.ready))throw Error('Selected segments need current concepts. Create or update them in Text to Prompt.');
+      const items=selected();if(items.some(s=>!s.ready||!s.active_concept?.[kind+'_prompt']?.trim()))throw Error('Selected segments need current concepts and a saved prompt for this media type. Create it in Text to Prompt.');
       if(!confirm(`Generate ${kind} for up to ${items.length} selected segment(s)? Uses Google Flow credits.`))return;
       const r=await api('POST',path('/generate-media'),{segment_ids:items.map(s=>s.id),kind,orientation:$(kind+'-ratio').value,duration:Number($('duration').value),duration_mode:kind==='video'&&$('video-duration-auto').checked?'srt':'manual',image_model:kind==='image'?$('image-model').value||null:null,regenerate:$(kind+'-regenerate').checked});
       await reload();await refreshJobs();notice(`${r.ids.length} media job(s) queued; ${r.skipped.length} existing jobs/results skipped.${r.durations?.some(d=>d.short)?' Some scenes exceed 10 seconds; their clips need hold/loop during assembly.':''}`);

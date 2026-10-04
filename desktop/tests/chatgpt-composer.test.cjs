@@ -41,3 +41,18 @@ for(const scenario of ['default-chat','work','already-chat','rerender','delayed'
   dom.window.close();
  });
 }
+
+test('custom GPT sends plain scene text without requiring Chat/Work or model controls',async()=>{
+ const pageUrl='https://chatgpt.com/g/g-project-image';
+ const dom=new JSDOM('<textarea id="prompt-textarea"></textarea><button type="submit" aria-label="Send">Send</button>',{url:pageUrl,runScripts:'outside-only'});
+ const w=dom.window,d=w.document;let listener,sent=0;
+ Object.defineProperty(w.HTMLElement.prototype,'offsetParent',{get(){return d.body;}});
+ w.chrome={runtime:{onMessage:{addListener:f=>listener=f}}};w.setTimeout=fn=>setImmediate(fn);
+ d.execCommand=(cmd,_,value)=>{if(cmd==='insertText')d.querySelector('textarea').value=value;};
+ d.querySelector('button').onclick=()=>{sent++;d.body.insertAdjacentHTML('beforeend','<div data-local-conversation-final-assistant="true" data-markdown-text-style="assistant-message">One image prompt</div>');};
+ w.eval(source);
+ const text='日本語。\nA scene paragraph.';
+ const result=await new Promise(resolve=>listener({type:'chat',userMessage:text,newConversation:false,timeout:10000,temporary:false,composerMode:'chat',customGPT:true,pageUrl,model:'auto'},{},resolve));
+ assert.equal(result.ok,true,result.error);assert.equal(sent,1);assert.equal(d.querySelector('textarea').value,text);
+ dom.window.close();
+});

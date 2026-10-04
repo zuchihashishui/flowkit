@@ -1,5 +1,6 @@
 const {contextBridge, ipcRenderer} = require('electron');
 contextBridge.exposeInMainWorld('studio', Object.freeze({
+  openProjectPage: (projectId, key) => ipcRenderer.invoke('open-project-page', projectId, key),
   assemblyImport: (kind, context) => ipcRenderer.invoke('assembly-import', kind, context),
   assemblyMedia: (id, action) => ipcRenderer.invoke('assembly-media', id, action),
   srtImport: context => ipcRenderer.invoke('srt-import', context),

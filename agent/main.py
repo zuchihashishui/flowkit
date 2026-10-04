@@ -261,6 +261,7 @@ async def health():
             "project_video_sources": True,
             "project_single_video": False,
             "project_multi_video": True,
+            "project_provider_urls": True,
             "elevenlabs_native_download_files": True,
             "elevenlabs_unlimited_native_audio": True,
             "elevenlabs_recover_downloads": True,

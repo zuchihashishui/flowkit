@@ -54,7 +54,7 @@ test('script/segments/concepts flow reaches database-backed image generation wit
   $('sb-create-concepts').click();await tick();
   const queued=calls.find(c=>c.route===base+'/generate-concepts');
   assert.deepEqual(JSON.parse(JSON.stringify(queued.body.segment_ids)),['s2']);
-  assert.equal(queued.body.provider,'codex');
+  assert.equal(queued.body.provider,'chatgpt-web');assert.equal(queued.body.prompt_kind,'image');
   // A simulated AI result is used only to verify UI/API wiring, not live generation.
   const s=data.segments[1];s.ready=true;s.job.state='COMPLETED';s.active_concept_id='c2';s.active_concept={id:'c2',version:1,title:'Second concept',description:'A clear composition',image_prompt:'A visual illustration',video_prompt:'A slow camera move'};s.concepts=[s.active_concept];
   $('sb-refresh').click();await tick();

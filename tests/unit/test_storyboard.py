@@ -273,3 +273,43 @@ async def test_retry_failed_concepts_skips_successful_scene(document,monkeypatch
     retry=await s.retry_failed(document,s.RetryBody(segment_ids=[first['id'],second['id']],kind='concept',reviewed=True))
     assert len(retry['ids'])==1 and retry['skipped']==[second['id']]
     assert (await s.read_document(document))['segments'][1]['active_concept_id'] is not None
+
+
+@pytest.mark.asyncio
+async def test_separate_gpt_prompts_keep_image_media_and_snapshot_project_urls(document,monkeypatch):
+    from agent.services import project_settings, chatgpt_gateway
+    monkeypatch.setattr(chatgpt_gateway,'status',AsyncMock(return_value={'available':True,'extensionConnected':True}))
+    monkeypatch.setattr(chatgpt_gateway,'ensure_project_workers',AsyncMock())
+    data=await s.read_document(document);sid=data['segments'][0]['id'];pid=data['video']['project_id']
+    settings=await project_settings.get(pid)
+    settings=await project_settings.save(pid,project_settings.SettingsBody(**{**settings,'image_prompt_url':'https://chatgpt.com/g/g-images','video_prompt_url':'https://chatgpt.com/g/g-videos'}))
+    first=(await s.generate_concepts(document,s.GenerateBody(segment_ids=[sid],provider='chatgpt-web',prompt_kind='image')))['ids'][0]
+    job=await s.one('SELECT * FROM concept_job WHERE id=?',(first,))
+    frozen=json.loads(job['payload']);assert frozen['project_settings']['image_prompt_url'].endswith('g-images')
+    await project_settings.save(pid,project_settings.SettingsBody(**{**settings,'image_prompt_url':'https://chatgpt.com/g/g-new-images'}))
+    assert json.loads((await s.one('SELECT payload FROM concept_job WHERE id=?',(first,)))['payload'])==frozen
+    monkeypatch.setattr(s,'write_concept',AsyncMock(return_value=Concept(title='Scene',description='Scene',image_prompt='Same image')))
+    await s.process_concept(job)
+    media=s.MediaBody(segment_ids=[sid],kind='image')
+    mid=(await s.generate_media(document,media))['ids'][0]
+    original=json.loads(desktop.rows()[0]['payload'])
+    assert original['project_settings']['image_prompt_url'].endswith('g-new-images')
+    with pytest.raises(HTTPException):await s.generate_media(document,s.MediaBody(segment_ids=[sid],kind='video'))
+    video_job=(await s.generate_concepts(document,s.GenerateBody(segment_ids=[sid],provider='chatgpt-web',prompt_kind='video')))['ids'][0]
+    job=await s.one('SELECT * FROM concept_job WHERE id=?',(video_job,))
+    assert json.loads(job['payload'])['retained_prompt']=='Same image'
+    monkeypatch.setattr(s,'write_concept',AsyncMock(side_effect=ValueError('Provider failed')))
+    await s.process_concept(job)
+    retried=await s.retry_failed(document,s.RetryBody(segment_ids=[sid],provider='chatgpt-web',prompt_kind='video',kind='concept',reviewed=True))
+    assert len(retried['ids'])==1
+    monkeypatch.setattr(s,'write_concept',AsyncMock(return_value=Concept(title='Scene',description='Scene',image_prompt='Same image',video_prompt='New video')))
+    await s.process_concept(await s.one('SELECT * FROM concept_job WHERE id=?',(retried['ids'][0],)))
+    data=await s.read_document(document);segment=data['segments'][0]
+    assert segment['image_ready'] and segment['video_ready']
+    assert segment['media_jobs'][0]['current']
+    assert segment['active_concept_id']!=original['concept_id']
+    assert (await s.generate_media(document,media))['ids']==[]
+    assert s.media_is_current(data['video'],data['document'],segment,original)
+    await s.save_concept(sid,Concept(title='Scene',description='Scene',image_prompt='Changed image',video_prompt='New video'))
+    data=await s.read_document(document)
+    assert not s.media_is_current(data['video'],data['document'],data['segments'][0],original)

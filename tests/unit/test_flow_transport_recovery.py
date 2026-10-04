@@ -81,3 +81,22 @@ async def test_legacy_worker_stops_uncertain_submission_instead_of_auto_retry(er
         await _handle_failure(req['id'], req, {'error': error})
     crud.update_request.assert_awaited_once_with('request-1', status='FAILED', error_message=error)
     crud.update_scene.assert_awaited_once_with('scene-1', vertical_image_status='FAILED')
+
+
+@pytest.mark.asyncio
+async def test_project_urls_are_request_local_and_never_sent_to_an_old_extension():
+    import asyncio
+    from agent.services.project_settings import flow_page_url
+    client, old, peer=pair('success')
+    client._extensions[peer]['project_urls']=True
+    async def dispatch(url):
+        token=flow_page_url.set(url)
+        try:return await client._send('batch_rpc',{'rpcid':fb.RPC_GEN_IMAGE,'freq':'[]'})
+        finally:flow_page_url.reset(token)
+    urls=['https://flow.google.com/project/'+p for p in ['11111111-2222-3333-4444-555555555555','aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee']]
+    await asyncio.gather(*(dispatch(url) for url in urls))
+    assert not old.calls
+    assert {m['params']['pageUrl'] for m in peer.calls}==set(urls)
+    assert flow_page_url.get() is None
+    client._extensions[peer]['project_urls']=False
+    result=await dispatch(urls[0]);assert 'Reload' in result['error'];assert len(peer.calls)==2
