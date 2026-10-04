@@ -6,7 +6,7 @@ const os = require('node:os');
 const vm = require('node:vm');
 const {pathToFileURL} = require('node:url');
 
-const compatibleHealth = {studio_api:3,studio_features:{project_multi_video:true,project_provider_urls:true,project_video_sources:true,elevenlabs_native_download_files:true,elevenlabs_unlimited_native_audio:true,elevenlabs_recover_downloads:true,elevenlabs_safe_pre_submit_failures:true,elevenlabs_auto_prepare_tab:true}};
+const compatibleHealth = {studio_api:3,studio_features:{production_workspace:true,project_multi_video:true,project_provider_urls:true,project_video_sources:true,elevenlabs_native_download_files:true,elevenlabs_unlimited_native_audio:true,elevenlabs_recover_downloads:true,elevenlabs_safe_pre_submit_failures:true,elevenlabs_auto_prepare_tab:true}};
 async function mainProcess(folder, reply, health=compatibleHealth) {
   const handlers = new Map(), requests = [];
   let win, ready;
@@ -324,5 +324,27 @@ test('Project Settings IPC opens only the saved service URL and rejects an older
   const stale=await mainProcess(folder,undefined,{...compatibleHealth,studio_features:{...compatibleHealth.studio_features,project_provider_urls:false}});
   await assert.rejects(stale.invoke('api','POST','/api/storyboard/videos/video-a/generate-concepts',{prompt_kind:'image'}),/project URLs/);
   assert.equal(stale.requests.some(r=>r.url.endsWith('/generate-concepts')),false);
+ }finally{await fs.rm(folder,{recursive:true,force:true});}
+});
+
+test('production IPC permits scoped progress/settings/backup operations and rejects unsupported routes and older backends',async()=>{
+ const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-production-ipc-'));
+ const id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+ try{
+  const main=await mainProcess(folder);
+  for(const [method,route] of [
+   ['GET','/api/production/overview?project_id=p'],['GET','/api/production/recovery?project_id=p&video_id=v'],
+   ['POST','/api/production/preflight'],['GET','/api/videos/v/settings'],['PUT','/api/videos/v/settings'],
+   ['POST','/api/maintenance/duplicate-project'],['GET','/api/maintenance/backups'],['POST','/api/maintenance/backups'],['GET','/api/maintenance/backups/'+id]
+  ])await main.invoke('api',method,route,{});
+  for(const [method,route] of [
+   ['POST','/api/videos/v/settings'],['POST','/api/production/overview?project_id=p'],
+   ['GET','/api/production/overview?project_id=p&path=secret'],['POST','/api/maintenance/restore'],
+   ['GET','/api/maintenance/backups/'+id+'/file']
+  ])await assert.rejects(main.invoke('api',method,route,{}),/Unsupported/);
+  const stale=await mainProcess(folder,undefined,{...compatibleHealth,studio_features:{...compatibleHealth.studio_features,production_workspace:false}});
+  await assert.rejects(stale.invoke('api','PUT','/api/videos/v/settings',{overrides:{assembly:{image_motion:'zoom_in'}}}),/updated backend/);
+  await assert.rejects(stale.invoke('api','POST','/api/assembly/jobs',{image_motion:'zoom_out'}),/updated backend/);
+  assert.equal(stale.requests.some(r=>r.options.method==='POST'||r.options.method==='PUT'),false);
  }finally{await fs.rm(folder,{recursive:true,force:true});}
 });

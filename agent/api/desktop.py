@@ -119,12 +119,18 @@ async def enqueue_jobs(body: Batch, *, preserve_settings: bool = False):
             raise HTTPException(400, "Select a voice template.")
         else:
             await tts.get_voice_template(j.template)
+    resolved=[]
     for j in body.jobs:
         if j.video_id and not preserve_settings:
-            from agent.services.project_settings import get
-            j.project_settings=await get(j.project_id)
+            from agent.services.project_settings import snapshot
+            from agent.services.production_settings import apply_stage
+            ctx={'project_id':j.project_id,'video_id':j.video_id}
+            if j.kind!='voice':j=await apply_stage(j,'media',ctx)
+            j.project_settings=await snapshot(ctx)
         elif not preserve_settings:
             j.project_settings=None
+        resolved.append(j)
+    body.jobs=resolved
     ids = []
     with connection() as db:
         for j in body.jobs:

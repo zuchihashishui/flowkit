@@ -20,12 +20,10 @@ not an operation handle, so Omni jobs must not be fed to ``check_video_status``.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from agent.config import _MODELS_FILE
 
 from agent.services import flow_batch as fb
 from agent.services.flow_client import get_flow_client
-
-_MODELS_FILE = Path(__file__).parent.parent / "models.json"
 
 OMNI_FLASH_VALID_DURATIONS = (4, 6, 8, 10)
 OMNI_FLASH_VALID_ASPECTS = {

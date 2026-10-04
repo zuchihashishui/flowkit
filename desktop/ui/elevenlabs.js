@@ -280,7 +280,7 @@
   const max_chunk_characters = chunkSize();
   await preview(text, max_chunk_characters);
   window.workflow?.assertCurrent(ctx);
-  const result = await api('POST', 'jobs', {text, title, model: 'Eleven v4', max_chunk_characters});
+  const result = await api('POST', 'jobs', {text, title, model: $('el-model').value.trim() || 'Eleven v4', max_chunk_characters});
   selectedId = result.id || result.job?.id || ''; message('Narration queued. Audio will be downloaded after each completed chunk.'); await refresh();
   if (reviewRequired(latestStatus) || latestStatus?.settings?.paused) message('Narration queued and waiting. Follow the next step in ElevenLabs connection to release or resume the queue.');
  }, $('el-generate')); };

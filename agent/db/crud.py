@@ -304,13 +304,20 @@ async def list_actionable_requests(exclude_ids: set[str] = None, limit: int = 5)
 
 
 async def reset_stale_processing(cutoff_minutes: int = 10) -> int:
-    """Reset PROCESSING requests older than cutoff back to PENDING."""
+    """Quarantine stale submissions; only saved video operations can re-poll."""
     db = await get_db()
     from datetime import datetime, timedelta, timezone
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=cutoff_minutes)).strftime('%Y-%m-%dT%H:%M:%SZ')
     async with _db_lock:
         cursor = await db.execute(
-            "UPDATE request SET status='PENDING', error_message='reset: stale processing' WHERE status='PROCESSING' AND updated_at < ?",
+            """UPDATE request SET
+                status=CASE WHEN type IN ('GENERATE_VIDEO','REGENERATE_VIDEO','GENERATE_VIDEO_REFS','UPSCALE_VIDEO')
+                             AND request_id IS NOT NULL AND length(trim(request_id))>0 THEN 'PENDING' ELSE 'FAILED' END,
+                error_message=CASE WHEN type IN ('GENERATE_VIDEO','REGENERATE_VIDEO','GENERATE_VIDEO_REFS','UPSCALE_VIDEO')
+                                        AND request_id IS NOT NULL AND length(trim(request_id))>0
+                                   THEN 'Resume polling the saved operation without generating again.'
+                                   ELSE 'NEEDS_REVIEW: Interrupted generation. Inspect Google Flow and saved media before manually retrying; credits may already have been used.' END
+                WHERE status='PROCESSING' AND updated_at < ?""",
             (cutoff,))
         await db.commit()
         return cursor.rowcount

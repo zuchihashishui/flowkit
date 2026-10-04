@@ -11,8 +11,11 @@
 Preserve the source language and every spoken word, without duplicating the transcript. Japanese / Chinese units may be characters, so group sentences and related clauses before choosing boundaries. Prefer one complete idea per scene, with 3–15 seconds including pauses. Merge short adjacent ideas when appropriate. Split long passages at natural clauses or real pauses; never cut a word or a tightly connected phrase solely to hit a target. Do not force equal scene lengths.
 
 Use only source timing and positions marked can_start_scene. Return the boundary JSON requested by Studio, never rewritten transcript text, timestamps, an SRT block or a download link. Studio preserves the source text, fills the timeline continuously from zero and writes HH:MM:SS,mmm --> HH:MM:SS,mmm timestamps itself. If duration metadata is missing, the full audio tail cannot be verified; Studio will flag this. Long silence or unavailable timing may require duration exceptions; preserve the natural grouping instead of inventing timing.`;
- try{$('srt-prompt').value=localStorage.getItem('srt-prompt')||defaults;}catch{$('srt-prompt').value=defaults;}
- $('srt-prompt').addEventListener('input',()=>{try{localStorage.setItem('srt-prompt',$('srt-prompt').value);}catch{}});
+ if(window.productionDefaults)window.productionDefaults.registerBaseline('srt-prompt',defaults);
+ else {
+  try{$('srt-prompt').value=localStorage.getItem('srt-prompt')||defaults;}catch{$('srt-prompt').value=defaults;}
+  $('srt-prompt').addEventListener('input',()=>{try{localStorage.setItem('srt-prompt',$('srt-prompt').value);}catch{}});
+ }
  $('srt-use-template').onclick=()=>{
   $('srt-prompt').value=defaults;
   $('srt-prompt').dispatchEvent(new Event('input',{bubbles:true}));

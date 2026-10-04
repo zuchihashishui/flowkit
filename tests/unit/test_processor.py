@@ -208,3 +208,51 @@ class TestHandleFailure:
 
         call_kwargs = mock_crud.update_request.call_args
         assert "caller does not have permission" in call_kwargs[1]["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_startup_quarantines_uncertain_legacy_requests_and_preserves_saved_polling(tmp_path,monkeypatch):
+    from agent.db import schema, crud
+    from agent.worker.processor import WorkerController
+    monkeypatch.setattr(schema,'DB_PATH',tmp_path/'legacy.db')
+    await schema.init_db()
+    try:
+        unknown=await crud.create_request(req_type='GENERATE_IMAGE')
+        video=await crud.create_request(req_type='GENERATE_VIDEO')
+        unconfirmed_video=await crud.create_request(req_type='GENERATE_VIDEO_REFS')
+        pending=await crud.create_request(req_type='GENERATE_IMAGE')
+        await crud.update_request(unknown['id'],status='PROCESSING',media_id='keep-media',output_url='https://example.test/saved-image')
+        await crud.update_request(video['id'],status='PROCESSING',request_id='saved-operation')
+        await crud.update_request(unconfirmed_video['id'],status='PROCESSING')
+        await WorkerController()._cleanup_stale_processing()
+        inspected=await crud.get_request(unknown['id'])
+        assert inspected['status']=='FAILED' and inspected['error_message'].startswith('NEEDS_REVIEW:')
+        assert inspected['media_id']=='keep-media' and inspected['output_url']=='https://example.test/saved-image'
+        assert (await crud.get_request(unconfirmed_video['id']))['status']=='FAILED'
+        saved=await crud.get_request(video['id'])
+        assert saved['status']=='PENDING' and saved['request_id']=='saved-operation'
+        assert {r['id'] for r in await crud.list_actionable_requests()} == {video['id'],pending['id']}
+        # Repeated startup keeps quarantined rows terminal rather than resurrecting them.
+        await WorkerController()._cleanup_stale_processing()
+        assert (await crud.get_request(unknown['id']))['status']=='FAILED'
+    finally:
+        await schema.close_db()
+
+
+@pytest.mark.asyncio
+async def test_stale_request_helper_never_requeues_unconfirmed_generation(tmp_path,monkeypatch):
+    from agent.db import schema, crud
+    monkeypatch.setattr(schema,'DB_PATH',tmp_path/'stale.db')
+    await schema.init_db()
+    try:
+        image=await crud.create_request(req_type='GENERATE_IMAGE')
+        video=await crud.create_request(req_type='UPSCALE_VIDEO')
+        await crud.update_request(image['id'],status='PROCESSING')
+        await crud.update_request(video['id'],status='PROCESSING',request_id='saved-operation')
+        db=await schema.get_db()
+        await db.execute("UPDATE request SET updated_at='2020-01-01T00:00:00Z'");await db.commit()
+        assert await crud.reset_stale_processing()==2
+        assert (await crud.get_request(image['id']))['status']=='FAILED'
+        assert (await crud.get_request(video['id']))['status']=='PENDING'
+    finally:
+        await schema.close_db()

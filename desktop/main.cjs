@@ -13,6 +13,18 @@ function workflowAllowed(method,route){
   return method==='GET'&&/^\/api\/(elevenlabs\/jobs|whisperx\/status|srt\/status|assembly\/status|workflow\/resources)(\?(project_id|video_id|unassigned)=[a-zA-Z0-9_-]+(&(project_id|video_id|unassigned)=[a-zA-Z0-9_-]+){0,2})?$/.test(route)
     ||method==='POST'&&/^\/api\/workflow\/(project|assignment-preview|assign|import-scenes)$/.test(route);
 }
+function productionAllowed(method,route){
+  return method==='GET'&&/^\/api\/production\/(overview|recovery)\?project_id=[a-zA-Z0-9_-]{1,100}(?:&video_id=[a-zA-Z0-9_-]{1,100})?$/.test(route)
+    ||method==='POST'&&route==='/api/production/preflight'
+    ||['GET','PUT'].includes(method)&&/^\/api\/videos\/[a-zA-Z0-9_-]+\/settings$/.test(route)
+    ||method==='POST'&&route==='/api/maintenance/duplicate-project'
+    ||['GET','POST'].includes(method)&&route==='/api/maintenance/backups'
+    ||method==='GET'&&/^\/api\/maintenance\/backups\/[a-f0-9-]{36}$/.test(route);
+}
+async function requireProduction(){
+  const health=await request('GET','/health',undefined,5000);
+  if(health?.studio_features?.production_workspace!==true)throw Error('Production workspace requires the updated backend. Restart Studio from the complete release before saving defaults or starting production. Existing files and jobs are retained.');
+}
 function importContext(value){
   if(value===undefined)return {};
   if(!value||typeof value!=='object'||Object.keys(value).some(k=>!['project_id','video_id'].includes(k))||!['project_id','video_id'].every(k=>typeof value[k]==='string'&&/^[a-zA-Z0-9_-]{1,100}$/.test(value[k])))throw Error('Select a project and video before importing files.');
@@ -30,7 +42,7 @@ const storyboardAllowed = /^\/api\/storyboard\/(providers|videos\/[a-zA-Z0-9_-]+
 const allowed = /^\/(health|api\/(projects(?:\/[a-zA-Z0-9_-]+(?:\/settings)?)?|videos(?:\/[a-zA-Z0-9_-]+)?|scenes(?:\/[a-zA-Z0-9_-]+)?|models|materials|flow\/status|tts\/templates(?:\/[a-zA-Z0-9_-]+)?|desktop\/(jobs(?:\/cancel|\/[a-f0-9-]+\/resume)?|pause|diagnostics|flow-progress)))(\?[^#]*)?$/;
 function whisperxAllowed(method, route) {
   return method === 'GET' && /^\/api\/whisperx\/(status|jobs\/[a-f0-9-]{36}\/preview(?:\/(full|video|image))?)$/.test(route)
-    || method === 'POST' && /^\/api\/whisperx\/(check|settings|jobs|jobs\/[a-f0-9-]{36}\/(cancel|split))$/.test(route);
+    || method === 'POST' && /^\/api\/whisperx\/(check|settings|jobs|jobs\/[a-f0-9-]{36}\/(cancel|split|retry))$/.test(route);
 }
 function srtAllowed(method, route) {
   return method === 'GET' && /^\/api\/srt\/(status|jobs\/[a-f0-9-]{36}\/(preview|quality))$/.test(route)
@@ -129,11 +141,13 @@ app.whenReady().then(async()=>{
   win=new BrowserWindow({width:1280,height:900,minWidth:920,minHeight:650,title:'Flowkit Studio',backgroundColor:'#11151e',webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',e=>e.preventDefault());
+  require(path.join(__dirname,'maintenance.cjs'))({handle,dialog,getWindow:()=>win,root:ROOT,base:BASE,request,saveResponse:saveAudioResponse,fetch:(...args)=>fetch(...args),getOutput:()=>settings.output});
   handle('api',async(method,route,body)=>{
-    if(!['GET','POST','PATCH','PUT'].includes(method)||typeof route!=='string'||!(workflowAllowed(method,route)||assemblyAllowed(method,route)||srtAllowed(method,route)||whisperxAllowed(method,route)||elevenlabsAllowed(method,route)||allowed.test(route)||storyboardAllowed.test(route)||/^\/api\/chatgpt\/(status|history|test|resume|message|queue|config|cancel|retry|preflight|models)$/.test(route))||route.includes('..')||route.includes('\\')) throw Error('Unsupported API operation');
+    if(!['GET','POST','PATCH','PUT'].includes(method)||typeof route!=='string'||!(productionAllowed(method,route)||workflowAllowed(method,route)||assemblyAllowed(method,route)||srtAllowed(method,route)||whisperxAllowed(method,route)||elevenlabsAllowed(method,route)||allowed.test(route)||storyboardAllowed.test(route)||/^\/api\/chatgpt\/(status|history|test|resume|message|queue|config|cancel|retry|preflight|models)$/.test(route))||route.includes('..')||route.includes('\\')) throw Error('Unsupported API operation');
     if (method !== 'GET' && runtime.isRestarting()) throw Error('The backend is restarting. Wait for it to become ready.');
     if(route.startsWith('/api/workflow/')||(method!=='GET'&&/^\/api\/videos(?:\/|$)/.test(route))||(workflowAllowed(method,route)&&route.includes('?'))||(method==='POST'&&body?.video_id&&/^\/api\/(elevenlabs|whisperx|srt|assembly)\//.test(route)))await requireWorkflow();
     if(/^\/api\/projects\/[^/]+\/settings$/.test(route)||(method==='POST'&&(/^\/api\/storyboard\/videos\/[^/]+\/(generate-concepts|generate-media|retry-failed)$/.test(route)||(route==='/api/desktop/jobs'&&body?.jobs?.some(j=>j.video_id)))))await requireWorkflow();
+    if(productionAllowed(method,route)||(method==='PUT'&&/^\/api\/projects\/[^/]+\/settings$/.test(route)&&body?.production)||(method==='POST'&&/^\/api\/assembly\/(preview|preflight|jobs)$/.test(route)&&body?.image_motion&&body.image_motion!=='none'))await requireProduction();
     if(route.startsWith('/api/elevenlabs/')) {
       let issue = '', health;
       try { health = await request('GET','/health',undefined,5000); issue = backendProblem(health); }

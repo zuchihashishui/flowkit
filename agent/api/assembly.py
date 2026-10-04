@@ -24,6 +24,7 @@ class Plan(Scoped):
     size: Literal['1080p', '720p', 'vertical'] = '1080p'
     fps: Literal[24, 30, 60] = 30
     fit: Literal['fit', 'crop'] = 'fit'
+    image_motion: Literal['none', 'zoom_in', 'zoom_out'] = 'none'
     subtitles: Literal['burn', 'soft', 'off'] = 'burn'
     font: str = Field(default='Yu Gothic', min_length=1, max_length=80, pattern=r'^[\w .-]+$')
 
@@ -33,7 +34,7 @@ class Source(Scoped):
 
 @router.get('/status')
 async def status(project_id: str | None = None, video_id: str | None = None, unassigned: bool = False):
-    return {'production_version': 1, 'mixed_media_version': 1, 'assets': scope.select(scope.annotate(service, 'asset', service.assets()), project_id, video_id, unassigned), 'jobs': scope.select(scope.annotate(service, 'assembly', service.jobs(dict(project_id=project_id, video_id=video_id, unassigned=unassigned))), project_id, video_id, unassigned), 'ffmpeg': bool(shutil.which('ffmpeg')), 'ffprobe': bool(shutil.which('ffprobe'))}
+    return {'production_version': 1, 'mixed_media_version': 1, 'image_motion_version': 1, 'assets': scope.select(scope.annotate(service, 'asset', service.assets()), project_id, video_id, unassigned), 'jobs': scope.select(scope.annotate(service, 'assembly', service.jobs(dict(project_id=project_id, video_id=video_id, unassigned=unassigned))), project_id, video_id, unassigned), 'ffmpeg': bool(shutil.which('ffmpeg')), 'ffprobe': bool(shutil.which('ffprobe'))}
 
 @router.post('/import/{kind}')
 async def import_file(kind: Literal['srt', 'audio', 'image', 'video'], file: UploadFile = File(...), project_id: str | None = Form(None), video_id: str | None = Form(None)):
@@ -56,7 +57,9 @@ async def use_source(body: Source):
 @router.post('/preview')
 async def preview(body: Plan):
     try:
-        await inputs(body, [scope.ref('asset', i) for i in [body.audio_id,body.srt_id,*body.image_ids,*body.video_ids]])
+        ctx = await inputs(body, [scope.ref('asset', i) for i in [body.audio_id,body.srt_id,*body.image_ids,*body.video_ids]])
+        from agent.services.production_settings import apply_stage
+        body = await apply_stage(body, 'assembly', ctx)
         return service.plan(body.model_dump(mode='json'))
     except (ValueError, UnicodeError, OSError) as e:
         raise HTTPException(409, str(e)) from e
@@ -65,6 +68,8 @@ async def preview(body: Plan):
 async def enqueue(body: Plan):
     try:
         ctx = await inputs(body, [scope.ref('asset', i) for i in [body.audio_id,body.srt_id,*body.image_ids,*body.video_ids]])
+        from agent.services.production_settings import apply_stage
+        body = await apply_stage(body, 'assembly', ctx)
         from agent.services.assembly_preflight import check
         report = await check(service, body.model_dump(mode='json'))
         if report['blocked']:
@@ -120,7 +125,9 @@ async def scene_media(body: SceneMedia):
 async def preflight(body: Plan):
     from agent.services.assembly_preflight import check
     try:
-        await inputs(body, [scope.ref('asset',i) for i in [body.audio_id,body.srt_id,*body.image_ids,*body.video_ids]])
+        ctx = await inputs(body, [scope.ref('asset',i) for i in [body.audio_id,body.srt_id,*body.image_ids,*body.video_ids]])
+        from agent.services.production_settings import apply_stage
+        body = await apply_stage(body, 'assembly', ctx)
         return await check(service, body.model_dump(mode='json'))
     except (ValueError, OSError) as e:
         raise HTTPException(409,str(e)) from e

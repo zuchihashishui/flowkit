@@ -203,6 +203,7 @@
     open,count:()=>checked.size,
     canChangeProject:()=>owner===$('project-select').value||discard(),
     canChangeVideo:id=>collection===id||!collection||discard(),
+    openSegment:async id=>{await open();const segment=data?.segments.find(s=>s.id===id);if(segment)openEditor(segment);},
     canImportSource:()=>discard(),
     projectChanged:()=>{if(owner!==$('project-select').value){++requestId;owner='';collection='';data=null;checked.clear();$('sb-script').value='';$('sb-style').value='';$('sb-collection').replaceChildren(option('','Select a collection'));showAudio();render();}},
     generateMedia:async kind=>{

@@ -79,8 +79,12 @@
    }
    if(sources.some(j=>j.id===selected)){$('wx-source').value=selected;wantedSource='';}
    if(!loaded){
-    const s=state.settings;for(const key of ['language','model','device'])$('wx-'+key).value=s[key];
-    $('wx-batch').value=s.batch_size;$('wx-video-seconds').value=s.video_duration_seconds??100;$('wx-auto').checked=false;loaded=true;
+    if(window.productionDefaults)window.productionDefaults.restore(['wx-language','wx-model','wx-device','wx-batch','wx-video-seconds']);
+    else {
+     const s=window.videoSettings?.effective()?.whisperx||state.settings;for(const name of ['language','model','device'])$('wx-'+name).value=s[name];
+     $('wx-batch').value=s.batch_size;$('wx-video-seconds').value=s.video_duration_seconds??100;
+    }
+    $('wx-auto').checked=false;loaded=true;
    }
    showActivity(state.jobs);
    $('wx-jobs').replaceChildren(...state.jobs.map(job=>{
@@ -90,6 +94,7 @@
     if(job.elapsed_seconds){const detail=document.createElement('small');detail.textContent='Elapsed: '+duration(job.elapsed_seconds)+(job.progress?.output_words!==undefined?' · '+count(job.progress.output_words)+' output word units':'');row.append(detail);}
     if(job.error){const err=document.createElement('pre');err.textContent=job.error;row.append(err);}
     if(['QUEUED','RUNNING'].includes(job.state))row.append(button('Cancel transcription',async()=>{await api('POST',`jobs/${job.id}/cancel`,{});await refresh();}));
+    if(job.can_retry&&['FAILED','INTERRUPTED'].includes(job.state))row.append(button('Retry job',async()=>{await api('POST',`jobs/${job.id}/retry`,{});say('Transcription queued again with its saved source and settings.');await refresh();}));
     if(job.result_available){
      row.append(button('Create SRT',async()=>window.openSRT(job.id)),button('Preview words',()=>preview(job.id)),button('Save transcript.json',async()=>{const r=await window.studio.whisperxSave(job.id,'full');say(r.canceled?'Save cancelled.':'JSON saved: '+r.path);}));
      if(job.split_available){
@@ -115,7 +120,17 @@
   await api('POST','jobs',{source_id:$('wx-source').value,...options()});
   say('Transcription queued. Studio will save the original, video and image JSON files. Follow the job stages below.');await refresh();
  });};
- $('wx-settings').onclick=()=>action(async()=>{await api('POST','settings',{...options(),auto:false});say('Settings saved. Stages stay manual. Click Create word JSON when ready.');});
+ $('wx-settings').onclick=()=>action(async()=>{
+  if(window.productionDefaults&&window.workflow){
+   const ctx=window.workflow.requireContext();window.projectSettings?.assertSaved();window.videoSettings?.assertSaved();
+   const values=options(),path='/api/videos/'+ctx.video_id+'/settings';
+   const current=await window.studio.api('GET',path);window.workflow.assertCurrent(ctx);
+   if(current.project_id!==ctx.project_id)throw Error('This video belongs to another project. Select it again.');
+   await window.studio.api('PUT',path,{revision:current.revision,overrides:{...current.overrides,whisperx:{...current.overrides?.whisperx,...values}}});
+   window.workflow.assertCurrent(ctx);await window.videoSettings?.reload();
+   say('WhisperX defaults saved for this video. Other videos and existing jobs are unchanged.');
+  }else {await api('POST','settings',{...options(),auto:false});say('Settings saved. Stages stay manual. Click Create word JSON when ready.');}
+ });
  $('wx-check').onclick=()=>action(async()=>{
   $('wx-environment').textContent='Checking imports (up to 90 seconds)…';
   try {const r=await api('POST','check',{});$('wx-environment').textContent=JSON.stringify(r,null,2);}
