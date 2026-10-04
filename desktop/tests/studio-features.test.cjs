@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {JSDOM} = require('jsdom');
 const tick = () => new Promise(resolve => setImmediate(resolve));
-async function studio(savedProject='') {
+async function studio(savedProject='',multiple=false,savedVideo='') {
   const dom = new JSDOM(fs.readFileSync(path.join(__dirname, '../ui/index.html'), 'utf8'), {runScripts:'outside-only',url:'https://studio.test'});
   const w = dom.window, $ = id => w.document.getElementById(id), calls = [], exports = [], preferences = [];
   let scenes = [
@@ -12,12 +12,15 @@ async function studio(savedProject='') {
     {id:'s2',display_order:1,prompt:'Cloud',video_prompt:'A moving cloud',narrator_text:'Second narration'}
   ];
   const jobs = [
-    {id:'a',state:'QUEUED',payload:{kind:'video',project_id:'p1',label:'Boat job',prompt:'A moving boat'}},
-    {id:'b',state:'COMPLETED',payload:{kind:'image',project_id:'p2',label:'Cloud job',prompt:'Bright cloud'}},
-    {id:'c',state:'FAILED',can_resume:true,payload:{kind:'video',project_id:'p1',label:'Saved result',prompt:'A saved prompt'}},
-    {id:'d',state:'NEEDS_REVIEW',payload:{kind:'image',project_id:'p1',label:'Uncertain job',prompt:'Check Flow'}}
+    {id:'a',state:'QUEUED',payload:{kind:'video',project_id:'p1',video_id:'v1',label:'Boat job',prompt:'A moving boat'}},
+    {id:'b',state:'COMPLETED',payload:{kind:'image',project_id:'p2',video_id:'v1',label:'Cloud job',prompt:'Bright cloud'}},
+    {id:'c',state:'FAILED',can_resume:true,payload:{kind:'video',project_id:'p1',video_id:'v1',label:'Saved result',prompt:'A saved prompt'}},
+    {id:'d',state:'NEEDS_REVIEW',payload:{kind:'image',project_id:'p1',video_id:'v1',label:'Uncertain job',prompt:'Check Flow'}}
   ].map(j => ({...j,files:j.state==='COMPLETED'?['/output/output.png']:[],created:1,error:j.state==='FAILED'?'Download failed':null}));
+  const videoRows=[{id:'v1',title:'First collection',status:'DRAFT'}];
+  if(multiple){videoRows.push({id:'v2',title:'Second topic',status:'DRAFT'});jobs.push({id:'second-video-job',state:'QUEUED',files:[],created:2,payload:{kind:'image',project_id:'p1',video_id:'v2',label:'Only video two',prompt:'Forest'}});}
   w.confirm = () => true; w.setInterval = () => 0;
+  if(savedVideo)w.localStorage.setItem('active-video:'+savedProject,savedVideo);
   if(savedProject)w.localStorage.setItem('active-project-id',savedProject);
   w.studio = {
     settings: async () => ({autoExport:false,output:'/output',extension:'/extension'}),
@@ -28,9 +31,11 @@ async function studio(savedProject='') {
       if(route.startsWith('/api/workflow/resources'))return {resources:[]};
       if(route==='/health')return {version:'test',extension_connected:true};
       if(route==='/api/projects')return [{id:'p1',name:'First project'},{id:'p2',name:'Second project'}];
-      if(route==='/api/workflow/project')return {project_id:body.project_id,video_id:'v1',title:'First collection',protocol:2};
+      if(route==='/api/workflow/project')return {project_id:body.project_id,video_id:videoRows.length===1?'v1':null,title:videoRows.length===1?'First collection':null,videos:structuredClone(videoRows),protocol:3};
+      if(route==='/api/videos'&&method==='POST'){const row={id:'v'+(videoRows.length+1),...body,status:'DRAFT'};videoRows.push(row);return row;}
+      if(route.startsWith('/api/videos/')&&method==='PATCH'){const row=videoRows.find(v=>v.id===route.split('/').at(-1));Object.assign(row,body);return row;}
       if(route.startsWith('/api/videos?'))return [{id:'v1',title:'First collection'}];
-      if(route.startsWith('/api/scenes?'))return scenes.map(s=>({...s}));
+      if(route.startsWith('/api/scenes?'))return (route.endsWith('v1')?scenes:[]).map(s=>({...s}));
       if(route.startsWith('/api/scenes/')&&method==='PATCH') {
         const s=scenes.find(s=>s.id===route.split('/').at(-1));Object.assign(s,body);return {...s};
       }
@@ -110,7 +115,7 @@ test('Projects owns the only selector; selection persists and all media lists fo
   assert.equal($('project-select').closest('[data-view]').dataset.view,'projects');
   assert.equal(w.document.querySelector('header select'),null);assert.equal($('job-project'),null);
   assert.equal($('project-select').value,'p2');assert.equal($('active-project-name').textContent,'Second project');
-  assert.equal(w.workflow.context().project_id,'p2');assert.equal(w.workflow.context().video_id,'v1');assert.equal($('active-video-name'),null);assert.equal($('video-select').hidden,true);assert.equal($('new-collection'),null);
+  assert.equal(w.workflow.context().project_id,'p2');assert.equal(w.workflow.context().video_id,'v1');assert.equal($('active-video-name').textContent,'First collection');assert.equal($('video-select').hidden,false);assert.equal($('new-collection'),null);
   assert.match($('image-jobs').textContent,/Cloud job/);assert.doesNotMatch($('image-jobs').textContent,/Uncertain job/);
   w.document.querySelector('[data-page="image"]').click();assert.equal($('active-project-name').textContent,'Second project');
   await change('project-select','p1');assert.equal(w.localStorage.getItem('active-project-id'),'p1');
@@ -140,4 +145,30 @@ test('auto-export preference is restored, saved, and reverted on a write error',
     s.w.studio.updateSettings=async()=>{throw Error('Disk full');};
     await s.change('auto-export',false);assert.equal(s.$('auto-export').checked,true);assert.match(s.$('notice').textContent,/Disk full/);
   }finally{s.dom.window.close();}
+});
+
+
+test('multiple videos can be selected, created, renamed and restored within one project',async()=>{
+ const s=await studio('p1',true),{$,w,change,submit,calls,click}=s;
+ try{
+  assert.equal($('video-select').value,'');assert.equal(w.workflow.context().video_id,'');
+  assert.equal($('project-videos').children.length,2);assert.equal($('all-jobs').children.length,0);
+  await change('video-select','v1');assert.equal($('scenes').children.length,2);
+  assert.equal($('active-video-name').textContent,'First collection');assert.doesNotMatch($('all-jobs').textContent,/Only video two/);
+  await click($('scenes').children[0],'Edit scene');$('scene-prompt').value='Unsaved';$('scene-prompt').dispatchEvent(new w.Event('input',{bubbles:true}));
+  w.confirm=()=>false;await change('video-select','v2');assert.equal($('video-select').value,'v1');assert.equal(w.workflow.context().video_id,'v1');
+  w.confirm=()=>true;await change('video-select','v2');assert.equal(w.workflow.context().project_id,'p1');assert.equal(w.workflow.context().video_id,'v2');
+  assert.equal($('scenes').querySelectorAll('[data-scene-id]').length,0);assert.match($('all-jobs').textContent,/Only video two/);assert.doesNotMatch($('all-jobs').textContent,/Boat job/);
+  assert.equal(w.localStorage.getItem('active-video:p1'),'v2');
+  $('image-prompt').value='New prompt';await submit('image-form');
+  assert.equal(calls.filter(c=>c.route==='/api/desktop/jobs'&&c.method==='POST').at(-1).body.jobs[0].video_id,'v2');
+  $('edit-video-title').value='Updated second topic';await submit('edit-video');assert.equal($('active-video-name').textContent,'Updated second topic');
+  assert.equal(calls.filter(c=>c.method==='PATCH').at(-1).route,'/api/videos/v2');
+  $('new-video-title').value='Third topic';await submit('create-video');assert.equal($('video-select').value,'v3');assert.equal(w.workflow.context().video_id,'v3');
+  assert.equal($('active-project-name').textContent,'First project');assert.equal($('project-videos').children.length,3);
+  await change('job-scope','project');assert.match($('all-jobs').textContent,/Boat job/);assert.match($('all-jobs').textContent,/Only video two/);
+  await change('project-select','p2');await change('project-select','p1');assert.equal($('video-select').value,'v3');
+ }finally{s.dom.window.close();}
+ const restored=await studio('p1',true,'v2');
+ try{assert.equal(restored.$('video-select').value,'v2');assert.equal(restored.w.workflow.context().video_id,'v2');}finally{restored.dom.window.close();}
 });

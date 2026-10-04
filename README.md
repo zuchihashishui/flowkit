@@ -1,3 +1,5 @@
+> **Studio 0.7.53:** One project can contain multiple videos. Create, select and rename videos in **Project**; all production stages follow the active video. Existing IDs, files and history are retained, and project renaming no longer renames videos. Update the complete source and restart Studio/backend; extensions are unchanged. [Migration and usage](docs/VIDEO_WORKFLOW.md).
+
 > **Studio 0.7.52:** Load generated scene media directly into assembly; inspect files, resolution and clip timing before rendering; retry only failed concepts/media; match generated clip duration to SRT; resume interrupted renders using verified scene checkpoints. Stages remain manual. Update the complete source and restart Studio/backend; extensions are unchanged. [Usage](docs/VIDEO_ASSEMBLY.md).
 
 > **Studio 0.7.51:** Final assembly uses one image or video per SRT scene. Choose **Images only** (default) or **Images + video** and review each scene before rendering. Video clips are optional. [Details](docs/VIDEO_ASSEMBLY.md). Update the complete source and restart Studio/backend.

@@ -439,7 +439,7 @@ async def generate_media(video_id: str, body: MediaBody):
             if duplicate and not body.regenerate:
                 skipped.append(sid)
                 continue
-            pending.append(desktop.Job(kind=body.kind, project_id=data['video']['project_id'], document_id=data['document']['id'], segment_id=sid, concept_id=c['id'], start_ms=s['start_ms'], end_ms=s['end_ms'], label=f"Segment {s['ordinal']:03d}", prompt=c['image_prompt'] if body.kind=='image' else c['video_prompt'], orientation=body.orientation, duration=duration, image_model=body.image_model))
+            pending.append(desktop.Job(kind=body.kind, project_id=data['video']['project_id'], video_id=video_id, document_id=data['document']['id'], segment_id=sid, concept_id=c['id'], start_ms=s['start_ms'], end_ms=s['end_ms'], label=f"Segment {s['ordinal']:03d}", prompt=c['image_prompt'] if body.kind=='image' else c['video_prompt'], orientation=body.orientation, duration=duration, image_model=body.image_model))
         result = await desktop.enqueue(desktop.Batch(jobs=pending)) if pending else {'ids': []}
         return {**result, 'skipped': skipped, 'durations': duration_notes}
 

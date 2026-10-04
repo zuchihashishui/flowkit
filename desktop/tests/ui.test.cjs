@@ -22,7 +22,7 @@ test('English UI routes project, scene, generation and voice actions to the brid
       if(route==='/health') return {version:'test',extension_connected:true};
       if(route==='/api/projects') return method==='GET'?[project]:project;
       if(route.startsWith('/api/projects/')) return {...project,...body};
-      if(route==='/api/workflow/project') return {project_id:project.id,video_id:collection.id,title:project.name};
+      if(route==='/api/workflow/project') return {project_id:project.id,video_id:collection.id,title:collection.title,videos:[collection],protocol:3};
       if(route.startsWith('/api/videos')) return method==='GET'?[collection]:collection;
       if(route.startsWith('/api/scenes')) return method==='GET'?scenes:{id:'new',...body};
       if(route==='/api/tts/templates') return [{name:'my_voice'}];
@@ -43,7 +43,7 @@ test('English UI routes project, scene, generation and voice actions to the brid
     select.value=project.id;select.dispatchEvent(new w.Event('change'));await tick();
     assert.match(w.document.getElementById('scenes').textContent,/Video prompt/);
     assert.equal(w.document.getElementById('new-collection'),null);
-    assert.equal(w.document.getElementById('video-select').hidden,true);
+    assert.equal(w.document.getElementById('video-select').hidden,false);
     assert(calls.some(c=>c[0]==='POST'&&c[1]==='/api/workflow/project'&&c[2].project_id===project.id));
     w.document.getElementById('import-scenes').click();await tick();
     assert(calls.some(c=>c[1]==='/api/scenes'&&c[2]?.narrator_text==='Narration'));

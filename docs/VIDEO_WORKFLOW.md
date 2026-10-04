@@ -1,23 +1,26 @@
-# Project sources and history — Studio 0.7.44
+# Project and video workflow — Studio 0.7.53
 
-**One project = one complete video.** The project name is the topic/title. Select
-only a project in **Projects**. Studio creates or reuses its single internal video
-record automatically; there is no second title or video selector on the UI. The
-internal `video_id` remains to preserve existing scene and source relationships.
-A project may still have multiple narration, transcript, SRT and MP4 render
-versions; those are versions of the same production, not separate video topics.
-For another topic/video, create another project. A future Channel/Series layer
-can group projects without changing this rule.
+**One project can contain multiple videos.** A project groups related productions
+and retains shared project metadata such as visual style, language and reference
+assets. Every video has its own title, script, scenes, audio, transcript, SRT,
+generation jobs and render versions.
+
+In **Project**, select a project and use **Videos in this project** to create or
+select a video. **Save video title** changes only that video's title. The header
+shows both selections on every page. Studio remembers the last selected video for
+each project. A sole existing video is selected automatically; a project with
+multiple videos and no remembered selection waits for you to choose. Selecting
+an empty project does not create a video implicitly.
 
 ## Use the pipeline
 
-1. Choose or create a project in Projects. Its name is the video title.
+1. Choose or create a project in Project, then choose or create a video inside it.
 2. Generate narration in ElevenLabs. Completed chunks and joined audio keep their
    existing output paths. Completion does not start WhisperX.
-3. In **Projects → Project sources & history**, click **Use for WhisperX** on a
+3. In **Project → Video sources & history**, click **Use for WhisperX** on a
    narration with merged audio. This selects its source in WhisperX; click
    **Create word JSON** when ready. **Choose audio file** also imports into the
-   active project and keeps a backend copy.
+   active video and keeps a backend copy.
 4. Click **Use for SRT** on a completed transcript, or choose a JSON file in
    JSON → SRT. Review your prompt/model, then submit explicitly. The source JSON
    and prompt are retained with that SRT request.
@@ -31,10 +34,10 @@ can group projects without changing this rule.
    Assembly saves its own source copies and the exact image/timeline mapping.
 
 Handoff buttons open/select a source; they do not enqueue the next stage.
-Source changes invalidate the assembly preview. Switching projects clears prior
+Source changes invalidate the assembly preview. Switching projects or videos clears prior
 source selections and visible previews. A pending request remains owned by the
-project selected when it was submitted; a late response cannot restore the old
-project's source list. Native file pickers capture their destination before opening.
+video selected when it was submitted; a late response cannot restore the old
+video's source list. Native file pickers capture their destination before opening.
 
 Generic ChatGPT testing/queue settings and provider connection/worker status stay
 global. The providers have shared workers across videos; filtering the history
@@ -48,16 +51,23 @@ Update the complete source in your existing installation and restart Studio and
 its backend. Keep the existing databases and `output/` directories. Browser
 extension files and versions are unchanged by this release.
 
-Existing projects with zero videos get their internal record on first selection.
-Projects with one video reuse its ID and retain scenes/files; its title follows the
-project name. SQLite guards prevent a second video or a move into an occupied
-project. Older projects with multiple videos are left intact and show a migration
-error instead of silently choosing one. They need an explicit data migration; this
-release does not automatically split remote Google Flow projects.
+Startup removes the old one-video-per-project insert/move triggers and the
+project-name-to-video-title trigger. It does not delete, merge or recreate rows.
+Existing video IDs, titles, scene IDs, files, jobs and resource ownership stay in
+place. Older multi-video projects become selectable without splitting the remote
+Google Flow project. Project and video titles are independent from this release.
 
-Existing records have no owner until you choose one. Open **Projects → Project
-sources & history → Unassigned**, select the destination project, and click
-**Assign source chain to active project**. Studio shows the linked records before
+Desktop media jobs now capture `video_id` alongside `project_id`. Legacy jobs use
+saved document/segment/scene IDs to recover ownership. Jobs without those IDs can
+use a project's sole existing video; this backfill happens before a second video
+is created. Ambiguous jobs in multi-video projects remain without a video owner.
+Queue's **Job scope** lets you view the active video, all videos in the project,
+or legacy project jobs without a video. It does not regenerate or move files.
+Provider activity and pause controls remain global across videos.
+
+Existing records have no owner until you choose one. Open **Project → Video
+sources & history → Unassigned**, select the destination project and video, and click
+**Assign source chain to active video**. Studio shows the linked records before
 you confirm. It assigns their known ancestors and descendants together in one
 transaction. This operation neither generates files nor moves audio on disk.
 
@@ -75,7 +85,7 @@ transaction. This operation neither generates files nor moves audio on disk.
   narration; project-linked narration always requires a manual submission.
 
 If a collection already has scenes, another SRT import is rejected. Edit those
-scenes in place, or create a new project and import a separate copy of the
+scenes in place, or create another video and import a separate copy of the
 new SRT. Existing scene IDs, prompts and generated images are not replaced.
 Multiple audio, WhisperX, SRT and render jobs are separate saved versions. Editing
 scene text/timing/style continues to mark incompatible concepts outdated using
@@ -122,6 +132,10 @@ supplies its exact owner, otherwise the new root remains unassigned.
 Endpoints:
 
 - `POST /api/workflow/project` with `{project_id}` prepares/resolves the internal video.
+- `POST /api/videos` with `{project_id, title, orientation}` creates a new video.
+- `PATCH /api/videos/{id}` updates that video's title/settings.
+- `POST /api/workflow/project` with `{project_id, video_id?}` returns all project videos and the selected video (protocol 3). It never creates a video. With several videos, omitted `video_id` leaves the selection empty.
+- Production writes should send both `project_id` and `video_id`; project-only legacy requests resolve only when exactly one video exists.
 - `GET /api/workflow/resources?project_id=...&video_id=...`
 - `GET /api/workflow/resources?unassigned=true`
 - `POST /api/workflow/assignment-preview`
@@ -130,14 +144,17 @@ Endpoints:
 
 The assignment and scene-import POST endpoints take `{project_id, video_id, kind, id}`. All state is
 managed by the backend, so a later website or CLI can use the same relationships.
-Electron verifies the backend's `project_video_sources` and `project_single_video` capabilities before scoped
+Electron verifies the backend's `project_video_sources` and `project_multi_video` capabilities before scoped
 operations, preventing an older backend from silently ignoring the new fields.
 
 ## Verification
 
-**165 backend tests and 61 Electron DOM/IPC tests passed**, including one-to-one
-creation, project selection, existing stage regressions, syntax and API capability
-checks.
+The 0.7.53 checks cover additive migration from the old database triggers,
+concurrent creation of distinct videos, independent names, explicit selection,
+legacy media-job ownership, and source isolation between two videos in the same
+project. UI checks cover create/select/rename, remembered video selection,
+unsaved-edit protection, per-video queue filters, stale responses and assembly
+drafts. No live provider generation is required for these tests.
 
 Backend tests cover the complete fixture audio → JSON → SRT → scenes/assembly
 chain, wrong-video rejection, imported files, migration, assignment preview,

@@ -68,6 +68,7 @@ class Job(BaseModel):
     kind: Literal["image", "video", "voice"]
     prompt: str = Field(min_length=1, max_length=5000)
     project_id: str = ""
+    video_id: str = ""
     scene_id: str = ""
     document_id: str = ""
     segment_id: str = ""
@@ -92,6 +93,18 @@ async def enqueue(body: Batch):
         raise HTTPException(503, "Connect the Flow extension before submitting media jobs.")
     # Validate all inputs before atomically inserting the batch.
     for j in body.jobs:
+        if j.video_id:
+            from agent.api.workflow import context
+            await context(j.project_id, j.video_id)
+            from agent.db.schema import get_db
+            db = await get_db()
+            for value,sql in [(j.scene_id,'SELECT video_id FROM scene WHERE id=?'),
+                              (j.document_id,'SELECT video_id FROM script_document WHERE id=?'),
+                              (j.segment_id,'SELECT d.video_id FROM script_segment s JOIN script_document d ON d.id=s.document_id WHERE s.id=?')]:
+                if value:
+                    owner=await (await db.execute(sql,(value,))).fetchone()
+                    if not owner or owner[0]!=j.video_id:
+                        raise HTTPException(409,'Scene or script does not belong to the selected video.')
         if j.kind != "voice":
             try:
                 uuid.UUID(j.project_id)
@@ -112,6 +125,8 @@ async def enqueue(body: Batch):
 
 @router.get("/jobs")
 async def list_jobs():
+    from agent.services.media_ownership import backfill
+    await backfill()
     return {"paused": paused, "jobs": [{**r, "payload": json.loads(r["payload"]), "can_resume": r["state"] == "FAILED" and bool(r["remote"]), "remote": None, "files": json.loads(r["files"])} for r in rows()]}
 
 

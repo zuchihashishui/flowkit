@@ -1,6 +1,6 @@
 # Video Assembly
 
-> Studio 0.7.44: one project = one complete video. Select the active project in **Projects**. Sources and jobs follow that selection. Existing records remain **Unassigned** until you link them in Projects → Project sources & history. See [Video workflow](VIDEO_WORKFLOW.md).
+> Studio 0.7.53: a project may contain multiple videos. Select the project and active video in **Project**. Sources, jobs and assembly drafts follow that video. Existing unowned records remain **Unassigned** until explicitly linked. See [Video workflow](VIDEO_WORKFLOW.md).
 
 Flowkit Studio 0.7.52 assembles images and optional video clips locally using FFmpeg. It does not make generation requests. Update the complete source and restart Studio and the backend. Browser extensions and WhisperX dependencies do not need updating for this feature.
 
@@ -38,7 +38,7 @@ Use the **full narration and full-timeline SRT**, with timestamps on the origina
 - Each assigned clip starts from its beginning. Long clips are trimmed to the visual span. Short clips **Hold last frame** by default, or **Loop clip** if selected. The preview reports short clips. Clips are never sped up or slowed down to fit.
 - **Clip audio is always muted**. Only the selected narration is included in the output.
 
-Mixed rendering first prepares each visual segment with a common resolution and frame rate, then joins them and adds narration/subtitles. The UI reports the current segment and rendering progress. New image-only renders also use per-scene checkpoints; legacy queued jobs retain their original renderer. Settings, selected media and manual mappings are saved per active project. Drafts using a removed visual mode retain their imported files, reset the scene mapping and require a new preview.
+Mixed rendering first prepares each visual segment with a common resolution and frame rate, then joins them and adds narration/subtitles. The UI reports the current segment and rendering progress. New image-only renders also use per-scene checkpoints; legacy queued jobs retain their original renderer. Settings, selected media and manual mappings are saved per active video. Drafts using a removed visual mode retain their imported files, reset the scene mapping and require a new preview.
 
 ## Timeline behavior
 
@@ -76,7 +76,7 @@ These checks run in the development Linux environment. The user's Windows FFmpeg
 
 ## Production controls (0.7.52)
 
-- **Load project scene media** associates completed Flow image/video jobs by project, document, scene, current concept and exact timing. Select the SRT first: its text and cue times must match the project's current scenes. Studio copies generated files to assembly assets; repeated loading reuses existing copies. In mixed mode, video is preferred when both exist; the scene dropdown lets you choose an alternate result. Missing/stale media are reported, never generated automatically.
+- **Load video scene media** associates completed Flow image/video jobs by project, document, scene, current concept and exact timing. Select the SRT first: its text and cue times must match the project's current scenes. Studio copies generated files to assembly assets; repeated loading reuses existing copies. In mixed mode, video is preferred when both exist; the scene dropdown lets you choose an alternate result. Missing/stale media are reported, never generated automatically.
 - **Check files & preview** inspects the actual selected files using FFprobe, not just saved database entries. Missing/empty/unreadable files block rendering. Low resolution and short clips produce warnings; short clips can hold the final frame or loop. Header/stream inspection cannot guarantee every frame decodes; rendering performs full decoding.
 - **Text to Prompt**, **Prompt to Image** and **Prompt to Video** offer **Select failed** and **Retry failed**. Completed and active scenes are skipped. Failed Flow jobs with saved remote results resume retrieval using the original job. Other failures need explicit review before a new request, which may use provider credits. Successes, original prompts and media versions are retained.
 - **Match SRT scene duration** defaults on for scene batches in Prompt to Video: choose the smallest supported 4/6/8/10-second duration covering the cue. A 9-second cue requests 10 seconds and assembly trims it. Cues over 10 seconds are flagged for hold/loop during assembly. Provider/model support still determines whether the requested generation succeeds. Manual duration remains available; single-prompt generation is unchanged.

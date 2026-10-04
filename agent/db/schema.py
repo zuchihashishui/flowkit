@@ -160,18 +160,10 @@ CREATE INDEX IF NOT EXISTS idx_request_status ON request(status);
 CREATE INDEX IF NOT EXISTS idx_request_scene ON request(scene_id);
 CREATE INDEX IF NOT EXISTS idx_video_project ON video(project_id);
 
--- Preserve older multi-video projects, but never add another video to a project.
-CREATE TRIGGER IF NOT EXISTS one_video_per_project_insert
-BEFORE INSERT ON video WHEN EXISTS(SELECT 1 FROM video WHERE project_id=NEW.project_id)
-BEGIN SELECT RAISE(ABORT, 'A project already has its video. Create another project.'); END;
-CREATE TRIGGER IF NOT EXISTS one_video_per_project_move
-BEFORE UPDATE OF project_id ON video
-WHEN NEW.project_id!=OLD.project_id AND EXISTS(SELECT 1 FROM video WHERE project_id=NEW.project_id AND id!=OLD.id)
-BEGIN SELECT RAISE(ABORT, 'The destination project already has its video.'); END;
-CREATE TRIGGER IF NOT EXISTS project_video_title
-AFTER UPDATE OF name ON project
-WHEN (SELECT COUNT(*) FROM video WHERE project_id=NEW.id)=1
-BEGIN UPDATE video SET title=NEW.name WHERE project_id=NEW.id; END;
+-- 0.7.53: keep all existing records; projects may contain multiple videos.
+DROP TRIGGER IF EXISTS one_video_per_project_insert;
+DROP TRIGGER IF EXISTS one_video_per_project_move;
+DROP TRIGGER IF EXISTS project_video_title;
 """
 
 

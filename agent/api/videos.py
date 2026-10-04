@@ -33,8 +33,8 @@ def _video_to_flat(sdk_video) -> dict:
 
 @router.post("", response_model=Video)
 async def create(body: VideoCreate):
-    from agent.services.project_workspace import ensure
-    return await ensure(body.project_id, body.orientation)
+    from agent.services.project_workspace import create as create_video
+    return await create_video(body)
 
 
 @router.get("", response_model=list[Video])

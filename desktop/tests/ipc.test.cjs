@@ -6,7 +6,7 @@ const os = require('node:os');
 const vm = require('node:vm');
 const {pathToFileURL} = require('node:url');
 
-const compatibleHealth = {studio_api:3,studio_features:{project_single_video:true,project_video_sources:true,elevenlabs_native_download_files:true,elevenlabs_unlimited_native_audio:true,elevenlabs_recover_downloads:true,elevenlabs_safe_pre_submit_failures:true,elevenlabs_auto_prepare_tab:true}};
+const compatibleHealth = {studio_api:3,studio_features:{project_multi_video:true,project_video_sources:true,elevenlabs_native_download_files:true,elevenlabs_unlimited_native_audio:true,elevenlabs_recover_downloads:true,elevenlabs_safe_pre_submit_failures:true,elevenlabs_auto_prepare_tab:true}};
 async function mainProcess(folder, reply, health=compatibleHealth) {
   const handlers = new Map(), requests = [];
   let win, ready;
@@ -34,6 +34,7 @@ test('actual main-process IPC supports scene edits and queue cancellation, rejec
   const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-ipc-'));
   try {
     const main=await mainProcess(folder);
+    await main.invoke('api','PATCH','/api/videos/video-123',{title:'New title'});
     await main.invoke('api','PATCH','/api/scenes/scene-123',{narrator_text:'Edited'});
     await main.invoke('api','POST','/api/desktop/jobs/cancel',{ids:['job']});
     await main.invoke('api','POST','/api/chatgpt/message',{prompt:'Hello'});
@@ -298,5 +299,15 @@ test('assembly imports optional video files/folders and validates original clip 
   assert.equal((await main.invoke('assembly-media',aid,'clip-preview')).url,`http://127.0.0.1:8100/api/assembly/clips/${aid}/video`);
   await assert.rejects(main.invoke('assembly-media','11111111-1111-1111-1111-111111111111','clip-preview'),/not available/);
   await assert.rejects(main.invoke('api','POST','/api/assembly/import/video',{}),/Unsupported/);
+ }finally{await fs.rm(folder,{recursive:true,force:true});}
+});
+
+test('multi-video creation cannot fall back to an old one-video backend',async()=>{
+ const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-multi-ipc-'));
+ try{
+  const health={...compatibleHealth,studio_features:{...compatibleHealth.studio_features,project_multi_video:false,project_single_video:true}};
+  const main=await mainProcess(folder,undefined,health);
+  await assert.rejects(main.invoke('api','POST','/api/videos',{project_id:'p',title:'New topic'}),/multiple videos per project/);
+  assert.equal(main.requests.some(r=>r.url.endsWith('/api/videos')),false);
  }finally{await fs.rm(folder,{recursive:true,force:true});}
 });

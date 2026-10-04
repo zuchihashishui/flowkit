@@ -259,7 +259,8 @@ async def health():
         "studio_api": 3,
         "studio_features": {
             "project_video_sources": True,
-            "project_single_video": True,
+            "project_single_video": False,
+            "project_multi_video": True,
             "elevenlabs_native_download_files": True,
             "elevenlabs_unlimited_native_audio": True,
             "elevenlabs_recover_downloads": True,

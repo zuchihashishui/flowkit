@@ -19,7 +19,7 @@ test('script/segments/concepts flow reaches database-backed image generation wit
    calls.push({method,route,body});
    if(route==='/health')return {version:'test',extension_connected:true};
    if(route==='/api/projects')return [{id:'p1',name:'Test project'}];
-   if(route==='/api/workflow/project')return {project_id:'p1',video_id:'v1',title:'Test project'};
+   if(route==='/api/workflow/project')return {project_id:'p1',video_id:'v1',title:'Narrated video',videos:[{id:'v1',title:'Narrated video'}],protocol:3};
    if(route.startsWith('/api/videos'))return [{id:'v1',title:'Narrated video'}];
    if(route.startsWith('/api/scenes'))return [];
    if(route==='/api/tts/templates')return [];

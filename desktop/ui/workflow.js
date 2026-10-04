@@ -5,14 +5,14 @@
  const raw=(method,route,body)=>window.studio.api(method,route,body);
  const listings=new Set(['/api/elevenlabs/jobs','/api/whisperx/status','/api/srt/status','/api/assembly/status']);
  const scopedWrites=new Set(['/api/elevenlabs/jobs','/api/whisperx/jobs','/api/srt/jobs','/api/srt/analyze','/api/assembly/source','/api/assembly/preview','/api/assembly/preflight','/api/assembly/scene-media','/api/assembly/jobs']);
- function requireContext(){if(!current.project_id||!current.video_id)throw Error('Select a project in Project and wait for it to load.');return {...current};}
- function assertCurrent(ctx){if(key(ctx)!==key(current))throw Error('The active project changed. Your result remains saved with its original project.');}
+ function requireContext(){if(!current.project_id||!current.video_id)throw Error('Select a project and video in Project and wait for them to load.');return {...current};}
+ function assertCurrent(ctx){if(key(ctx)!==key(current))throw Error('The active project or video changed. Your result remains saved with its original video.');}
  async function api(method,route,body){
   const ctx={...current},ticket=generation;
   if(method==='GET'&&listings.has(route))route+='?'+new URLSearchParams(ctx.project_id&&ctx.video_id?ctx:{unassigned:'true'});
   if(method==='POST'&&(scopedWrites.has(route)||/^\/api\/assembly\/jobs\/[a-f0-9-]{36}\/resume$/.test(route)))body={...body,...requireContext()};
   const result=await raw(method,route,body);
-  if(ticket!==generation)throw Error('Active project changed; refreshing its sources.');
+  if(ticket!==generation)throw Error('Active project or video changed; refreshing its sources.');
   return result;
  }
  function set(ctx){
@@ -24,11 +24,11 @@
  function button(label,fn){const b=document.createElement('button');b.textContent=label;b.type='button';b.onclick=async()=>{b.disabled=true;try{await fn();}catch(e){$('wf-message').textContent=e.message;}finally{b.disabled=false;}};return b;}
  async function refresh(){
   const ticket=++loading,ctx={...current},unassigned=$('wf-view').value==='unassigned';
-  if(!unassigned&&!ctx.video_id){$('wf-resources').replaceChildren();$('wf-message').textContent='Choose a project above, or browse Unassigned to link existing files.';return;}
+  if(!unassigned&&!ctx.video_id){$('wf-resources').replaceChildren();$('wf-message').textContent='Choose a project and video above, or browse Unassigned to link existing files.';return;}
   try{
    const result=await raw('GET','/api/workflow/resources?'+new URLSearchParams(unassigned?{unassigned:'true'}:ctx));
    if(ticket!==loading||key(ctx)!==key(current))return;
-   $('wf-message').textContent=`${result.resources.length} source / job versions · ${unassigned?'Unassigned':'Active project'} · Each stage starts only when you click.`;
+   $('wf-message').textContent=`${result.resources.length} source / job versions · ${unassigned?'Unassigned':'Active video'} · Each stage starts only when you click.`;
    const lookup=new Map(result.resources.map(r=>[r.resource_kind+'/'+r.id,r]));
    $('wf-resources').replaceChildren(...result.resources.map(r=>{
     const row=document.createElement('div');row.className='item';const title=document.createElement('strong');title.textContent=`${r.title} · ${r.resource_kind} · ${r.state}`;
@@ -36,10 +36,10 @@
     const sources=document.createElement('p');sources.textContent=r.sources.length?'Inputs: '+r.sources.map(p=>(lookup.get(p.kind+'/'+p.id)?.title||p.kind)+' ['+p.id+']').join(' · '):'Original source';
     if(r.scenes)sources.textContent+=` · Imported into ${r.scenes.scene_count} scenes`;
     row.append(title,info,sources);
-    if(!r.video_id){row.append(button('Assign source chain to active project',async()=>{
+    if(!r.video_id){row.append(button('Assign source chain to active video',async()=>{
      const target=requireContext(),body={...target,kind:r.resource_kind,id:r.id};
      const plan=await raw('POST','/api/workflow/assignment-preview',body);assertCurrent(target);
-     if(!confirm(`Assign these ${plan.resources.length} linked source/job versions to the active project?\n\n`+plan.resources.map(i=>i.resource_kind+' · '+i.title).join('\n')))return;
+     if(!confirm(`Assign these ${plan.resources.length} linked source/job versions to the active video?\n\n`+plan.resources.map(i=>i.resource_kind+' · '+i.title).join('\n')))return;
      await raw('POST','/api/workflow/assign',body);assertCurrent(target);document.dispatchEvent(new CustomEvent('workflow-changed',{detail:target}));await refresh();
     }));}
     else if(r.video_id===ctx.video_id){

@@ -347,3 +347,30 @@ async def test_scene_media_loads_current_project_copies_once_and_rejects_wrong_s
     stale=await post(env,'assembly/scene-media',body)
     assert not stale['assets'] and stale['mapping']=={'1':None} and stale['issues']
     assert len(desktop.rows())==1
+
+@pytest.mark.asyncio
+async def test_two_videos_in_one_project_keep_sources_jobs_and_media_separate(env,monkeypatch):
+    from agent.models.video import VideoCreate
+    from agent.services.project_workspace import create
+    from fastapi import HTTPException
+    second=await create(VideoCreate(project_id=env.a['project_id'],title='Second topic'))
+    other={**env.a,'video_id':second['id']}
+    a=await post(env,'elevenlabs/jobs',{**env.a,'text':'First video script'})
+    b=await post(env,'elevenlabs/jobs',{**other,'text':'Second video script'})
+    for owner,jid in [(env.a,a['id']),(other,b['id'])]:
+        jobs=(await env.client.get('/api/elevenlabs/jobs',params=owner)).json()['jobs']
+        assert [j['id'] for j in jobs]==[jid]
+    finish_audio(env,a['id'])
+    wrong=await env.client.post('/api/whisperx/jobs',json={**other,'source_id':a['id'],**OPTIONS})
+    assert wrong.status_code==409
+    # A queued job keeps its owner when another video is selected or renamed.
+    await post(env,'workflow/project',other)
+    await env.client.patch('/api/videos/'+second['id'],json={'title':'Changed topic'})
+    assert scope.resource('elevenlabs',a['id'])['video_id']==env.a['video_id']
+    monkeypatch.setattr(desktop,'get_flow_client',lambda:SimpleNamespace(connected=True))
+    scene=await crud.create_scene(video_id=env.a['video_id'],display_order=0,prompt='Saved scene')
+    with pytest.raises(HTTPException):
+        await desktop.enqueue(desktop.Batch(jobs=[desktop.Job(kind='image',prompt='Wrong scene',**other,scene_id=scene['id'])]))
+    result=await desktop.enqueue(desktop.Batch(jobs=[desktop.Job(kind='image',prompt='Correct video',**env.a,scene_id=scene['id'])]))
+    saved=json.loads(next(j['payload'] for j in desktop.rows() if j['id']==result['ids'][0]))
+    assert saved['video_id']==env.a['video_id']

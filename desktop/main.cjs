@@ -22,12 +22,12 @@ function contextForm(form,ctx){for(const [key,value] of Object.entries(ctx))form
 let workflowCheck;
 async function requireWorkflow(){
   if(!workflowCheck)workflowCheck=request('GET','/health',undefined,5000).then(health=>{
-    if(health?.studio_features?.project_video_sources!==true||health?.studio_features?.project_single_video!==true)throw Error('Project sources require the updated backend for one-project/one-video mode. Restart Studio from this complete release. Existing files and jobs are retained.');
+    if(health?.studio_features?.project_video_sources!==true||health?.studio_features?.project_multi_video!==true)throw Error('Project sources require the updated backend for multiple videos per project. Restart Studio from this complete release. Existing files and jobs are retained.');
   }).finally(()=>{workflowCheck=null;});
   await workflowCheck;
 }
 const storyboardAllowed = /^\/api\/storyboard\/(providers|videos\/[a-zA-Z0-9_-]+(?:\/(segments|generate-concepts|cancel-concepts|generate-media|retry-failed))?|segments\/[a-zA-Z0-9_-]+(?:\/concepts)?|concepts\/[a-zA-Z0-9_-]+\/select)$/;
-const allowed = /^\/(health|api\/(projects(?:\/[a-zA-Z0-9_-]+)?|videos|scenes(?:\/[a-zA-Z0-9_-]+)?|models|materials|flow\/status|tts\/templates(?:\/[a-zA-Z0-9_-]+)?|desktop\/(jobs(?:\/cancel|\/[a-f0-9-]+\/resume)?|pause|diagnostics|flow-progress)))(\?[^#]*)?$/;
+const allowed = /^\/(health|api\/(projects(?:\/[a-zA-Z0-9_-]+)?|videos(?:\/[a-zA-Z0-9_-]+)?|scenes(?:\/[a-zA-Z0-9_-]+)?|models|materials|flow\/status|tts\/templates(?:\/[a-zA-Z0-9_-]+)?|desktop\/(jobs(?:\/cancel|\/[a-f0-9-]+\/resume)?|pause|diagnostics|flow-progress)))(\?[^#]*)?$/;
 function whisperxAllowed(method, route) {
   return method === 'GET' && /^\/api\/whisperx\/(status|jobs\/[a-f0-9-]{36}\/preview(?:\/(full|video|image))?)$/.test(route)
     || method === 'POST' && /^\/api\/whisperx\/(check|settings|jobs|jobs\/[a-f0-9-]{36}\/(cancel|split))$/.test(route);
@@ -132,7 +132,7 @@ app.whenReady().then(async()=>{
   handle('api',async(method,route,body)=>{
     if(!['GET','POST','PATCH','PUT'].includes(method)||typeof route!=='string'||!(workflowAllowed(method,route)||assemblyAllowed(method,route)||srtAllowed(method,route)||whisperxAllowed(method,route)||elevenlabsAllowed(method,route)||allowed.test(route)||storyboardAllowed.test(route)||/^\/api\/chatgpt\/(status|history|test|resume|message|queue|config|cancel|retry|preflight|models)$/.test(route))||route.includes('..')||route.includes('\\')) throw Error('Unsupported API operation');
     if (method !== 'GET' && runtime.isRestarting()) throw Error('The backend is restarting. Wait for it to become ready.');
-    if(route.startsWith('/api/workflow/')||(workflowAllowed(method,route)&&route.includes('?'))||(method==='POST'&&body?.video_id&&/^\/api\/(elevenlabs|whisperx|srt|assembly)\//.test(route)))await requireWorkflow();
+    if(route.startsWith('/api/workflow/')||(method!=='GET'&&/^\/api\/videos(?:\/|$)/.test(route))||(workflowAllowed(method,route)&&route.includes('?'))||(method==='POST'&&body?.video_id&&/^\/api\/(elevenlabs|whisperx|srt|assembly)\//.test(route)))await requireWorkflow();
     if(route.startsWith('/api/elevenlabs/')) {
       let issue = '', health;
       try { health = await request('GET','/health',undefined,5000); issue = backendProblem(health); }

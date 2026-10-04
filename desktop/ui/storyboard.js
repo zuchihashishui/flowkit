@@ -17,7 +17,7 @@
     try { await action(fn, control); } finally { busy = false; controls.forEach((e,i) => e.disabled = disabled[i]); }
   }
   function assertCollection() {
-    if (!collection || owner !== $('project-select').value) throw Error('Choose a script in the active project first.');
+    if (!collection || collection !== $('video-select').value || owner !== $('project-select').value) throw Error('Choose the active video in Project first.');
   }
   function assertSaved() {
     assertCollection();
@@ -107,9 +107,9 @@
     if(owner!==pid){if(!discard())return;data=null;checked.clear();collection='';owner=pid;}
     if(window.workflow){
       const ctx=window.workflow.context(),prior=collection;
-      if(ctx.project_id!==pid||!ctx.video_id){$('sb-status').textContent='Wait for the active project to load in Project.';return;}
+      if(ctx.project_id!==pid||!ctx.video_id){$('sb-status').textContent='Select a video in Project first.';return;}
       collection=ctx.video_id;
-      $('sb-collection').replaceChildren(option(collection,'Current project'));$('sb-collection').value=collection;
+      $('sb-collection').replaceChildren(option(collection,'Active video'));$('sb-collection').value=collection;
       await reload(prior!==collection||!data);return;
     }
     const videos=await api('GET','/api/videos?project_id='+encodeURIComponent(pid));
