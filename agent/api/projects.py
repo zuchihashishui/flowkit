@@ -445,3 +445,16 @@ async def generate_thumbnail(pid: str, body: ThumbnailRequest):
         output_path=str(output_path),
         prompt=full_prompt,
     )
+
+
+from agent.services.project_settings import SettingsBody
+
+@router.get('/{pid}/settings')
+async def read_settings(pid: str):
+    from agent.services.project_settings import get
+    return await get(pid)
+
+@router.put('/{pid}/settings')
+async def write_settings(pid: str, body: SettingsBody):
+    from agent.services.project_settings import save
+    return await save(pid, body)

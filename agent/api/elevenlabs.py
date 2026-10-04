@@ -53,7 +53,9 @@ async def preview(body: TextBody):
 @router.post('/jobs')
 async def enqueue(body: JobBody):
     try:
-        return bridge.enqueue(body.text, body.title, body.model, body.max_chunk_characters, await inputs(body))
+        ctx=await inputs(body)
+        from agent.services.project_settings import snapshot
+        return bridge.enqueue(body.text, body.title, body.model, body.max_chunk_characters, ctx, project_settings=await snapshot(ctx))
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 

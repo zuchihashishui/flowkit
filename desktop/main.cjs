@@ -22,12 +22,12 @@ function contextForm(form,ctx){for(const [key,value] of Object.entries(ctx))form
 let workflowCheck;
 async function requireWorkflow(){
   if(!workflowCheck)workflowCheck=request('GET','/health',undefined,5000).then(health=>{
-    if(health?.studio_features?.project_video_sources!==true||health?.studio_features?.project_single_video!==true)throw Error('Project sources require the updated backend for one-project/one-video mode. Restart Studio from this complete release. Existing files and jobs are retained.');
+    if(health?.studio_features?.project_video_sources!==true||health?.studio_features?.project_multi_video!==true||health?.studio_features?.project_provider_urls!==true)throw Error('Project sources require the updated backend for multiple videos per project and project URLs. Restart Studio from this complete release. Existing files and jobs are retained.');
   }).finally(()=>{workflowCheck=null;});
   await workflowCheck;
 }
-const storyboardAllowed = /^\/api\/storyboard\/(providers|videos\/[a-zA-Z0-9_-]+(?:\/(segments|generate-concepts|cancel-concepts|generate-media))?|segments\/[a-zA-Z0-9_-]+(?:\/concepts)?|concepts\/[a-zA-Z0-9_-]+\/select)$/;
-const allowed = /^\/(health|api\/(projects(?:\/[a-zA-Z0-9_-]+)?|videos|scenes(?:\/[a-zA-Z0-9_-]+)?|models|materials|flow\/status|tts\/templates(?:\/[a-zA-Z0-9_-]+)?|desktop\/(jobs(?:\/cancel|\/[a-f0-9-]+\/resume)?|pause|diagnostics|flow-progress)))(\?[^#]*)?$/;
+const storyboardAllowed = /^\/api\/storyboard\/(providers|videos\/[a-zA-Z0-9_-]+(?:\/(segments|generate-concepts|cancel-concepts|generate-media|retry-failed))?|segments\/[a-zA-Z0-9_-]+(?:\/concepts)?|concepts\/[a-zA-Z0-9_-]+\/select)$/;
+const allowed = /^\/(health|api\/(projects(?:\/[a-zA-Z0-9_-]+(?:\/settings)?)?|videos(?:\/[a-zA-Z0-9_-]+)?|scenes(?:\/[a-zA-Z0-9_-]+)?|models|materials|flow\/status|tts\/templates(?:\/[a-zA-Z0-9_-]+)?|desktop\/(jobs(?:\/cancel|\/[a-f0-9-]+\/resume)?|pause|diagnostics|flow-progress)))(\?[^#]*)?$/;
 function whisperxAllowed(method, route) {
   return method === 'GET' && /^\/api\/whisperx\/(status|jobs\/[a-f0-9-]{36}\/preview(?:\/(full|video|image))?)$/.test(route)
     || method === 'POST' && /^\/api\/whisperx\/(check|settings|jobs|jobs\/[a-f0-9-]{36}\/(cancel|split))$/.test(route);
@@ -38,7 +38,7 @@ function srtAllowed(method, route) {
 }
 function assemblyAllowed(method, route) {
   return method === 'GET' && route === '/api/assembly/status'
-    || method === 'POST' && /^\/api\/assembly\/(source|preview|jobs|jobs\/[a-f0-9-]{36}\/cancel)$/.test(route);
+    || method === 'POST' && /^\/api\/assembly\/(source|preview|preflight|scene-media|jobs|jobs\/[a-f0-9-]{36}\/(cancel|resume))$/.test(route);
 }
 function elevenlabsAllowed(method, route) {
   return method === 'GET' && /^\/api\/elevenlabs\/(status|jobs(?:\/[a-f0-9-]{36})?)$/.test(route)
@@ -62,6 +62,7 @@ async function readBackendResponse(response, route) {
 }
 async function request(method, route, body, timeoutMs) {
   if(timeoutMs===undefined && method==='GET' && ['/api/srt/status','/api/whisperx/status','/api/chatgpt/status','/api/workflow/resources'].includes(route.split('?')[0]))timeoutMs=10000;
+  if(timeoutMs===undefined && method==='POST' && /^\/api\/assembly\/(preflight|scene-media|jobs)$/.test(route))timeoutMs=1800000;
   const response = await fetch(BASE + route, {method, headers:body ? {'Content-Type':'application/json'} : {}, body: body ? JSON.stringify(body) : undefined, signal:AbortSignal.timeout(timeoutMs ?? (route.startsWith('/api/chatgpt/')?720000:120000))});
   return readBackendResponse(response, route);
 }
@@ -131,7 +132,8 @@ app.whenReady().then(async()=>{
   handle('api',async(method,route,body)=>{
     if(!['GET','POST','PATCH','PUT'].includes(method)||typeof route!=='string'||!(workflowAllowed(method,route)||assemblyAllowed(method,route)||srtAllowed(method,route)||whisperxAllowed(method,route)||elevenlabsAllowed(method,route)||allowed.test(route)||storyboardAllowed.test(route)||/^\/api\/chatgpt\/(status|history|test|resume|message|queue|config|cancel|retry|preflight|models)$/.test(route))||route.includes('..')||route.includes('\\')) throw Error('Unsupported API operation');
     if (method !== 'GET' && runtime.isRestarting()) throw Error('The backend is restarting. Wait for it to become ready.');
-    if(route.startsWith('/api/workflow/')||(workflowAllowed(method,route)&&route.includes('?'))||(method==='POST'&&body?.video_id&&/^\/api\/(elevenlabs|whisperx|srt|assembly)\//.test(route)))await requireWorkflow();
+    if(route.startsWith('/api/workflow/')||(method!=='GET'&&/^\/api\/videos(?:\/|$)/.test(route))||(workflowAllowed(method,route)&&route.includes('?'))||(method==='POST'&&body?.video_id&&/^\/api\/(elevenlabs|whisperx|srt|assembly)\//.test(route)))await requireWorkflow();
+    if(/^\/api\/projects\/[^/]+\/settings$/.test(route)||(method==='POST'&&(/^\/api\/storyboard\/videos\/[^/]+\/(generate-concepts|generate-media|retry-failed)$/.test(route)||(route==='/api/desktop/jobs'&&body?.jobs?.some(j=>j.video_id)))))await requireWorkflow();
     if(route.startsWith('/api/elevenlabs/')) {
       let issue = '', health;
       try { health = await request('GET','/health',undefined,5000); issue = backendProblem(health); }
@@ -291,6 +293,13 @@ app.whenReady().then(async()=>{
     if(action==='logs')return shell.openPath(app.getPath('userData'));
     if(action==='startup-error')return gateway.getError();
     throw Error('Unsupported ChatGPT action');
+  });
+  handle('open-project-page',async(pid,key)=>{
+    if(typeof pid!=='string'||!/^[a-zA-Z0-9_-]{1,100}$/.test(pid)||!['chatgpt_url','image_prompt_url','video_prompt_url','elevenlabs_url','google_flow_url'].includes(key))throw Error('Select a project and a supported service.');
+    const settings=await request('GET','/api/projects/'+pid+'/settings');
+    const u=new (require('node:url').URL)(settings[key]),hosts=key==='google_flow_url'?['flow.google.com','labs.google']:key==='elevenlabs_url'?['elevenlabs.io']:['chatgpt.com'];
+    if(u.protocol!=='https:'||!hosts.includes(u.hostname)||u.username||u.password)throw Error('Invalid project service URL.');
+    return shell.openExternal(u.href);
   });
   handle('open-flow',()=>shell.openExternal('https://flow.google.com/'));
   handle('open-extension',()=>shell.openPath(path.join(ROOT,'extensions','googleflow')));

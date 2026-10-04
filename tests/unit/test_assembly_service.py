@@ -231,3 +231,54 @@ async def test_video_import_preview_ranges_and_invalid_media(tmp_path, monkeypat
         assert result.status_code==422
         assert len(service.assets())==5
         assert not list((service.output/'assets').glob('*.part'))
+
+
+@pytest.mark.asyncio
+async def test_preflight_reports_missing_corrupt_low_resolution_and_short_clips(tmp_path):
+    from agent.services.assembly_preflight import check
+    service, body, red, blue = await inputs(tmp_path)
+    clip = await clip_input(tmp_path, service)
+    body.update(visual_mode='mixed',video_ids=[clip['id']],mapping={'1':clip['id']})
+    report = await check(service,body)
+    assert not report['blocked']
+    assert any('hold last frame' in m for c in report['checks'] for m in c['messages'])
+    assert any(c['width']==64 and c['status']=='WARNING' for c in report['checks'])
+    service.path(blue).write_bytes(b'corrupt image')
+    report = await check(service,body)
+    assert report['blocked'] and report['checks'][-1]['status']=='ERROR'
+    service.path(blue).unlink()
+    report = await check(service,body)
+    assert report['blocked'] and 'missing' in report['checks'][-1]['messages'][0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('corrupt_cache',[False,True])
+async def test_render_resume_reuses_only_verified_completed_scenes(tmp_path,monkeypatch,corrupt_cache):
+    from agent.services import assembly_service as module
+    service, body, _, _ = await inputs(tmp_path)
+    jid = service.enqueue(body)['id']
+    real_command = module.command
+    attempts=[];fail=True
+    async def interrupted(args,**kwargs):
+        nonlocal fail
+        target=str(args[-1])
+        if args[0]=='ffmpeg' and '/clips/' in target and target.endswith('.part.mp4'):
+            attempts.append(target)
+            if '00001.part.mp4' in target and fail:
+                fail=False
+                raise ValueError('Simulated encoder interruption')
+        return await real_command(args,**kwargs)
+    monkeypatch.setattr(module,'command',interrupted)
+    await service.process(jid)
+    assert service.jobs()[0]['state']=='FAILED'
+    assert service.jobs()[0]['saved_scenes']==1
+    assert (service.output/jid/'clips/00000.mp4').is_file()
+    if corrupt_cache:(service.output/jid/'clips/00000.mp4').write_bytes(b'bad checkpoint')
+    service.resume(jid)
+    await service.process(jid)
+    assert service.jobs()[0]['state']=='COMPLETED',service.jobs()[0]['error']
+    first_attempts=[p for p in attempts if '00000.part.mp4' in p]
+    assert len(first_attempts)==(2 if corrupt_cache else 1)
+    assert service.jobs()[0]['saved_scenes']==0
+    with pytest.raises(ValueError,match='Only failed'):
+        service.resume(jid)

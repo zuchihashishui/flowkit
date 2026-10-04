@@ -68,6 +68,8 @@ class Job(BaseModel):
     kind: Literal["image", "video", "voice"]
     prompt: str = Field(min_length=1, max_length=5000)
     project_id: str = ""
+    video_id: str = ""
+    project_settings: dict | None = None
     scene_id: str = ""
     document_id: str = ""
     segment_id: str = ""
@@ -83,15 +85,31 @@ class Job(BaseModel):
 
 
 class Batch(BaseModel):
-    jobs: list[Job] = Field(min_length=1, max_length=100)
+    jobs: list[Job] = Field(min_length=1, max_length=200)
 
 
 @router.post("/jobs")
 async def enqueue(body: Batch):
+    return await enqueue_jobs(body)
+
+
+async def enqueue_jobs(body: Batch, *, preserve_settings: bool = False):
     if any(j.kind != "voice" for j in body.jobs) and not get_flow_client().connected:
         raise HTTPException(503, "Connect the Flow extension before submitting media jobs.")
     # Validate all inputs before atomically inserting the batch.
     for j in body.jobs:
+        if j.video_id:
+            from agent.api.workflow import context
+            await context(j.project_id, j.video_id)
+            from agent.db.schema import get_db
+            db = await get_db()
+            for value,sql in [(j.scene_id,'SELECT video_id FROM scene WHERE id=?'),
+                              (j.document_id,'SELECT video_id FROM script_document WHERE id=?'),
+                              (j.segment_id,'SELECT d.video_id FROM script_segment s JOIN script_document d ON d.id=s.document_id WHERE s.id=?')]:
+                if value:
+                    owner=await (await db.execute(sql,(value,))).fetchone()
+                    if not owner or owner[0]!=j.video_id:
+                        raise HTTPException(409,'Scene or script does not belong to the selected video.')
         if j.kind != "voice":
             try:
                 uuid.UUID(j.project_id)
@@ -101,6 +119,12 @@ async def enqueue(body: Batch):
             raise HTTPException(400, "Select a voice template.")
         else:
             await tts.get_voice_template(j.template)
+    for j in body.jobs:
+        if j.video_id and not preserve_settings:
+            from agent.services.project_settings import get
+            j.project_settings=await get(j.project_id)
+        elif not preserve_settings:
+            j.project_settings=None
     ids = []
     with connection() as db:
         for j in body.jobs:
@@ -112,6 +136,8 @@ async def enqueue(body: Batch):
 
 @router.get("/jobs")
 async def list_jobs():
+    from agent.services.media_ownership import backfill
+    await backfill()
     return {"paused": paused, "jobs": [{**r, "payload": json.loads(r["payload"]), "can_resume": r["state"] == "FAILED" and bool(r["remote"]), "remote": None, "files": json.loads(r["files"])} for r in rows()]}
 
 
@@ -261,6 +287,10 @@ async def process(job):
         if not db.execute("UPDATE jobs SET state='RUNNING', stage='STARTING', started=?, updated=?, error=NULL WHERE id=? AND state='QUEUED'", (time.time(), time.time(), jid)).rowcount:
             return
     body = Job.model_validate_json(job["payload"])
+    from agent.services.project_settings import flow_page_url, flow_project
+    page_url=(body.project_settings or {}).get('google_flow_url')
+    url_token=flow_page_url.set(page_url)
+    provider_project_id=flow_project(page_url,body.project_id)
     remote = json.loads(job["remote"]) if job["remote"] else None
     from agent.services.browser_lifecycle import flow_started, flow_saved
     if body.kind != "voice":
@@ -270,13 +300,13 @@ async def process(job):
             # A crash after this state is persisted is not auto-resubmitted.
             update(jid, state="SUBMITTING", stage="GENERATING_IMAGE" if body.kind == "image" else "SUBMITTING_VIDEO" if body.kind == "video" else "GENERATING_VOICE")
             if body.kind == "image":
-                result = await flow.generate_image(flow.GenerateImageRequest(prompt=body.prompt, project_id=body.project_id, image_model=body.image_model, aspect_ratio="IMAGE_ASPECT_RATIO_LANDSCAPE" if body.orientation == "HORIZONTAL" else "IMAGE_ASPECT_RATIO_PORTRAIT"))
+                result = await flow.generate_image(flow.GenerateImageRequest(prompt=body.prompt, project_id=provider_project_id, image_model=body.image_model, aspect_ratio="IMAGE_ASPECT_RATIO_LANDSCAPE" if body.orientation == "HORIZONTAL" else "IMAGE_ASPECT_RATIO_PORTRAIT"))
                 urls = [m.get("image", {}).get("generatedImage", {}).get("fifeUrl") or m.get("image", {}).get("generatedImage", {}).get("imageUri") for m in result.get("media", [])]
                 if not urls or not all(urls):
                     raise ValueError("Flow returned no usable image URLs; check the project before generating again")
                 remote = {"urls": urls}
             elif body.kind == "video":
-                result = await flow.generate_video_omni_text(flow.GenerateOmniFlashTextVideoRequest(prompt=body.prompt, project_id=body.project_id, scene_id=body.scene_id, duration_s=body.duration, aspect_ratio="VIDEO_ASPECT_RATIO_LANDSCAPE" if body.orientation == "HORIZONTAL" else "VIDEO_ASPECT_RATIO_PORTRAIT"))
+                result = await flow.generate_video_omni_text(flow.GenerateOmniFlashTextVideoRequest(prompt=body.prompt, project_id=provider_project_id, scene_id=body.scene_id, duration_s=body.duration, aspect_ratio="VIDEO_ASPECT_RATIO_LANDSCAPE" if body.orientation == "HORIZONTAL" else "VIDEO_ASPECT_RATIO_PORTRAIT"))
                 workflows = extract_omni_workflows(result)
                 if not workflows:
                     raise ValueError("No workflow ID received; check Flow before generating again")
@@ -289,7 +319,7 @@ async def process(job):
         if body.kind == "video" and not remote.get("urls"):
             update(jid, stage="GENERATING_VIDEO")
             for _ in range(120):
-                result = await flow.check_omni_status(flow.CheckOmniStatusRequest(workflows=remote["workflows"], project_id=body.project_id))
+                result = await flow.check_omni_status(flow.CheckOmniStatusRequest(workflows=remote["workflows"], project_id=provider_project_id))
                 if result.get("done"):
                     remote["urls"] = [w["media"]["url"] for w in result["workflows"]]
                     update(jid, remote=json.dumps(remote))
@@ -323,6 +353,8 @@ async def process(job):
     except Exception as exc:
         update(jid, state="FAILED", error=str(getattr(exc, "detail", None) or exc)[:1500])
 
+    finally:
+        flow_page_url.reset(url_token)
 
 async def run():
     global paused

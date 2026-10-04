@@ -237,3 +237,29 @@ async def test_single_srt_capacity_is_independent_of_three_text_workers(monkeypa
     g._srt_inflight.clear()
     g.update_settings({'paused':True})
     assert (await g.status())['availableSrtSlots']==0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind',['image','video'])
+async def test_project_gpt_sends_exact_scene_text_and_saves_only_target_prompt(monkeypatch,kind):
+    calls=transport(monkeypatch,{'choices':[{'message':{'content':'A new visual prompt'}}]})
+    text='日本語の段落。\nSecond line — exactly as saved.'
+    url='https://chatgpt.com/g/g-channel-'+kind
+    payload={'provider':'chatgpt-web','prompt_kind':kind,'text':text,'retained_prompt':'Keep other prompt','project_settings':{kind+'_prompt_url':url}}
+    result=await write_concept(payload)
+    sent=json.loads(calls[0].content)
+    assert sent['messages']==[{'role':'user','content':text}]
+    assert sent['pageUrl']==url and sent['temporary'] is False and sent['model']=='auto'
+    assert 'attachment' not in sent
+    assert getattr(result,kind+'_prompt')=='A new visual prompt'
+    assert getattr(result,('video' if kind=='image' else 'image')+'_prompt')=='Keep other prompt'
+    assert g.audit_rows()[0]['state']=='COMPLETED'
+
+
+@pytest.mark.asyncio
+async def test_rejected_project_url_is_not_an_uncertain_browser_submission(monkeypatch):
+    transport(monkeypatch,{'not_submitted':True,'error':'Reload ChatGPT Bridge for project URLs.'},400)
+    with pytest.raises(g.GatewayNotSubmitted):
+        await g.complete('Scene',page_url='https://chatgpt.com/g/g-test',temporary=False)
+    assert g.audit_rows()[0]['state']=='NOT_SUBMITTED'
+    assert not g.blocked()

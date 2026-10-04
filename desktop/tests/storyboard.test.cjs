@@ -19,7 +19,7 @@ test('script/segments/concepts flow reaches database-backed image generation wit
    calls.push({method,route,body});
    if(route==='/health')return {version:'test',extension_connected:true};
    if(route==='/api/projects')return [{id:'p1',name:'Test project'}];
-   if(route==='/api/workflow/project')return {project_id:'p1',video_id:'v1',title:'Test project'};
+   if(route==='/api/workflow/project')return {project_id:'p1',video_id:'v1',title:'Narrated video',videos:[{id:'v1',title:'Narrated video'}],protocol:3};
    if(route.startsWith('/api/videos'))return [{id:'v1',title:'Narrated video'}];
    if(route.startsWith('/api/scenes'))return [];
    if(route==='/api/tts/templates')return [];
@@ -34,6 +34,7 @@ test('script/segments/concepts flow reaches database-backed image generation wit
     for(const s of data.segments)if(body.segment_ids.includes(s.id))s.job={state:'QUEUED'};
     return {ids:['j1'],skipped:[]};
    }
+   if(route===base+'/retry-failed')return {ids:[],resumed:['failed-image'],skipped:[]};
    if(route===base+'/generate-media')return {ids:['m1'],skipped:[]};
    throw Error('Unexpected request: '+method+' '+route);
   }
@@ -53,7 +54,7 @@ test('script/segments/concepts flow reaches database-backed image generation wit
   $('sb-create-concepts').click();await tick();
   const queued=calls.find(c=>c.route===base+'/generate-concepts');
   assert.deepEqual(JSON.parse(JSON.stringify(queued.body.segment_ids)),['s2']);
-  assert.equal(queued.body.provider,'codex');
+  assert.equal(queued.body.provider,'chatgpt-web');assert.equal(queued.body.prompt_kind,'image');
   // A simulated AI result is used only to verify UI/API wiring, not live generation.
   const s=data.segments[1];s.ready=true;s.job.state='COMPLETED';s.active_concept_id='c2';s.active_concept={id:'c2',version:1,title:'Second concept',description:'A clear composition',image_prompt:'A visual illustration',video_prompt:'A slow camera move'};s.concepts=[s.active_concept];
   $('sb-refresh').click();await tick();
@@ -64,6 +65,18 @@ test('script/segments/concepts flow reaches database-backed image generation wit
   assert.deepEqual(JSON.parse(JSON.stringify(media.body.segment_ids)),['s2']);assert.equal(media.body.kind,'image');
   assert.equal(calls.filter(c=>c.route==='/api/desktop/jobs'&&c.method==='POST').length,0);
   assert.match($('notice').textContent,/1 media job/);
+  $('sb-to-videos').click();await submit('video-form');
+  assert.equal(calls.filter(c=>c.route===base+'/generate-media').at(-1).body.duration_mode,'srt');
+  s.media_jobs=[{id:'failed-image',kind:'image',concept_id:'c2',state:'FAILED'}];
+  $('sb-refresh').click();await tick();
+  await $('image-select-failed').onclick();await $('image-retry-failed').onclick();
+  const retry=calls.find(c=>c.route===base+'/retry-failed');
+  assert.deepEqual(JSON.parse(JSON.stringify(retry.body.segment_ids)),['s2']);assert.equal(retry.body.kind,'image');
+  s.media_jobs.push({id:'success',kind:'image',concept_id:'c2',state:'COMPLETED'});
+  $('sb-refresh').click();await tick();await $('image-select-failed').onclick();
+  assert.equal(w.storyboard.count(),0);
+  // Restore selected scene to verify stale-concept rejection.
+  const again=$('sb-rows').querySelector('[data-segment-id="s2"]');again.checked=true;again.dispatchEvent(new w.Event('change'));
   // Stale concepts block media submission before any generation call.
   s.ready=false;$('sb-refresh').click();await tick();const before=calls.filter(c=>c.route===base+'/generate-media').length;
   await submit('image-form');assert.match($('notice').textContent,/current concepts/);

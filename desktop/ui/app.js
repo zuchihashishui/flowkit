@@ -1,8 +1,11 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const api = (method, path, body) => window.studio.api(method, path, body);
+const api = (method, path, body) => {
+  if(method==='POST'&&(path==='/api/desktop/jobs'||/^\/api\/storyboard\/videos\/[^/]+\/(generate-concepts|generate-media|retry-failed)$/.test(path)))window.projectSettings?.assertSaved();
+  return window.studio.api(method, path, body);
+};
 const ACTIVE = ['RUNNING', 'SUBMITTING', 'DOWNLOADING'];
-let projects = [], scenes = [], jobs = [], paused = false, refreshing = false;
+let projects = [], videos = [], scenes = [], jobs = [], paused = false, refreshing = false;
 let loadedProject = '', loadedCollection = '', sceneRequest = 0, projectRequest = 0;
 let editingScene = null, editorDirty = false, sceneSaving = false, detailId = null, bulkExporting = false;
 const selectedScenes = new Set();
@@ -11,6 +14,9 @@ function syncProjectContext() {
   const p=projects.find(p=>p.id===loadedProject);
   $('active-project-name').textContent=p?.name||'No project selected';
   $('active-project-name').title=p?.id||'';
+  const v=videos.find(v=>v.id===$('video-select').value);
+  $('active-video-name').textContent=v?.title||'No video selected';
+  $('active-video-name').title=v?.id||'';
   document.querySelectorAll('#project-list [data-project-id]').forEach(row=>{
     row.dataset.active=String(row.dataset.projectId===loadedProject);
     row.querySelector('button').textContent=row.dataset.projectId===loadedProject?'Selected':'Select project';
@@ -53,6 +59,11 @@ function button(text, fn) {
 function projectId() {
   const id = $('project-select').value;
   if (!id) throw Error('Select a project first.');
+  return id;
+}
+function videoId(){
+  const id=$('video-select').value;
+  if(!id||id!==loadedCollection||loadedProject!==$('project-select').value)throw Error('Select a video in Project and wait for it to load.');
   return id;
 }
 function sceneLabel(s) { return 'Scene ' + String(s.display_order + 1).padStart(3, '0'); }
@@ -101,6 +112,7 @@ async function refreshProjects() {
 }
 async function selectProject(reload=false) {
   if(!reload&&$('project-select').value===loadedProject){syncProjectContext();return;}
+  if(window.projectSettings&&!window.projectSettings.canChangeProject($('project-select').value)){$('project-select').value=loadedProject;return;}
   if(sceneSaving){$('project-select').value=loadedProject;notice('Wait for the scene to finish saving.',true);return;}
   if(editorDirty&&!confirm('Discard unsaved scene changes?')){$('project-select').value=loadedProject;return;}
   if (window.storyboard && !window.storyboard.canChangeProject()) { $('project-select').value = loadedProject; return; }
@@ -108,7 +120,7 @@ async function selectProject(reload=false) {
   discardSceneEdit();
   window.storyboard?.projectChanged();
   const id = $('project-select').value, request = ++projectRequest;
-  ++sceneRequest; loadedProject = id; loadedCollection = ''; scenes = []; selectedScenes.clear(); renderScenes();
+  ++sceneRequest; loadedProject = id; loadedCollection = ''; videos=[]; scenes = []; selectedScenes.clear(); renderScenes();
   try{localStorage.setItem('active-project-id',id);}catch{}
   detailId=null;
   for(const kind of ['image','video','voice']){
@@ -118,18 +130,50 @@ async function selectProject(reload=false) {
   syncProjectFilter();syncProjectContext();renderJobs();
   document.dispatchEvent(new CustomEvent('project-changed',{detail:{id,name:projects.find(p=>p.id===id)?.name||''}}));
   $('video-select').replaceChildren(option('', 'Select a video'));
+  $('project-videos').replaceChildren();$('edit-video-title').value='';syncProjectContext();
   window.workflow?.set({project_id:id,video_id:''});
   $('edit-name').value = projects.find(p => p.id === id)?.name || '';
   if (!id) return;
-  const workspace = await api('POST', '/api/workflow/project', {project_id:id});
-  if (request !== projectRequest) return;
-  $('video-select').append(option(workspace.video_id, workspace.title));
-  $('video-select').value=workspace.video_id;await loadScenes();
-  notice('Project selected.');
+  await refreshVideos();
+  if(request===projectRequest)notice(videos.length?'Project selected. Choose a video to continue.':'Project selected. Create its first video below.');
 }
+function renderVideos(){
+  $('project-videos').replaceChildren(...videos.map(v=>{
+    const row=element('div',undefined,'item');row.dataset.videoId=v.id;
+    row.append(element('strong',v.title),element('small',v.status+' · '+v.id),button(v.id===$('video-select').value?'Selected':'Select video',()=>selectVideo(v.id)));
+    return row;
+  }));
+  if(!videos.length)$('project-videos').textContent=loadedProject?'No videos yet. Create the first video.':'Select a project first.';
+}
+async function refreshVideos(preferred){
+  const pid=loadedProject,request=projectRequest;
+  if(!pid)return;
+  const workspace=await api('POST','/api/workflow/project',{project_id:pid});
+  if(request!==projectRequest)return;
+  if(workspace.protocol!==3||!Array.isArray(workspace.videos))throw Error('Restart Studio with the updated backend for multiple videos per project.');
+  let previous=preferred??$('video-select').value;
+  if(!previous)try{previous=localStorage.getItem('active-video:'+pid)||'';}catch{}
+  videos=workspace.videos;
+  $('video-select').replaceChildren(option('','Select a video'),...videos.map(v=>option(v.id,v.title)));
+  $('video-select').value=videos.some(v=>v.id===previous)?previous:workspace.video_id||'';
+  await loadScenes();renderVideos();syncProjectContext();
+}
+async function selectVideo(id){
+  if(!discardSceneEdit())return;
+  $('video-select').value=id;
+  await loadScenes();renderVideos();
+}
+
 async function loadScenes() {
   const id = $('video-select').value, request = ++sceneRequest;
   if(id!==loadedCollection&&window.storyboard?.canChangeVideo&&!window.storyboard.canChangeVideo(id)){$('video-select').value=loadedCollection;return;}
+  if(loadedCollection!==id){
+    detailId=null;
+    for(const kind of ['image','video','voice']){
+      $(kind+'-preview').replaceChildren();
+      if(previewUrls.has(kind)){URL.revokeObjectURL(previewUrls.get(kind));previewUrls.delete(kind);}
+    }
+  }
   window.workflow?.set({project_id:loadedProject,video_id:id});
   try{localStorage.setItem('active-video:'+loadedProject,id);}catch{}
   const previousIds = loadedCollection === id ? new Set(scenes.map(s => s.id)) : new Set();
@@ -140,10 +184,11 @@ async function loadScenes() {
   const ids = new Set(scenes.map(s => s.id));
   for (const sid of selectedScenes) if (!ids.has(sid)) selectedScenes.delete(sid);
   for (const s of scenes) if (!previousIds.has(s.id)) selectedScenes.add(s.id);
-  renderScenes();
+  renderScenes();syncProjectFilter();syncProjectContext();renderVideos();renderJobs();
+  $('edit-video-title').value=videos.find(v=>v.id===id)?.title||'';
 }
 function editScene(scene) {
-  if (!$('video-select').value) throw Error('Select a project and wait for it to load.');
+  if (!$('video-select').value) throw Error('Select a video in Project and wait for it to load.');
   if (!discardSceneEdit()) return;
   editingScene = scene?.id || null;
   $('scene-editor-title').textContent = scene ? 'Edit ' + sceneLabel(scene) : 'Add scene';
@@ -166,7 +211,7 @@ function renderScenes() {
     text.append(element('p', s.video_prompt || s.prompt || '(No prompt)'), element('small', s.narrator_text ? 'Narration: ' + s.narrator_text.slice(0, 160) : 'No narration text'));
     row.append(top, text); $('scenes').append(row);
   }
-  if (!scenes.length) $('scenes').textContent = 'Select a project, then add a scene or import scene prompts.';
+  if (!scenes.length) $('scenes').textContent = 'Select a video in Project, then add a scene or import scene prompts.';
   updateInputSummary();
 }
 async function refreshVoices() {
@@ -183,9 +228,9 @@ async function exportJob(id) {
   } catch (e) { exportFailed.add(id); throw e; } finally { exporting.delete(id); }
 }
 async function preview(job) {
-  const project=loadedProject;
+  const project=loadedProject,video=loadedCollection;
   const result = await window.studio.preview(job.id, 0), kind = result.kind;
-  if(project!==loadedProject)return;
+  if(project!==loadedProject||video!==loadedCollection)return;
   if (previewUrls.has(kind)) URL.revokeObjectURL(previewUrls.get(kind));
   const url = URL.createObjectURL(new Blob([result.bytes], {type: result.mime})); previewUrls.set(kind, url);
   const media = element(kind === 'image' ? 'img' : kind === 'voice' ? 'audio' : 'video'); media.src = url;
@@ -193,9 +238,13 @@ async function preview(job) {
   $(kind + '-preview').replaceChildren(media); show(kind);
 }
 function syncProjectFilter() {
-  $('job-project-context').textContent=loadedProject?'Project: '+(projects.find(p=>p.id===loadedProject)?.name||loadedProject)+' · Change in Project':'All jobs · Select an active project in Project to filter.';
+  $('job-project-context').textContent=loadedProject?'Project: '+(projects.find(p=>p.id===loadedProject)?.name||loadedProject)+' · Video: '+(videos.find(v=>v.id===loadedCollection)?.title||'None selected'):'All jobs · Select a project and video in Project.';
 }
-function projectJobs(){return loadedProject?jobs.filter(j=>j.payload.project_id===loadedProject):jobs;}
+function projectJobs(){
+  if(!loadedProject)return jobs;
+  const scope=$('job-scope').value;
+  return jobs.filter(j=>j.payload.project_id===loadedProject&&(scope==='project'||(scope==='unassigned'?!j.payload.video_id:!!loadedCollection&&j.payload.video_id===loadedCollection)));
+}
 function filteredJobs() {
   const search = $('job-search').value.trim().toLowerCase(), kind = $('job-kind').value, state = $('job-state').value;
   return projectJobs().filter(j => (!kind || j.payload.kind === kind) && (!state || (state === 'ACTIVE' ? ACTIVE.includes(j.state) : j.state === state)) && (!search || [j.id, j.payload.label, j.payload.prompt].some(s => (s || '').toLowerCase().includes(search))));
@@ -206,7 +255,7 @@ function renderDetails() {
   $('job-details').hidden = !job;
   if (!job) return;
   const p = job.payload;
-  $('job-detail-text').textContent = `${p.label}\nJob ID: ${job.id}\nState: ${job.state}\nCreated: ${new Date(job.created * 1000).toLocaleString()}\nProject: ${projects.find(x => x.id === p.project_id)?.name || p.project_id || 'None'}\nScene ID: ${p.scene_id || 'None'}\nScript segment: ${p.segment_id || 'None'}\nConcept ID: ${p.concept_id || 'None'}\nNarration timing (ms): ${p.start_ms ?? '—'} → ${p.end_ms ?? '—'}\nMedia: ${p.kind}\n${p.kind === 'voice' ? 'Voice: ' + p.template + ' · Speed: ' + p.speed : 'Orientation: ' + p.orientation + (p.kind === 'video' ? ' · Duration: ' + p.duration + ' seconds' : ' · Model: ' + (p.image_model || 'Backend default'))}\n\nFull prompt\n${p.prompt}\n\nError\n${job.error || 'None'}\n\nBackend files\n${job.files.join('\n') || 'No files yet'}`;
+  $('job-detail-text').textContent = `${p.label}\nJob ID: ${job.id}\nState: ${job.state}\nCreated: ${new Date(job.created * 1000).toLocaleString()}\nProject: ${projects.find(x => x.id === p.project_id)?.name || p.project_id || 'None'}\nVideo: ${p.video_id || 'Unassigned'}\nScene ID: ${p.scene_id || 'None'}\nScript segment: ${p.segment_id || 'None'}\nConcept ID: ${p.concept_id || 'None'}\nNarration timing (ms): ${p.start_ms ?? '—'} → ${p.end_ms ?? '—'}\nMedia: ${p.kind}\n${p.kind === 'voice' ? 'Voice: ' + p.template + ' · Speed: ' + p.speed : 'Orientation: ' + p.orientation + (p.kind === 'video' ? ' · Duration: ' + p.duration + ' seconds' : ' · Model: ' + (p.image_model || 'Backend default'))}\n\nFull prompt\n${p.prompt}\n\nError\n${job.error || 'None'}\n\nBackend files\n${job.files.join('\n') || 'No files yet'}`;
 }
 async function cancelJobs(ids) {
   if (!ids.length) throw Error('No matching queued jobs.');
@@ -251,9 +300,9 @@ async function refreshJobs() {
 }
 async function submitMedia(kind) {
   if ($(kind + '-mode').value === 'storyboard') return window.storyboard.generateMedia(kind);
-  const pid = projectId(), batch = $(kind + '-mode').value === 'scenes';
+  const pid = projectId(), vid=videoId(), batch = $(kind + '-mode').value === 'scenes';
   const inputs = batch ? chosenScenes() : [{prompt: $(kind + '-prompt').value, video_prompt: $(kind + '-prompt').value}];
-  const payload = inputs.map(s => ({kind, project_id: pid, scene_id: s.id || '', label: batch ? sceneLabel(s) : kind === 'video' ? 'Prompt to Video' : 'Prompt to Image', prompt: kind === 'video' ? (s.video_prompt || s.prompt || '') : (s.image_prompt || s.prompt || ''), orientation: $(kind + '-ratio').value, duration: Number($('duration').value), image_model: kind === 'image' ? $('image-model').value || null : null}));
+  const payload = inputs.map(s => ({kind, project_id: pid, video_id:vid, scene_id: s.id || '', label: batch ? sceneLabel(s) : kind === 'video' ? 'Prompt to Video' : 'Prompt to Image', prompt: kind === 'video' ? (s.video_prompt || s.prompt || '') : (s.image_prompt || s.prompt || ''), orientation: $(kind + '-ratio').value, duration: Number($('duration').value), image_model: kind === 'image' ? $('image-model').value || null : null}));
   if (payload.some(j => !j.prompt.trim() || j.prompt.length > 5000)) throw Error('Every prompt must contain 1–5000 characters.');
   if (!confirm(`Submit ${payload.length} ${kind} job(s)? This uses Google Flow credits.`)) return;
   await api('POST', '/api/desktop/jobs', {jobs: payload}); await refreshJobs(); notice(`${payload.length} job(s) queued.`);
@@ -269,10 +318,26 @@ onForm('project-form', async () => {
   const p = await api('POST', '/api/projects', body); await refreshProjects(); $('project-select').value = p.id; await selectProject(); notice('Project created.');
 });
 onForm('edit-project', async () => { await api('PATCH', '/api/projects/' + projectId(), {name: $('edit-name').value}); await refreshProjects(); notice('Project updated.'); });
+onForm('create-video',async()=>{
+  const pid=projectId();if(!discardSceneEdit()||window.storyboard?.canChangeVideo&&!window.storyboard.canChangeVideo(''))return;
+  const title=$('new-video-title').value.trim();if(!title)throw Error('Enter a video title.');
+  const created=await api('POST','/api/videos',{project_id:pid,title,orientation:$('new-video-orientation').value});
+  if(pid!==loadedProject){notice('Video created in its original project.');return;}
+  $('new-video-title').value='';await refreshVideos(created.id);notice('Video created and selected.');
+});
+onForm('edit-video',async()=>{
+  const id=videoId(),pid=loadedProject,title=$('edit-video-title').value.trim();
+  if(!title)throw Error('Enter a video title.');
+  await api('PATCH','/api/videos/'+id,{title});
+  if(pid!==loadedProject)return;
+  const row=videos.find(v=>v.id===id);if(row)row.title=title;
+  const opt=[...$('video-select').options].find(o=>o.value===id);if(opt)opt.textContent=title;
+  renderVideos();syncProjectContext();syncProjectFilter();notice('Video title saved.');
+});
 onForm('scene-editor', async () => {
   if (sceneSaving) return;
   const collection = loadedCollection;
-  if (!collection || collection !== $('video-select').value) throw Error('Select a project and wait for its scenes to load.');
+  if (!collection || collection !== $('video-select').value) throw Error('Select a video and wait for its scenes to load.');
   const body = {prompt: $('scene-prompt').value.trim(), image_prompt: $('scene-image-prompt').value.trim() || null, video_prompt: $('scene-video-prompt').value.trim() || null, narrator_text: $('scene-narration').value.trim() || null};
   if (!body.prompt) throw Error('Enter a scene prompt.');
   sceneSaving = true;
@@ -300,8 +365,9 @@ onForm('voice-import', async () => {
 onForm('voice-form', async () => {
   const template = $('voice-template').value, batch = $('voice-mode').value === 'scenes';
   if (!template) throw Error('Select a reference voice.');
+  const pid=projectId(),vid=videoId();
   const inputs = batch ? chosenScenes() : [{narrator_text: $('voice-prompt').value}];
-  const payload = inputs.map(s => ({kind: 'voice', project_id: $('project-select').value, scene_id: s.id || '', label: batch ? sceneLabel(s) + ' · Narration' : 'Narration · ' + template, prompt: s.narrator_text || '', template, speed: Number($('voice-speed').value)}));
+  const payload = inputs.map(s => ({kind: 'voice', project_id:pid, video_id:vid, scene_id: s.id || '', label: batch ? sceneLabel(s) + ' · Narration' : 'Narration · ' + template, prompt: s.narrator_text || '', template, speed: Number($('voice-speed').value)}));
   if (payload.some(j => !j.prompt.trim() || j.prompt.length > 5000)) throw Error('Every selected scene needs narration text of 1–5000 characters. Edit it in Project.');
   if (batch && !confirm(`Generate narration for ${payload.length} selected scene(s)?`)) return;
   await api('POST', '/api/desktop/jobs', {jobs: payload}); await refreshJobs(); notice(`${payload.length} narration job(s) queued.`);
@@ -309,11 +375,12 @@ onForm('voice-form', async () => {
 $('project-select').onchange = () => action(selectProject);
 $('video-select').onchange = () => action(async () => { if (!discardSceneEdit()) { $('video-select').value = loadedCollection; return; } await loadScenes(); });
 $('refresh-projects').onclick = () => action(refreshProjects);
+$('refresh-videos').onclick=()=>action(async()=>{if(discardSceneEdit())await refreshVideos();},$('refresh-videos'));
 $('refresh-jobs').onclick = () => action(refreshJobs);
 $('load-scenes').onclick = () => action(async () => { if (discardSceneEdit()) await loadScenes(); });
 $('import-scenes').onclick = () => action(async () => {
   const vid = $('video-select').value;
-  if (!vid) throw Error('Select a project and wait for it to load.');
+  if (!vid) throw Error('Select a video in Project and wait for it to load.');
   if (!discardSceneEdit()) return;
   const file = await window.studio.importPrompts(); if (!file) return;
   if (vid !== $('video-select').value) throw Error('The collection changed. Choose the file again.');
@@ -328,7 +395,7 @@ $('import-scenes').onclick = () => action(async () => {
   notice(`Imported ${count} scenes.`);
 }, $('import-scenes'));
 $('pause').onclick = () => action(async () => { await api('POST', '/api/desktop/pause', {paused: !paused}); await refreshJobs(); }, $('pause'));
-for (const id of ['job-search', 'job-kind', 'job-state']) $(id).addEventListener(id === 'job-search' ? 'input' : 'change', renderJobs);
+for (const id of ['job-search', 'job-kind', 'job-state','job-scope']) $(id).addEventListener(id === 'job-search' ? 'input' : 'change', renderJobs);
 $('change-project').onclick=()=>show('projects');
 $('close-job-details').onclick = () => { detailId = null; renderDetails(); };
 $('cancel-filtered').onclick = () => action(() => cancelJobs(filteredJobs().filter(j => j.state === 'QUEUED').slice(0, 1000).map(j => j.id)), $('cancel-filtered'));
@@ -348,7 +415,7 @@ $('auto-export').onchange = () => action(async () => {
 });
 $('choose-output').onclick = () => action(async () => { const s = await window.studio.chooseOutput(); $('output-dir').value = s.output; exported.clear(); exportFailed.clear(); });
 $('open-output').onclick = () => action(() => window.studio.openOutput());
-$('open-flow').onclick = () => action(() => window.studio.openFlow());
+$('open-flow').onclick = () => action(() => $('project-select').value ? window.studio.openProjectPage($('project-select').value,'google_flow_url') : window.studio.openFlow());
 $('extension-folder').onclick = () => action(() => window.studio.openExtension());
 $('diagnostics').onclick = () => action(async () => {
   $('diagnostic-result').textContent = 'Checking…'; const d = await api('GET', '/api/desktop/diagnostics');

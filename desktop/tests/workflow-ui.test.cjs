@@ -7,7 +7,8 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const flush=async()=>{for(let i=0;i<10;i++)await tick();await new Promise(r=>setTimeout(r,30));};
 const ctx=video_id=>({project_id:'project-'+video_id,video_id});
 
-async function studio(){
+async function studio(sameProject=false){
+ const context=id=>sameProject?{project_id:'shared-project',video_id:id}:ctx(id);
  const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'../ui/index.html'),'utf8'),{runScripts:'outside-only',url:'https://studio.test'});
  const w=dom.window,$=id=>w.document.getElementById(id),calls=[];
  w.setInterval=()=>0;w.confirm=()=>true;w.HTMLMediaElement.prototype.pause=()=>{};
@@ -19,9 +20,9 @@ async function studio(){
   const replacement=override?.(method,route,body);if(replacement!==undefined)return replacement;
   const url=new URL(route,'http://local'),pathname=url.pathname,v=url.searchParams.get('video_id')||'unassigned';
   if(pathname==='/api/workflow/resources')return {resources:v==='unassigned'?[]:[
-   {id:'el-'+v,title:'Narration '+v,resource_kind:'elevenlabs',state:'COMPLETED',result_available:true,created:1,...ctx(v),sources:[]},
-   {id:'wx-'+v,title:'Transcript '+v,resource_kind:'whisperx',state:'COMPLETED',created:2,...ctx(v),sources:[{kind:'elevenlabs',id:'el-'+v}]},
-   {id:'srt-'+v,title:'Subtitles '+v,resource_kind:'srt',state:'COMPLETED',created:3,...ctx(v),sources:[]}
+   {id:'el-'+v,title:'Narration '+v,resource_kind:'elevenlabs',state:'COMPLETED',result_available:true,created:1,...context(v),sources:[]},
+   {id:'wx-'+v,title:'Transcript '+v,resource_kind:'whisperx',state:'COMPLETED',created:2,...context(v),sources:[{kind:'elevenlabs',id:'el-'+v}]},
+   {id:'srt-'+v,title:'Subtitles '+v,resource_kind:'srt',state:'COMPLETED',created:3,...context(v),sources:[]}
   ]};
   if(method==='GET'&&pathname==='/api/elevenlabs/jobs')return {jobs:[{id:'el-'+v,title:'Narration '+v,state:'COMPLETED',merged_url:'/audio',created:1}],settings:{}};
   if(pathname==='/api/elevenlabs/status')return {connected:true,enabled:true,ready:true,autoPrepareTab:true,settings:{}};
@@ -34,7 +35,7 @@ async function studio(){
   throw Error('Unexpected request '+method+' '+route);
  }};
  for(const name of ['workflow','elevenlabs','whisperx','srt','assembly'])w.eval(fs.readFileSync(path.join(__dirname,'../ui/'+name+'.js'),'utf8'));
- const select=async id=>{$('video-select').value=id;w.workflow.set(ctx(id));await flush();};
+ const select=async id=>{$('video-select').value=id;w.workflow.set(context(id));await flush();};
  await select('a');
  return {dom,w,$,calls,select,setReply:fn=>{override=fn;}};
 }
@@ -42,7 +43,7 @@ async function studio(){
 test('all stage lists follow the active video; handoffs select sources without generating',async()=>{
  const s=await studio(),{w,$,calls}=s;
  try{
-  assert.equal($('active-video-name'),null);assert.equal($('video-select').hidden,true);
+  assert($('active-video-name'));assert.equal($('video-select').hidden,false);
   assert.match($('wx-source').textContent,/Narration a/);assert.match($('srt-source').textContent,/Transcript a/);
   assert.match($('va-srt').textContent,/Subtitles a/);assert.match($('el-job-rows').textContent,/Narration a/);
   const button=label=>[...$('wf-resources').querySelectorAll('button')].find(b=>b.textContent===label);
@@ -70,7 +71,7 @@ test('changing video during preview cannot enqueue the prior script into the new
   assert(release);await s.select('b');
   release({characters:10,chunks:[{index:1,text:'日本語の長い台本',characters:10}]});await pending;
   assert(!calls.some(c=>c.method==='POST'&&c.route==='/api/elevenlabs/jobs'));
-  assert.match($('el-message').textContent,/project changed/i);
+  assert.match($('el-message').textContent,/project or video changed/i);
   assert.equal($('el-text').value,'日本語の長い台本');
  }finally{s.dom.window.close();}
 });
@@ -80,7 +81,7 @@ test('a late status response cannot restore old sources after a video switch',as
  try{
   s.setReply((method,route)=>route==='/api/whisperx/status?project_id=project-a&video_id=a'?new Promise(resolve=>{release=resolve;}):undefined);
   const old=w.workflow.api('GET','/api/whisperx/status');
-  const rejected=assert.rejects(old,/Active project changed/);
+  const rejected=assert.rejects(old,/Active project or video changed/);
   await s.select('b');release({jobs:[{id:'stale'}]});await rejected;
   assert.doesNotMatch($('srt-source').textContent,/Transcript a|stale/);
   assert.match($('srt-source').textContent,/Transcript b/);
@@ -101,5 +102,37 @@ test('assignment requires a concrete preview and confirmation; selecting video a
   const assign=calls.find(c=>c.route.endsWith('/assign'));
   assert.deepEqual(JSON.parse(JSON.stringify(assign.body)),{...ctx('a'),kind:'audio',id:'legacy'});
   assert(!calls.some(c=>c.method==='POST'&&c.route.endsWith('/jobs')));
+ }finally{s.dom.window.close();}
+});
+
+
+test('assembly production actions carry the selected project ownership',async()=>{
+ const s=await studio(),{w,calls}=s;
+ try{
+  for(const route of ['/api/assembly/preflight','/api/assembly/scene-media','/api/assembly/jobs/12345678-1234-1234-1234-123456789abc/resume']){
+   await w.workflow.api('POST',route,{srt_id:'fixture'});
+   const call=calls.find(c=>c.route===route);
+   assert.equal(call.body.project_id,'project-a');assert.equal(call.body.video_id,'a');
+  }
+ }finally{s.dom.window.close();}
+});
+
+
+test('two videos in the same project have separate stage lists and reject late responses',async()=>{
+ const s=await studio(true),{w,$,calls}=s;let release;
+ try{
+  assert.equal(w.workflow.context().project_id,'shared-project');
+  $('va-title').value='First draft';$('va-title').dispatchEvent(new w.Event('input'));
+  s.setReply((method,route)=>route==='/api/whisperx/status?project_id=shared-project&video_id=a'?new Promise(resolve=>{release=resolve;}):undefined);
+  const pending=w.workflow.api('GET','/api/whisperx/status');const rejected=assert.rejects(pending,/project or video changed/i);
+  await s.select('b');release({jobs:[{id:'old-a'}]});await rejected;
+  assert.equal(w.workflow.context().project_id,'shared-project');assert.equal(w.workflow.context().video_id,'b');
+  for(const id of ['wx-source','srt-source','va-srt','va-audio','el-job-rows'])assert.doesNotMatch($(id).textContent,/Narration a|Transcript a|Subtitles a/);
+  assert.match($('wx-source').textContent,/Narration b/);
+  assert.equal($('va-title').value,'Untitled video');
+  $('wx-source').value='el-b';await $('wx-form').onsubmit({preventDefault(){}});
+  const request=calls.find(c=>c.method==='POST'&&c.route==='/api/whisperx/jobs');
+  assert.equal(request.body.video_id,'b');assert.equal(request.body.project_id,'shared-project');
+  s.setReply(()=>undefined);await s.select('a');assert.equal($('va-title').value,'First draft');
  }finally{s.dom.window.close();}
 });

@@ -10,13 +10,13 @@ router = APIRouter(prefix='/workflow', tags=['workflow'])
 
 class ProjectSelection(BaseModel):
     project_id: str = Field(min_length=1, max_length=100)
+    video_id: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 @router.post('/project')
 async def select_project(body: ProjectSelection):
-    from agent.services.project_workspace import ensure
-    video = await ensure(body.project_id)
-    return {'project_id': body.project_id, 'video_id': video['id'], 'title': video['title'], 'protocol': 2}
+    from agent.services.project_workspace import select
+    return await select(body.project_id, body.video_id)
 
 
 class Scoped(BaseModel):
@@ -36,7 +36,7 @@ async def context(project_id=None, video_id=None):
         from agent.services.project_workspace import ensure
         video_id = (await ensure(project_id))['id']
     if not project_id or not video_id:
-        raise HTTPException(422, 'Select a project in Projects first.')
+        raise HTTPException(422, 'Select a project and video in Project first.')
     db = await get_db()
     row = await (await db.execute('SELECT v.project_id FROM video v JOIN project p ON p.id=v.project_id WHERE v.id=? AND p.status!=?', (video_id, 'DELETED'))).fetchone()
     if not row or row['project_id'] != project_id:

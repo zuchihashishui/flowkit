@@ -36,7 +36,7 @@ async function inspectTabs(kind,options={}) {
   return lastInspection;
  }finally{inspecting=false;announce();}
 }
-function announce(){transmit({type:'pool',protocol:2,capabilities:['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1'],enabled,workers:textWorkers(),srtWorker:srtWorker(),inspecting});}
+function announce(){transmit({type:'pool',protocol:2,capabilities:['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1'],enabled,workers:textWorkers(),srtWorker:srtWorker(),inspecting});}
 async function persist(){await chrome.storage.local.set({workers,enabled,composerMode,modelPreference});announce();}
 async function initialize(){const saved=await chrome.storage.local.get(['workers','enabled','tabId','composerMode','modelPreference']);enabled=saved.enabled!==false;composerMode=saved.composerMode==='work'?'work':'chat';modelPreference=typeof saved.modelPreference==='string'&&saved.modelPreference.length<=100?saved.modelPreference:'auto';
  const previous=saved.workers || (saved.tabId?[{id:'worker-1',tabId:saved.tabId,state:'IDLE'}]:[]);
@@ -46,8 +46,8 @@ async function initialize(){const saved=await chrome.storage.local.get(['workers
  if(dedicated)workers.push({...dedicated,id:SRT_WORKER_ID,kind:'srt'});
  for(const w of workers){if(w.state!=='IDLE')w.state='NEEDS_REVIEW';try{if(!(w.tabId===null&&w.owned&&w.state==='IDLE'))await chrome.tabs.get(w.tabId);}catch{w.state='NEEDS_REVIEW';w.error='Tab no longer exists';}}
  await persist();initialized=true;connect();}
-async function openWorkerWindow(w, focused=true) {
- const win=await chrome.windows.create({url:'https://chatgpt.com/',type:'normal',focused});
+async function openWorkerWindow(w, focused=true, pageUrl='https://chatgpt.com/') {
+ const win=await chrome.windows.create({url:pageUrl,type:'normal',focused});
  const tab=win?.tabs?.[0]||(win?.id!==undefined?(await chrome.tabs.query({windowId:win.id}))[0]:null);
  if(!Number.isInteger(tab?.id))throw Error('Chrome did not return the new worker tab');
  w.tabId=tab.id;w.windowId=win.id;w.owned=true;
@@ -85,6 +85,13 @@ function connect(){if(!initialized || (ws&&ws.readyState<2))return;
     if(m.ok&&w.state==='AWAITING_SAVE'){if(w.kind==='srt')await tryCloseSavedWorker(w);w.state='IDLE';w.requestId=null;w.error='';w.progress=null;w.requestOptions=null;completed++;record('Saved; '+w.id+' ready');}
     else{w.state='NEEDS_REVIEW';w.error='Result requires review';}
     await persist();
+   }else if(m.type==='ensureTextWorkers'){
+    if(configuring)throw Error('Worker configuration is in progress.');
+    while(textWorkers().length<3){
+     const id=[1,2,3].map(n=>'worker-'+n).find(id=>!workers.some(w=>w.id===id));
+     workers.push({id,kind:'text',tabId:null,state:'IDLE',owned:true});
+    }
+    await persist();
    }else if(m.type==='closeIdleText'){
     if(configuring||inspecting||textExecuting()||textWorkers().some(w=>w.state!=='IDLE'))throw Error('Text workers still busy or require review');
     configuring=true;
@@ -102,34 +109,37 @@ function connect(){if(!initialized || (ws&&ws.readyState<2))return;
 }
 async function run(m,peer){let w=workers.find(w=>w.id===m.workerId);
  const reply=r=>{if(peer.readyState===1)peer.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,...r}));};
+ let pageUrl=m.pageUrl||'https://chatgpt.com/',customGPT=false;
+ try{const u=new URL(pageUrl);if(u.origin!=='https://chatgpt.com'||u.username||u.password||u.hash||!(u.pathname==='/'||/^\/g\/g-[A-Za-z0-9_-]+\/?$/.test(u.pathname)))throw Error();customGPT=u.pathname.startsWith('/g/');if(customGPT&&(m.temporary!==false||m.attachment))throw Error();}
+ catch{reply({ok:false,error:'Invalid project ChatGPT URL/options',not_submitted:true});return;}
  const fresh=m.freshTab===true;
  if(fresh&&(!m.attachment||m.composerMode!=='work'||m.temporary!==false)){reply({ok:false,error:'Invalid fresh SRT tab request',not_submitted:true});return;}
  if((fresh&&m.workerId!==SRT_WORKER_ID)||(!fresh&&w?.kind==='srt')){reply({ok:false,error:'SRT and text workers are separate',not_submitted:true});return;}
  if(inspecting||configuring||!enabled||(w&&w.state!=='IDLE')||(!w&&!fresh)){reply({ok:false,error:'Worker is unavailable',not_submitted:true});return;}
  if(!w){w={id:SRT_WORKER_ID,kind:'srt',tabId:null,state:'IDLE'};workers.push(w);}
  const jobComposerMode=m.composerMode??composerMode,jobModel=m.model==='extension'?modelPreference:m.model;
- w.requestOptions={composerMode:jobComposerMode,temporary:m.temporary===true,model:jobModel||'auto',hasAttachment:!!m.attachment,freshTab:fresh};
+ w.requestOptions={composerMode:jobComposerMode,temporary:m.temporary===true,model:jobModel||'auto',hasAttachment:!!m.attachment,freshTab:fresh,pageUrl};
  if(fresh)w.tabId=null; // Release the old idle tab's binding; leave its page intact.
  w.state='RUNNING';w.progress={phase:fresh?'CREATING_TAB':'OPENING_TAB',updated:Date.now(),chars:0};w.requestId=m.requestId;w.started=Date.now();w.error='';executing.add(w.id);lastRequest=m.requestId;record(`${w.id} started ${m.requestId} · ${jobComposerMode} · Temporary ${m.temporary?'ON':'OFF'} · ${jobModel||'auto'}${m.attachment?' · JSON':''}`);
  try{
   await persist();
   if(fresh||w.tabId===null){
-   const tab=await openWorkerWindow(w);
+   const tab=await openWorkerWindow(w,true,pageUrl);
    w.progress={phase:'BINDING_TAB',updated:Date.now(),chars:0};
    record(`${w.id} automatically bound to new ${fresh?'SRT':'text'} tab ${tab.id}`);await persist();
   }else{
    const tab=await chrome.tabs.get(w.tabId);
    if(!tab.url?.startsWith('https://chatgpt.com/'))throw Error('Worker tab must be on ChatGPT');
-   await chrome.tabs.update(w.tabId,{url:'https://chatgpt.com/'});
+   await chrome.tabs.update(w.tabId,{url:pageUrl});
   }
   let ready=false;for(let i=0;i<60;i++){
    if(w.state!=='RUNNING')throw Error('Worker interrupted before submission');
    await new Promise(r=>setTimeout(r,500));const t=await chrome.tabs.get(w.tabId);
-   if(t.status==='complete'&&new URL(t.url).pathname==='/')try{const p=await chrome.tabs.sendMessage(w.tabId,{type:'ping'});if(p.ok){ready=true;break;}}catch{}
+   if(t.status==='complete'&&new URL(t.url).origin==='https://chatgpt.com'&&new URL(t.url).pathname.replace(/\/$/,'')===new URL(pageUrl).pathname.replace(/\/$/,''))try{const p=await chrome.tabs.sendMessage(w.tabId,{type:'ping'});if(p.ok){ready=true;break;}}catch{}
   }
   if(!ready)throw Error('ChatGPT tab did not become ready');
   if(w.state!=='RUNNING')throw Error('Worker interrupted before submission');
-  const result=await chrome.tabs.sendMessage(w.tabId,{type:'chat',requestId:m.requestId,userMessage:m.messages[0].content,attachment:m.attachment,model:jobModel,timeout:m.timeout,newConversation:false,selectModel:true,temporary:m.temporary,composerMode:jobComposerMode});
+  const result=await chrome.tabs.sendMessage(w.tabId,{type:'chat',requestId:m.requestId,userMessage:m.messages[0].content,attachment:m.attachment,model:jobModel,timeout:m.timeout,newConversation:false,selectModel:true,temporary:m.temporary,composerMode:jobComposerMode,customGPT,pageUrl});
   if(!result?.ok){const e=Error(result?.error||'No response from tab');e.code=result?.code;throw e;}
   if(w.state!=='RUNNING')throw Error('Late response: worker already requires review');
   w.state='AWAITING_SAVE';w.progress={...w.progress,phase:'AWAITING_SAVE',updated:Date.now()};await persist();executing.delete(w.id);reply(result);record(w.id+' awaiting database confirmation');

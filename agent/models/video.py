@@ -1,22 +1,25 @@
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, StringConstraints
+from typing import Optional, Annotated, Literal
 from agent.models.enums import VideoStatus
+
+
+VideoTitle = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 
 
 class VideoCreate(BaseModel):
     project_id: str
-    title: str
+    title: VideoTitle
     description: Optional[str] = None
     display_order: int = 0
-    orientation: Optional[str] = None
+    orientation: Optional[Literal["HORIZONTAL", "VERTICAL"]] = None
 
 
 class VideoUpdate(BaseModel):
-    title: Optional[str] = None
+    title: Optional[VideoTitle] = None
     description: Optional[str] = None
     display_order: Optional[int] = None
     status: Optional[VideoStatus] = None
-    orientation: Optional[str] = None
+    orientation: Optional[Literal["HORIZONTAL", "VERTICAL"]] = None
     vertical_url: Optional[str] = None
     horizontal_url: Optional[str] = None
     thumbnail_url: Optional[str] = None

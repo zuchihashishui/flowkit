@@ -20,5 +20,5 @@
  };
  el('chat-clear').onclick=()=>{if(pending)return;el('chat-prompt').value='';answer='';el('chat-response').textContent='Your answer will appear here.';el('chat-status').textContent='Ready.';el('chat-copy').disabled=true;el('chat-prompt').focus();};
  el('chat-copy').onclick=async()=>{try{await navigator.clipboard.writeText(answer);el('chat-status').textContent='Response copied.';}catch{el('chat-status').textContent='Could not access clipboard. Select the response text and copy it manually.';}};
- el('chat-open').onclick=async()=>{try{await window.studio.chatgptAction('open');}catch(e){el('chat-status').textContent=e.message;}};
+ el('chat-open').onclick=async()=>{try{const pid=window.workflow?.context?.().project_id;await (pid?window.studio.openProjectPage(pid,'chatgpt_url'):window.studio.chatgptAction('open'));}catch(e){el('chat-status').textContent=e.message;}};
 })();

@@ -285,7 +285,7 @@
   if (reviewRequired(latestStatus) || latestStatus?.settings?.paused) message('Narration queued and waiting. Follow the next step in ElevenLabs connection to release or resume the queue.');
  }, $('el-generate')); };
  bind('el-preview', preview);
- bind('el-open', () => window.studio.elevenlabsAction('open'));
+ bind('el-open', () => window.workflow?.context().project_id&&window.studio.openProjectPage?window.studio.openProjectPage(window.workflow.context().project_id,'elevenlabs_url'):window.studio.elevenlabsAction('open'));
  bind('el-extension', () => window.studio.elevenlabsAction('extension'));
  bind('el-probe', async () => { message('Checking the selected ElevenLabs tab without generating speech…', 'el-control-message'); const result = await api('POST', 'probe', {}); await refresh(); message(result.error || 'Connection check complete.', 'el-control-message', !!result.error); }, 'el-control-message');
  bind('el-refresh', refresh, 'el-jobs-message');

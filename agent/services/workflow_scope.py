@@ -11,7 +11,8 @@ SCHEMA = '''CREATE TABLE IF NOT EXISTS resource_scope (
  kind TEXT NOT NULL, resource_id TEXT NOT NULL, project_id TEXT, video_id TEXT,
  sources TEXT NOT NULL DEFAULT '[]', created REAL NOT NULL,
  PRIMARY KEY(kind, resource_id));
- CREATE INDEX IF NOT EXISTS resource_scope_video ON resource_scope(video_id,kind);'''
+ CREATE INDEX IF NOT EXISTS resource_scope_video ON resource_scope(video_id,kind);
+ CREATE TABLE IF NOT EXISTS job_settings(kind TEXT NOT NULL,resource_id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(kind,resource_id));'''
 
 
 def initialize(db):
@@ -205,3 +206,12 @@ def assign(kind, rid, context):
     finally:
         db.close()
     return {'assigned': len(selected)}
+
+
+def save_settings(db,kind,rid,settings):
+    db.execute('INSERT OR REPLACE INTO job_settings VALUES(?,?,?)',(kind,str(rid),json.dumps(settings or {})))
+
+def load_settings(service,kind,rid):
+    with service.db() as db:
+        row=db.execute('SELECT value FROM job_settings WHERE kind=? AND resource_id=?',(kind,str(rid))).fetchone()
+    return json.loads(row['value']) if row else {}

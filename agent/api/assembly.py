@@ -33,7 +33,7 @@ class Source(Scoped):
 
 @router.get('/status')
 async def status(project_id: str | None = None, video_id: str | None = None, unassigned: bool = False):
-    return {'mixed_media_version': 1, 'assets': scope.select(scope.annotate(service, 'asset', service.assets()), project_id, video_id, unassigned), 'jobs': scope.select(scope.annotate(service, 'assembly', service.jobs(dict(project_id=project_id, video_id=video_id, unassigned=unassigned))), project_id, video_id, unassigned), 'ffmpeg': bool(shutil.which('ffmpeg')), 'ffprobe': bool(shutil.which('ffprobe'))}
+    return {'production_version': 1, 'mixed_media_version': 1, 'assets': scope.select(scope.annotate(service, 'asset', service.assets()), project_id, video_id, unassigned), 'jobs': scope.select(scope.annotate(service, 'assembly', service.jobs(dict(project_id=project_id, video_id=video_id, unassigned=unassigned))), project_id, video_id, unassigned), 'ffmpeg': bool(shutil.which('ffmpeg')), 'ffprobe': bool(shutil.which('ffprobe'))}
 
 @router.post('/import/{kind}')
 async def import_file(kind: Literal['srt', 'audio', 'image', 'video'], file: UploadFile = File(...), project_id: str | None = Form(None), video_id: str | None = Form(None)):
@@ -65,6 +65,10 @@ async def preview(body: Plan):
 async def enqueue(body: Plan):
     try:
         ctx = await inputs(body, [scope.ref('asset', i) for i in [body.audio_id,body.srt_id,*body.image_ids,*body.video_ids]])
+        from agent.services.assembly_preflight import check
+        report = await check(service, body.model_dump(mode='json'))
+        if report['blocked']:
+            raise ValueError('Resolve missing or unreadable files in Check files & preview before rendering.')
         return service.enqueue(body.model_dump(mode='json'), ctx)
     except (ValueError, UnicodeError, OSError) as e:
         raise HTTPException(409, str(e)) from e
@@ -95,3 +99,37 @@ async def thumbnail(aid: UUID):
         return FileResponse(service.output/'assets'/(str(aid)+'-thumb.jpg'), media_type='image/jpeg')
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
+
+
+class SceneMedia(Scoped):
+    srt_id: UUID
+    visual_mode: Literal['images','mixed'] = 'images'
+
+
+@router.post('/scene-media')
+async def scene_media(body: SceneMedia):
+    from agent.services.assembly_sources import load_scene_media
+    try:
+        ctx = await inputs(body, [scope.ref('asset',body.srt_id)])
+        return await load_scene_media(service, ctx, str(body.srt_id), body.visual_mode)
+    except (ValueError, OSError) as e:
+        raise HTTPException(409,str(e)) from e
+
+
+@router.post('/preflight')
+async def preflight(body: Plan):
+    from agent.services.assembly_preflight import check
+    try:
+        await inputs(body, [scope.ref('asset',i) for i in [body.audio_id,body.srt_id,*body.image_ids,*body.video_ids]])
+        return await check(service, body.model_dump(mode='json'))
+    except (ValueError, OSError) as e:
+        raise HTTPException(409,str(e)) from e
+
+
+@router.post('/jobs/{jid}/resume')
+async def resume(jid: UUID, body: Scoped):
+    try:
+        await inputs(body, [scope.ref('assembly',jid)])
+        return service.resume(str(jid))
+    except (ValueError, OSError) as e:
+        raise HTTPException(409,str(e)) from e

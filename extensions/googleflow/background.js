@@ -36,6 +36,7 @@ let manualDisconnect = false;
 const activeBatchRpcs = new Set();
 const ownedFlowTabs = new Set();
 let flowWindowPromise = null, closingFlowTabs = null;
+const projectFlowPromises=new Map(),projectFlowTabs=new Map();
 let metrics = {
   tokenCapturedAt: null,
   requestCount: 0,   // captcha-consuming requests only (gen image/video/upscale)
@@ -47,11 +48,37 @@ let metrics = {
 function isFlowPage(url) {
   try {const u=new URL(url);return u.origin==='https://flow.google.com'||(u.origin==='https://labs.google'&&/^\/fx\/(?:[^/]+\/)?tools\/flow(?:\/|$)/.test(u.pathname));} catch{return false;}
 }
-async function openFlowWindow({temporary=false}={}) {
+function sameFlowDestination(actual,expected){
+  try{
+    const a=new URL(actual),b=new URL(expected);
+    const project=u=>u.pathname.match(/\/project\/([^/]+)/)?.[1];
+    if(!isFlowPage(actual))return false;
+    if(project(b))return project(a)===project(b)&&a.search===b.search;
+    return a.origin===b.origin&&a.pathname.replace(/\/$/,'')===b.pathname.replace(/\/$/,'')&&a.search===b.search;
+  }catch{return false;}
+}
+async function openFlowWindow({temporary=false,url=FLOW_TAB_URL}={}) {
+  if(url!==FLOW_TAB_URL){
+    const u=new URL(url);if(!isFlowPage(url)||u.username||u.password||u.hash)throw Error('Invalid project Flow URL');
+    if(closingFlowTabs)await closingFlowTabs;
+    if(projectFlowPromises.has(url))return projectFlowPromises.get(url);
+    const promise=(async()=>{
+      const old=projectFlowTabs.get(url),existing=old?await chrome.tabs.get(old).catch(()=>null):null;
+      if(existing&&sameFlowDestination(existing.pendingUrl||existing.url,url))return existing;
+      const win=await chrome.windows.create({url,type:'normal',focused:false});
+      const tab=win.tabs?.[0]||(await chrome.tabs.query({windowId:win.id}))[0];
+      if(!Number.isInteger(tab?.id))throw Error('Chrome did not return the Flow worker tab');
+      ownedFlowTabs.add(tab.id);projectFlowTabs.set(url,tab.id);
+      await chrome.storage.local.set({ownedFlowTabs:[...ownedFlowTabs]});await sleep(5000);return tab;
+    })();
+    projectFlowPromises.set(url,promise);
+    try{return await promise;}finally{projectFlowPromises.delete(url);}
+  }
   if(closingFlowTabs)await closingFlowTabs;
   if(!temporary&&flowWindowPromise)return flowWindowPromise;
   const create=async()=>{
     if(!temporary)for(const id of ownedFlowTabs){
+      if([...projectFlowTabs.values()].includes(id))continue;
       const tab=await chrome.tabs.get(id).catch(()=>null);
       if(tab&&isFlowPage(tab.url||tab.pendingUrl))return tab;
     }
@@ -69,7 +96,7 @@ async function openFlowWindow({temporary=false}={}) {
   try{return await flowWindowPromise;}finally{flowWindowPromise=null;}
 }
 async function closeSavedFlowTabs() {
-  if(activeBatchRpcs.size||flowWindowPromise||closingFlowTabs)return {closed:false};
+  if(activeBatchRpcs.size||flowWindowPromise||projectFlowPromises.size||closingFlowTabs)return {closed:false};
   closingFlowTabs=(async()=>{
     for(const id of [...ownedFlowTabs]){
       const tab=await chrome.tabs.get(id).catch(()=>null);
@@ -271,6 +298,7 @@ function connectToAgent() {
     ws.send(JSON.stringify({
       type: 'extension_ready',
       flowKeyPresent: !!flowKey,
+      projectUrls: true,
       extensionVersion: chrome.runtime.getManifest().version,
       flowUrlSupported: chrome.runtime.getManifest().host_permissions?.includes('https://flow.google.com/*') === true,
       tokenAge: flowKey && metrics.tokenCapturedAt ? Date.now() - metrics.tokenCapturedAt : null,
@@ -516,7 +544,7 @@ async function runBatchRpc(cmd) {
   if(flowWindowPromise)await flowWindowPromise;
   const tabs = await chrome.tabs.query({ url: flowUrls });
   const managed = tabs.filter(t=>ownedFlowTabs.has(t.id));
-  let candidate = managed.find((t) => !t.discarded) || managed[0];
+  let candidate = cmd.pageUrl ? await openFlowWindow({url:cmd.pageUrl}) : managed.find((t) => !t.discarded) || managed[0];
   if (!candidate) {
     // No Flow tab — open one and give the app a moment to boot, otherwise
     // WIZ_global_data is not on the page yet and `at` comes back empty. Keep
@@ -536,7 +564,7 @@ async function runBatchRpc(cmd) {
 
   let freq = cmd.freq;
   if (cmd.captchaAction) {
-    const solved = await solveCaptcha(cmd.id, cmd.captchaAction);
+    const solved = cmd.pageUrl ? await captchaFromTab(tab.id,cmd.id,cmd.captchaAction) : await solveCaptcha(cmd.id, cmd.captchaAction);
     if (!solved?.token) return { error: `CAPTCHA_FAILED: ${solved?.error || 'no token'}` };
     freq = freq.split(CAPTCHA_SLOT).join(solved.token);
   }
@@ -621,7 +649,7 @@ async function handleBatchRpc(msg) {
   }
 
   try {
-    const out = await runBatchRpc({ id, rpcid, freq, captchaAction, match });
+    const out = await runBatchRpc({ id, rpcid, freq, captchaAction, match, pageUrl:params.pageUrl });
     if (out.error || (Number.isInteger(out.status) && out.status >= 400)) {
       const error = out.error || `HTTP_${out.status}`;
       if (hasCaptcha) { metrics.failedCount++; metrics.lastError = error; }

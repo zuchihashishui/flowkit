@@ -592,3 +592,19 @@ def test_api_custom_chunk_size_matches_preview_and_saved_job(bridge, monkeypatch
         for invalid in [99, 3001, 1500.5, True]:
             for route in ['preview', 'jobs']:
                 assert client.post('/api/elevenlabs/' + route, json={**body, 'max_chunk_characters': invalid}).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_project_tts_url_is_forwarded_only_to_capable_extension(bridge):
+    peer=await connected(bridge)
+    url='https://elevenlabs.io/app/speech-synthesis/text-to-speech?voiceId=channel'
+    job=bridge.enqueue('Narration',project_settings={'elevenlabs_url':url})
+    await bridge.step()
+    assert not any(m['type']=='generate' for m in peer.sent)
+    assert bridge.job(job['id'])['state']=='FAILED'
+    bridge.project_urls=True
+    bridge.retry(job['id'],reviewed=True)
+    bridge.configure(paused=False)
+    await bridge.step()
+    assert next(m for m in peer.sent if m['type']=='generate')['pageUrl']==url
+    assert bridge.job(job['id'])['state']=='COMPLETED'

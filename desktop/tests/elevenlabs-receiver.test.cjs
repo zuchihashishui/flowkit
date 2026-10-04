@@ -272,3 +272,12 @@ test('final cleanup preserves a worker page navigated elsewhere',async()=>{
  w.openTabs.get(id).pendingUrl='https://example.com/';
  w.send({type:'commit',requestId:'navigated',ok:true,jobComplete:true});await tick();assert.ok(w.openTabs.has(id));assert.equal(w.saved.state,'IDLE');
 });
+
+test('narration uses the project TTS URL and preserves its query through refresh',async()=>{
+ const w=await worker({receive:async m=>m.type==='generate'?{ok:true,nativeDownload:{path:'/test',token:'token'},voice:'Voice'}:{ok:true,page:{}}});
+ const pageUrl=url+'?voiceId=project-a';w.send({type:'generate',requestId:'project-url',text:'Japanese narration',pageUrl});
+ const r=await resultFor(w,'project-url');assert.equal(r.ok,true,r.error);
+ const created=w.operations.find(o=>o.type==='create'&&o.url===pageUrl);assert.ok(created);
+ assert.equal(w.openTabs.get(created.id).url,pageUrl);assert.ok(w.operations.some(o=>o.type==='reload'&&o.id===created.id));
+ assert.equal(w.calls.filter(c=>c.type==='generate').length,1);
+});

@@ -6,7 +6,7 @@ const os = require('node:os');
 const vm = require('node:vm');
 const {pathToFileURL} = require('node:url');
 
-const compatibleHealth = {studio_api:3,studio_features:{project_single_video:true,project_video_sources:true,elevenlabs_native_download_files:true,elevenlabs_unlimited_native_audio:true,elevenlabs_recover_downloads:true,elevenlabs_safe_pre_submit_failures:true,elevenlabs_auto_prepare_tab:true}};
+const compatibleHealth = {studio_api:3,studio_features:{project_multi_video:true,project_provider_urls:true,project_video_sources:true,elevenlabs_native_download_files:true,elevenlabs_unlimited_native_audio:true,elevenlabs_recover_downloads:true,elevenlabs_safe_pre_submit_failures:true,elevenlabs_auto_prepare_tab:true}};
 async function mainProcess(folder, reply, health=compatibleHealth) {
   const handlers = new Map(), requests = [];
   let win, ready;
@@ -17,7 +17,7 @@ async function mainProcess(folder, reply, health=compatibleHealth) {
   }
   const electron = {
     app:{whenReady:()=>Promise.resolve(),getPath:()=>folder,on(){}},
-    BrowserWindow:Window,ipcMain:{handle:(name,fn)=>handlers.set(name,fn)},dialog:{showSaveDialog:async()=>({canceled:false,filePath:path.join(folder,'chat-results.json')}),showOpenDialog:async()=>({canceled:false,filePaths:[path.join(folder,'sample.mp3')]})},shell:{}
+    BrowserWindow:Window,ipcMain:{handle:(name,fn)=>handlers.set(name,fn)},dialog:{showSaveDialog:async()=>({canceled:false,filePath:path.join(folder,'chat-results.json')}),showOpenDialog:async()=>({canceled:false,filePaths:[path.join(folder,'sample.mp3')]})},shell:{openExternal:async url=>{requests.push({opened:url});}}
   };
   const root=path.resolve(__dirname,'..');
   const source=await fs.readFile(path.join(root,'main.cjs'),'utf8');
@@ -34,6 +34,7 @@ test('actual main-process IPC supports scene edits and queue cancellation, rejec
   const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-ipc-'));
   try {
     const main=await mainProcess(folder);
+    await main.invoke('api','PATCH','/api/videos/video-123',{title:'New title'});
     await main.invoke('api','PATCH','/api/scenes/scene-123',{narrator_text:'Edited'});
     await main.invoke('api','POST','/api/desktop/jobs/cancel',{ids:['job']});
     await main.invoke('api','POST','/api/chatgpt/message',{prompt:'Hello'});
@@ -42,6 +43,9 @@ test('actual main-process IPC supports scene edits and queue cancellation, rejec
     assert(main.requests.some(r=>r.url.endsWith('/api/chatgpt/message') && JSON.parse(r.options.body).prompt==='Hello'));
     await main.invoke('api','PUT','/api/storyboard/videos/video-123',{script_text:'Script'});
     await main.invoke('api','POST','/api/storyboard/videos/video-123/generate-media',{segment_ids:['segment'],kind:'image'});
+    await main.invoke('api','POST','/api/storyboard/videos/video-123/retry-failed',{segment_ids:['segment'],kind:'image'});
+    for(const route of ['preflight','scene-media','jobs/12345678-1234-1234-1234-123456789abc/resume'])await main.invoke('api','POST','/api/assembly/'+route,{});
+
     assert(main.requests.some(r=>r.url.endsWith('/api/storyboard/videos/video-123')&&r.options.method==='PUT'));
     assert(main.requests.some(r=>r.url.endsWith('/api/scenes/scene-123')&&r.options.method==='PATCH'));
     assert(main.requests.some(r=>r.url.endsWith('/api/desktop/jobs/cancel')));
@@ -295,5 +299,30 @@ test('assembly imports optional video files/folders and validates original clip 
   assert.equal((await main.invoke('assembly-media',aid,'clip-preview')).url,`http://127.0.0.1:8100/api/assembly/clips/${aid}/video`);
   await assert.rejects(main.invoke('assembly-media','11111111-1111-1111-1111-111111111111','clip-preview'),/not available/);
   await assert.rejects(main.invoke('api','POST','/api/assembly/import/video',{}),/Unsupported/);
+ }finally{await fs.rm(folder,{recursive:true,force:true});}
+});
+
+test('multi-video creation cannot fall back to an old one-video backend',async()=>{
+ const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-multi-ipc-'));
+ try{
+  const health={...compatibleHealth,studio_features:{...compatibleHealth.studio_features,project_multi_video:false,project_single_video:true}};
+  const main=await mainProcess(folder,undefined,health);
+  await assert.rejects(main.invoke('api','POST','/api/videos',{project_id:'p',title:'New topic'}),/multiple videos per project/);
+  assert.equal(main.requests.some(r=>r.url.endsWith('/api/videos')),false);
+ }finally{await fs.rm(folder,{recursive:true,force:true});}
+});
+
+test('Project Settings IPC opens only the saved service URL and rejects an older backend before submitting prompts',async()=>{
+ const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-project-settings-'));
+ try{
+  const main=await mainProcess(folder,{ok:true,text:async()=>JSON.stringify({image_prompt_url:'https://chatgpt.com/g/g-channel-image'})});
+  await main.invoke('api','GET','/api/projects/project-a/settings');
+  await main.invoke('api','PUT','/api/projects/project-a/settings',{revision:0,image_prompt_url:'https://chatgpt.com/g/g-channel-image'});
+  await main.invoke('open-project-page','project-a','image_prompt_url');
+  assert.ok(main.requests.some(r=>r.opened==='https://chatgpt.com/g/g-channel-image'));
+  await assert.rejects(main.invoke('open-project-page','project-a','https://example.com'),/supported service/);
+  const stale=await mainProcess(folder,undefined,{...compatibleHealth,studio_features:{...compatibleHealth.studio_features,project_provider_urls:false}});
+  await assert.rejects(stale.invoke('api','POST','/api/storyboard/videos/video-a/generate-concepts',{prompt_kind:'image'}),/project URLs/);
+  assert.equal(stale.requests.some(r=>r.url.endsWith('/generate-concepts')),false);
  }finally{await fs.rm(folder,{recursive:true,force:true});}
 });

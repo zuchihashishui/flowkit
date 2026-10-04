@@ -18,6 +18,9 @@ DEFAULTS = {'workers': 3, 'timeout_seconds': 180, 'temporary': True, 'paused': F
 class GatewayReviewRequired(RuntimeError):
     pass
 
+class GatewayNotSubmitted(ValueError):
+    """Rejected before browser submission; fix the request or update the bridge."""
+
 class GatewayBusy(RuntimeError):
     """Known not submitted; scheduler may keep this job queued."""
 
@@ -126,7 +129,7 @@ async def commit(request_id, ok):
         r = await client.post(URL+'/commit', json={'request_id':request_id,'ok':ok})
         r.raise_for_status()
 
-async def complete(prompt, model=None, validate=None, job_id=None, *, attachment=None, composer_mode=None, temporary=None, timeout_seconds=None, fresh_tab=False):
+async def complete(prompt, model=None, validate=None, job_id=None, *, attachment=None, composer_mode=None, temporary=None, timeout_seconds=None, fresh_tab=False, page_url=None):
     global _cleanup_pending
     config = settings()
     timeout = timeout_seconds or config['timeout_seconds']
@@ -137,6 +140,8 @@ async def complete(prompt, model=None, validate=None, job_id=None, *, attachment
     if temporary is None:
         temporary = attachment is None
     extra = {'composerMode': composer_mode}
+    if page_url:
+        extra['pageUrl'] = page_url
     if fresh_tab:
         extra['freshTab'] = True
     if attachment is not None:
@@ -165,10 +170,11 @@ async def complete(prompt, model=None, validate=None, job_id=None, *, attachment
         with db() as c:
             c.execute('UPDATE requests SET response=? WHERE id=?',(raw,rid))
         result = response.json()
-        if response.status_code in (409,503) and result.get('not_submitted'):
+        if response.status_code in (400,409,503) and result.get('not_submitted'):
             with db() as c:
                 c.execute("UPDATE requests SET state='NOT_SUBMITTED',error=? WHERE id=?",(result.get('error'),rid))
-            raise GatewayBusy(result.get('error','No available worker'))
+            error = GatewayNotSubmitted if response.status_code==400 else GatewayBusy
+            raise error(result.get('error','No available worker'))
         remote_id = result.get('id') or result.get('request_id')
         response.raise_for_status()
         text = result['choices'][0]['message']['content']
@@ -189,7 +195,7 @@ async def complete(prompt, model=None, validate=None, job_id=None, *, attachment
             with db() as c:
                 c.execute('UPDATE requests SET error=? WHERE id=?',('Result saved; worker release unconfirmed: '+str(e),rid))
         return value
-    except GatewayBusy:
+    except (GatewayBusy, GatewayNotSubmitted):
         raise
     except BaseException as e:
         if audited and not saved:
@@ -215,6 +221,9 @@ async def process_job(job):
     except GatewayBusy:
         with db() as c:
             c.execute("UPDATE chat_queue SET state='QUEUED',updated=? WHERE id=?",(time.time(),job['id']))
+    except GatewayNotSubmitted as e:
+        with db() as c:
+            c.execute("UPDATE chat_queue SET state='FAILED',error=?,updated=? WHERE id=?",(str(e),time.time(),job['id']))
     except (GatewayReviewRequired, asyncio.CancelledError) as e:
         with db() as c:
             c.execute("UPDATE chat_queue SET state='NEEDS_REVIEW',error=?,updated=? WHERE id=? AND state='RUNNING'",(str(e) or 'App stopped during generation',time.time(),job['id']))
@@ -289,3 +298,13 @@ async def inspect_tabs(kind, model='auto'):
                 detail = r.text
             raise GatewayBusy(str(detail))
         return r.json()
+
+
+async def ensure_project_workers():
+    async with httpx.AsyncClient(trust_env=False,timeout=15) as client:
+        try:
+            r=await client.post(URL+'/workers/ensure')
+        except httpx.HTTPError as error:
+            raise ValueError('Cannot reach the ChatGPT gateway. Restart it before creating prompts.') from error
+        if r.status_code!=200:
+            raise ValueError('Reload the updated ChatGPT extension and restart the gateway for project GPT URLs. '+r.text[:300])

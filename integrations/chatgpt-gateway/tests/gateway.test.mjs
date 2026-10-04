@@ -204,3 +204,23 @@ test('cleanup waits for save ACK, blocks new text reservations and preserves clo
   s.ws.send(JSON.stringify({type:'response',workerId:'w1',requestId:messages[1].requestId,ok:true,content:'next'}));assert.equal((await next).status,200);
  }finally{await s.close();}
 });
+
+test('project GPT routing verifies capability, ensures workers and forwards one text message',async()=>{
+ const s=await setup(undefined,['project-urls-v1']);const received=[];
+ s.ws.on('message',raw=>{const m=JSON.parse(raw);received.push(m);
+  if(m.type==='chat')s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:true,content:'A visual prompt'}));
+  else if(m.controlId)s.ws.send(JSON.stringify({type:'controlResult',controlId:m.controlId,ok:true}));
+ });
+ try{
+  assert.equal((await s.post('/workers/ensure',{})).status,200);assert.equal(received[0].type,'ensureTextWorkers');
+  const payload={messages:[{role:'user',content:'Exactly one scene'}],pageUrl:'https://chatgpt.com/g/g-channel-images',temporary:false,composerMode:'chat'};
+  const r=await s.post('/v1/chat/completions',payload);assert.equal(r.status,200);
+  const sent=received.find(m=>m.type==='chat');assert.equal(sent.pageUrl,payload.pageUrl);assert.deepEqual(sent.messages,payload.messages);
+  const answer=await r.json();await s.post('/commit',{request_id:answer.id,ok:true});
+  for(const changes of [{temporary:true},{pageUrl:'https://example.com/'},{pageUrl:'https://chatgpt.com/c/old'}]){
+   const bad=await s.post('/v1/chat/completions',{...payload,...changes});assert.equal(bad.status,400);assert.equal((await bad.json()).not_submitted,true);
+  }
+  assert.equal(received.filter(m=>m.type==='chat').length,1);
+ }finally{await s.close();}
+ const old=await setup();try{assert.equal((await old.post('/workers/ensure',{})).status,409);}finally{await old.close();}
+});

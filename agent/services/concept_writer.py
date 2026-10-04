@@ -1,14 +1,29 @@
 """Text-only concept writing using the repository's existing AI CLI adapters."""
 import json
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 class Concept(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     title: str = Field(min_length=1, max_length=160)
     description: str = Field(min_length=1, max_length=3000)
-    image_prompt: str = Field(min_length=1, max_length=5000)
-    video_prompt: str = Field(min_length=1, max_length=5000)
+    image_prompt: str = Field(default="", min_length=0, max_length=5000)
+    video_prompt: str = Field(default="", min_length=0, max_length=5000)
+
+    @model_validator(mode='after')
+    def at_least_one_prompt(self):
+        if not self.image_prompt and not self.video_prompt:raise ValueError('Enter an image or video prompt.')
+        return self
+
+
+def parse_gpt_prompt(raw, payload):
+    raw=raw.strip()
+    if raw.startswith('```') and raw.endswith('```'):
+        raw=raw.split('\n',1)[1].rsplit('```',1)[0].strip()
+    if not raw or len(raw)>5000:raise ValueError('GPT must return one non-empty prompt, up to 5000 characters.')
+    target=payload['prompt_kind']
+    return Concept(title=payload['text'][:150] or 'Scene prompt',description=payload['text'][:3000],
+                   **{target+'_prompt':raw,('video' if target=='image' else 'image')+'_prompt':payload.get('retained_prompt','')})
 
 
 def parse_concept(raw: str) -> Concept:
@@ -36,6 +51,11 @@ SOURCE DATA (JSON):\n''' + json.dumps(data, ensure_ascii=False)
 
 async def write_concept(payload):
     from agent.services.video_reviewer import _run_claude_cli, _run_codex_cli, _run_agy_cli
+    if payload['provider']=='chatgpt-web' and payload.get('prompt_kind') in {'image','video'}:
+        from agent.services.chatgpt_gateway import complete
+        url=payload['project_settings'][payload['prompt_kind']+'_prompt_url']
+        return await complete(payload['text'], 'auto', validate=lambda raw:parse_gpt_prompt(raw,payload),
+                              page_url=url,composer_mode='chat',temporary='/g/' not in url)
     prompt = make_prompt(payload)
     provider = payload['provider']
     options = {'model': payload.get('model')}

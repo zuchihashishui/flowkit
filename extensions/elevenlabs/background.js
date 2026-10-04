@@ -9,7 +9,7 @@ const isPage = url => { try { const u = new URL(url); return u.origin === 'https
 const record = message => { events.unshift({time:new Date().toISOString(),message}); events.splice(60); };
 const send = (message, peer = socket) => { if (peer?.readyState === 1) peer.send(JSON.stringify(message)); };
 const ready = () => enabled && state === 'IDLE' && !executing && !inspecting;
-const status = () => ({type:'status',enabled,connected:socket?.readyState === 1,autoPrepareTab:true,tabId,state,pageConnected,ready:ready(),busy:executing || inspecting || state === 'AWAITING_SAVE',needsReview:state === 'NEEDS_REVIEW',executing,inspecting,requestId,page,phase,progressMessage,lastError,events});
+const status = () => ({type:'status',enabled,connected:socket?.readyState === 1,autoPrepareTab:true,projectUrls:true,tabId,state,pageConnected,ready:ready(),busy:executing || inspecting || state === 'AWAITING_SAVE',needsReview:state === 'NEEDS_REVIEW',executing,inspecting,requestId,page,phase,progressMessage,lastError,events});
 const announce = () => { const {events,...snapshot} = status(); send(snapshot); };
 async function persist() { await chrome.storage.local.set({enabled,tabId,state,requestId}); announce(); }
 async function boundPage() {
@@ -56,6 +56,9 @@ async function openFreshPage(message, peer) {
   assertCurrentRun(peer,tabId);
   reportPreparation('CLOSING_TABS','Closing existing ElevenLabs Text to Speech tabs',peer);
   const allTabs = await chrome.tabs.query({});
+  const pageUrl=message.pageUrl||PAGE_URL;
+  const targetURL=new URL(pageUrl);
+  if(!isPage(pageUrl)||targetURL.username||targetURL.password||targetURL.hash)throw Error('Invalid project Text to Speech URL.');
   const existing = allTabs.filter(tab => isPage(tab.url || tab.pendingUrl));
   assertCurrentRun(peer,tabId);
   let keepAliveTabId = null, created = null;
@@ -87,7 +90,7 @@ async function openFreshPage(message, peer) {
     } finally { for (const tab of existing) closingTabs.delete(tab.id); }
     assertCurrentRun(peer,null);
     reportPreparation('OPENING_TAB','Opening Text to Speech in a separate Chrome window',peer);
-    const workerWindow = await chrome.windows.create({url:PAGE_URL,type:'normal',focused:true});
+    const workerWindow = await chrome.windows.create({url:pageUrl,type:'normal',focused:true});
     created = workerWindow.tabs?.[0];
     assertCurrentRun(peer,null);
     if (!Number.isInteger(created?.id)) throw new Error('Chrome did not create a Text to Speech tab. No speech was generated.');

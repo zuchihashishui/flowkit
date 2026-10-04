@@ -1,24 +1,25 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const {JSDOM}=require('jsdom');
-function setup({mixedMediaVersion=1,savedDraft}={}){
+function setup({mixedMediaVersion=1,productionVersion=0,savedDraft}={}){
  const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'../ui/index.html'),'utf8'),{url:'https://studio.test',runScripts:'outside-only'}),w=dom.window,d=w.document,$=id=>d.getElementById(id),calls=[];
  w.setInterval=()=>{};w.HTMLMediaElement.prototype.load=()=>{};w.HTMLMediaElement.prototype.pause=()=>{};
  const assets=[{id:'s',kind:'srt',title:'Scene timings'},{id:'a',kind:'audio',title:'Narration'},{id:'i1',kind:'image',title:'001.png'},{id:'i2',kind:'image',title:'002.png'},{id:'v1',kind:'video',title:'001.mp4',metadata:{duration:4}}];
  const jobs=[{id:'finished',title:'Final video',state:'COMPLETED',phase:'Completed',progress:100}];
  w.studio={api:async(method,url,body)=>{calls.push({method,url,body:body&&JSON.parse(JSON.stringify(body))});
-  if(url==='/api/assembly/status')return {assets,jobs,ffmpeg:true,ffprobe:true,mixed_media_version:mixedMediaVersion};
+  if(url==='/api/assembly/status')return {assets,jobs,ffmpeg:true,ffprobe:true,mixed_media_version:mixedMediaVersion,production_version:productionVersion};
   if(url==='/api/srt/status')return {jobs:[{id:'srt-result',title:'Generated SRT',state:'COMPLETED'}]};
   if(url==='/api/elevenlabs/jobs')return {jobs:[]};if(url==='/api/whisperx/status')return {imported_sources:[]};
   if(url==='/api/assembly/source'){assets.push({id:'copy',kind:'srt',title:'Copied SRT'});return assets.at(-1);}
-  if(url==='/api/assembly/preview'){
+  if(url==='/api/assembly/scene-media')return {assets:[assets[2],assets[3]],mapping:{'1':'i2'},issues:[]};
+  if(url==='/api/assembly/preview'||url==='/api/assembly/preflight'){
    const key='1';
    const selected=body.mapping[key]===undefined?(body.visual_mode!=='images'&&body.video_ids.length?'v1':'i1'):body.mapping[key];
-   return {scenes:[{scene_key:'1',asset_id:selected,kind:selected==='v1'?'video':'image',allowed_kind:body.visual_mode==='images'?'image':'any',index:1,start:.4,end:1.3,text:'<script>日本語</script>',image_start:0,image_end:2.1,image_id:selected}],duration:3.7,missing:selected?[]:[1],unused:[],timeline_note:'Keep gaps'};
+   return {blocked:productionVersion&&selected==='i1',checks:productionVersion?[{scene:1,status:selected==='i1'?'ERROR':'OK',messages:[selected==='i1'?'Saved file is missing.':'Ready.']}]:[],scenes:[{scene_key:'1',asset_id:selected,kind:selected==='v1'?'video':'image',allowed_kind:body.visual_mode==='images'?'image':'any',index:1,start:.4,end:1.3,text:'<script>日本語</script>',image_start:0,image_end:2.1,image_id:selected}],duration:3.7,missing:selected?[]:[1],unused:[],timeline_note:'Keep gaps'};
   }return {id:'queued'};
  },assemblyImport:async(kind)=>({canceled:false,assets:kind.startsWith('videos')?[{id:'v1'}]:[{id:'i1'},{id:'i2'}],errors:[]}),assemblyMedia:async(id,action)=>{calls.push({id,action});return action==='thumbnail'?'data:image/jpeg;base64,AA==':action==='save'?{path:'movie.mp4'}:{url:'http://127.0.0.1:8100/video'};}};
  if(savedDraft)w.localStorage.setItem('assembly-draft:legacy',JSON.stringify(savedDraft));
  w.eval(fs.readFileSync(path.join(__dirname,'../ui/assembly.js'),'utf8'));
- return {dom,w,d,$,calls};
+ return {dom,w,d,$,calls,jobs};
 }
 test('assembly UI previews mappings, invalidates edits, blocks missing images, renders and exports',async()=>{
  const {dom,w,d,$,calls}=setup();await $('va-refresh').onclick();
@@ -83,4 +84,26 @@ test('mixed media cannot silently use an older image-only backend',async()=>{
  $('va-visual-mode').value='mixed';$('va-visual-mode').dispatchEvent(new w.Event('change'));await $('va-preview').onclick();
  assert.match($('va-message').textContent,/updated backend/);assert.equal($('va-render').disabled,true);
  assert.equal(calls.some(c=>c.url==='/api/assembly/preview'),false);dom.window.close();
+});
+
+
+test('production scene load stops for review; file errors block render and resume uses the same job',async()=>{
+ const {dom,w,$,calls,jobs}=setup({productionVersion:1});await $('va-refresh').onclick();
+ $('va-srt').value='asset:s';$('va-audio').value='asset:a';
+ await $('va-load-scenes').onclick();
+ assert.equal($('va-images').selectedOptions.length,2);
+ assert.equal(calls.some(c=>c.url==='/api/assembly/jobs'),false);
+ assert.equal($('va-render').disabled,true);
+ await $('va-preview').onclick();assert.equal($('va-render').disabled,false);
+ assert.equal(calls.filter(c=>c.url==='/api/assembly/preflight').at(-1).body.mapping['1'],'i2');
+ let select=$('va-scenes').querySelector('select');select.value='i1';await select.onchange();
+ assert.equal($('va-render').disabled,true);assert.match($('va-scenes').textContent,/Saved file is missing/);
+ select=$('va-scenes').querySelector('select');select.value='i2';await select.onchange();
+ assert.equal($('va-render').disabled,false);
+ jobs.push({id:'stopped',title:'Interrupted render',state:'FAILED',phase:'Failed',progress:35,saved_scenes:12,can_resume:true});
+ await $('va-refresh').onclick();
+ const resume=[...$('va-jobs').querySelectorAll('button')].find(b=>b.textContent==='Resume render');assert(resume);
+ await resume.onclick();assert(calls.some(c=>c.url==='/api/assembly/jobs/stopped/resume'));
+ assert.equal(calls.some(c=>c.url==='/api/assembly/jobs'),false);
+ dom.window.close();
 });

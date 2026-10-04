@@ -95,6 +95,7 @@ class ElevenLabsBridge:
         self.enabled = False
         self.ready = False
         self.auto_prepare_tab = False
+        self.project_urls = False
         self.tab_id = None
         self.remote_busy = False
         self.remote_state = 'DISCONNECTED'
@@ -161,7 +162,7 @@ class ElevenLabsBridge:
                 'utf16_length': utf16_length(text), 'credit_estimate': None,
                 'note': 'Credits are optional page information. Missing values do not block generation.'}
 
-    def enqueue(self, text, title='', model=DEFAULT_MODEL, max_chunk_characters=3000, context=None):
+    def enqueue(self, text, title='', model=DEFAULT_MODEL, max_chunk_characters=3000, context=None, project_settings=None):
         chunks = split_text(text, maximum=max_chunk_characters)
         model = model.strip() or DEFAULT_MODEL
         if len(model) > 100:
@@ -173,6 +174,7 @@ class ElevenLabsBridge:
             connection.executemany('''INSERT INTO eleven_chunks(job_id,chunk_index,start_offset,end_offset,text,utf16_length,state,updated)
               VALUES(?,?,?,?,?,?,?,?)''', [(jid, p['index'], p['start'], p['end'], p['text'], p['utf16_length'], 'QUEUED', now) for p in chunks])
             scope.record(connection, 'elevenlabs', jid, context)
+            scope.save_settings(connection, 'elevenlabs', jid, project_settings)
         return self.job(jid)
 
     def _public_job(self, row, chunks):
@@ -263,6 +265,7 @@ class ElevenLabsBridge:
         self.enabled = False
         self.ready = False
         self.auto_prepare_tab = False
+        self.project_urls = False
         self.tab_id = None
         self.remote_state = 'CONNECTING'
         self.remote_busy = False
@@ -274,6 +277,7 @@ class ElevenLabsBridge:
         self.peer, self.enabled = None, False
         self.ready = False
         self.auto_prepare_tab = False
+        self.project_urls = False
         self.tab_id = None
         self.remote_state = 'DISCONNECTED'
         self.remote_busy = False
@@ -292,6 +296,7 @@ class ElevenLabsBridge:
             # Fresh-tab workers create and bind their own tab after dispatch.
             # Older workers must still have a valid bound tab before claiming a job.
             self.auto_prepare_tab = message.get('autoPrepareTab') is True
+            self.project_urls = message.get('projectUrls') is True
             self.ready = message.get('ready') is True and (self.tab_id is not None or self.auto_prepare_tab)
             self.remote_busy = message.get('busy') is True
             self.remote_state = str(message.get('state') or ('BUSY' if self.remote_busy else 'IDLE'))[:80]
@@ -572,7 +577,11 @@ class ElevenLabsBridge:
         not_submitted = False
         remote_locked = False
         try:
-            result = await self.request('generate', {'text': job['text'], 'model': job['model'],
+            page_url = scope.load_settings(self,'elevenlabs',job['job_id']).get('elevenlabs_url')
+            if page_url and not self.project_urls:
+                not_submitted=True
+                raise BridgeError('Reload the updated ElevenLabs extension for project URLs. No speech was generated.')
+            result = await self.request('generate', {**({'pageUrl':page_url} if page_url else {}), 'text': job['text'], 'model': job['model'],
                        'expectedVoice': expected_voice, 'timeout': settings['timeout_seconds'] * 1000}, timeout=settings['timeout_seconds'] + 240, request_id=rid, peer=peer)
             if not result.get('ok'):
                 not_submitted = result.get('notSubmitted') is True
