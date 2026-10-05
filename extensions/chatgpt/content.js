@@ -267,7 +267,7 @@
     }
   }
 
-  let activeRequest = null;
+  let activeRequest = null,activePhase='',submitted=false;
   // Only live page memory: reload/new chat must receive the TXT again.
   let textSession = null;
   function currentTextSessionProof() {
@@ -278,6 +278,7 @@
   }
   function progress(phase, extra={}) {
     if(!activeRequest)return;
+    activePhase=phase;
     try{chrome.runtime.sendMessage({type:'jobProgress',requestId:activeRequest,phase,...extra})?.catch(()=>{});}catch{}
   }
   function hasVisibleState(el) {
@@ -401,8 +402,9 @@
   }
 
   async function typeMessage(text) {
-    const input = findInput();
-    if (!input) throw new Error("Cannot find ChatGPT input field");
+    let input=findInput();
+    for(let i=0;!input&&i<60;i++){await sleep(250);input=findInput();}
+    if (!input) throw new Error("Cannot find ChatGPT input field after waiting for the composer");
 
     input.focus();
     await sleep(200);
@@ -482,7 +484,7 @@
       await sleep(500);
       const failure=pageFailure();if(failure)throw failure;
       const button=findSendButton();
-      if(attachmentPresent(attachment.name) && button && !button.disabled && button.getAttribute('aria-disabled')!=='true') {
+      if(attachmentPresent(attachment.name) && (textPrompt || button && !button.disabled && button.getAttribute('aria-disabled')!=='true')) {
         if(++stable>=2)return;
       }else stable=0;
     }
@@ -568,14 +570,15 @@
     }
 
     // Partial text must never be accepted as a completed answer.
-    throw new Error("Timeout: no verified completed response from ChatGPT; review the tab before retrying");
+    const error=new Error("Timeout: no verified completed response from ChatGPT; review the tab before retrying");
+    error.partialResponse=lastText;throw error;
   }
 
   // ── Message handler ──────────────────────────────────────
 
   async function handleChatRequest(msg) {
     if(activeRequest)return {ok:false,error:'This tab already has an active request'};
-    activeRequest=msg.requestId || 'local-request';
+    activeRequest=msg.requestId || 'local-request';activePhase='PREPARING';submitted=false;
     try {
       if (isStreaming()) throw new Error("ChatGPT is already generating. Wait before submitting.");
       if(msg.textSessionId&&(msg.temporary!==true||msg.composerMode!=='chat'||msg.customGPT||msg.attachment))throw Error('Text to Prompt requires Chat / Temporary ON. No text was sent.');
@@ -613,10 +616,11 @@
       checkModelSelection(selectedModel);
       const beforeMessages = new Set(assistantMessages().map(messageKey));
       const failure=pageFailure();if(failure)throw failure;
+      // Uploading can rebuild the composer. For TXT, type only after upload.
+      if (msg.promptAttachment) {progress('ATTACHING_FILE');await attachFile(msg.promptAttachment,true);}
       progress('TYPING');
       await typeMessage(msg.userMessage);
       if (msg.attachment) {progress('ATTACHING_FILE');await attachFile(msg.attachment);}
-      if (msg.promptAttachment) {progress('ATTACHING_FILE');await attachFile(msg.promptAttachment,true);}
       if (msg.temporary && !temporaryEnabled()) throw new Error("Temporary Chat is no longer confirmed. No prompt was sent.");
       if (msg.temporary === false && temporaryEnabled()) throw new Error('Temporary Chat became active during setup. No prompt was sent.');
       if(continuing&&msg.textSessionId&&currentTextSessionProof()?.proof!==msg.textSessionProof)throw Error('Temporary conversation changed before sending. No text was sent.');
@@ -624,6 +628,8 @@
       checkModelSelection(selectedModel);
       progress('SENDING');
       await clickSend(msg.userMessage, msg.attachment?.name||msg.promptAttachment?.name);
+      submitted=true;
+      await chrome.runtime.sendMessage?.({type:'requestSubmitted',requestId:msg.requestId});
 
       const response = await waitForNewResponse(beforeMessages, msg.timeout, !!msg.attachment, msg.downloadSrt===true);
       if(response?.hasSrtFile){
@@ -634,15 +640,15 @@
       }
 
       if(msg.textSessionId){
-        if(!temporaryEnabled())throw Error('Temporary Chat is no longer active. Review the answer before retrying.');
-        checkComposerStillSelected('chat');
+        // Completion was verified above. Failure to reuse the conversation
+        // must not discard this answer; the next turn can reattach the TXT.
+        textSession=null;
         const latest=assistantMessages().filter(el=>!beforeMessages.has(messageKey(el))).at(-1);
-        if(!latest)throw Error('Temporary conversation response could not be verified.');
-        textSession={id:msg.textSessionId,proof:msg.requestId,url:window.location.href,lastAnswer:messageKey(latest),answerText:assistantText(latest)};
+        if(latest&&temporaryEnabled())textSession={id:msg.textSessionId,proof:msg.requestId,url:window.location.href,lastAnswer:messageKey(latest),answerText:assistantText(latest)};
       }
       return { ok: true, content: response, conversation_url: window.location.href, textSessionProof:currentTextSessionProof() };
     } catch (err) {
-      return { ok: false, error: err.message, code: err.code };
+      return { ok: false, error: err.message, code: err.code,phase:activePhase,submitted,partialResponse:err.partialResponse };
     } finally { activeRequest=null; }
   }
 
@@ -678,7 +684,7 @@
       sendResponse({ok:true, streaming:isStreaming(), temporary:temporaryEnabled()}); return;
     }
     if (msg.type === "ping") {
-      sendResponse({ ok: true, url: window.location.href, textSessionProof:currentTextSessionProof() });
+      sendResponse({ ok: true, submissionAck:true, url: window.location.href, textSessionProof:currentTextSessionProof() });
       return;
     }
 

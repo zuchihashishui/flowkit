@@ -277,3 +277,13 @@ async def test_txt_instructions_are_session_metadata_and_scene_is_the_only_messa
     assert request['pageUrl']=='https://chatgpt.com/'
     assert request['temporary'] is True and request['composerMode']=='chat'
     assert result.image_prompt=='Generated image prompt'
+
+@pytest.mark.asyncio
+async def test_worker_502_preserves_actionable_error_phase_and_partial_response(monkeypatch):
+    transport(monkeypatch,{'error':'TXT upload failed in the composer','phase':'ATTACHING_FILE','submitted':False,'partialResponse':'Retained diagnostic text'},502)
+    with pytest.raises(g.GatewayReviewRequired,match=r'ATTACHING_FILE \(before Send\): TXT upload failed'):
+        await g.complete('prompt')
+    row=g.audit_rows()[0]
+    assert '502 Bad Gateway' not in row['error']
+    assert 'Retained diagnostic text' in row['response']
+    assert row['state']=='NEEDS_REVIEW'

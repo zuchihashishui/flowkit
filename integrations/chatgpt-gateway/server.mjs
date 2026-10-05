@@ -79,7 +79,7 @@ const server=createServer(async(req,res)=>{
   catch(e){return json(res,409,{error:e.message});}
  }
  if(req.url==='/workers/ensure'){
-  if(!capabilities.includes('text-worker-recovery-v1')||!capabilities.includes('txt-prompt-attachment-v1'))return json(res,409,{error:'Reload ChatGPT Bridge 1.11.3 for TXT file attachments and Temporary Chat response detection.'});
+  if(!capabilities.includes('text-worker-recovery-v1')||!capabilities.includes('txt-prompt-attachment-v1')||!capabilities.includes('serialized-submission-v1'))return json(res,409,{error:'Reload ChatGPT Bridge 1.11.4 for coordinated text tab submission.'});
   if(!enabled)return json(res,409,{error:'Turn on the ChatGPT extension before creating prompts.'});
   if(accountPaused)return json(res,409,{error:'ChatGPT reported an account rate limit. Wait and resume after the limit clears.'});
   if(textCleanupActive||inspectionActive||extensionInspecting)return json(res,409,{error:'Text tab preparation or inspection is in progress. Try again when it finishes.'});
@@ -111,7 +111,7 @@ const server=createServer(async(req,res)=>{
  if(req.url!=='/v1/chat/completions')return json(res,404,{error:'Not found'});
  if(p.textSessionId!==undefined){
   if(typeof p.textSessionId!=='string'||!/^[a-f0-9-]{36}$/.test(p.textSessionId)||typeof p.promptTemplate!=='string'||!p.promptTemplate.trim()||p.promptTemplate.length>100000||p.temporary!==true||p.composerMode!=='chat'||p.freshTab||p.attachment)return json(res,400,{error:'Invalid text conversation session',not_submitted:true});
-  if(!capabilities.includes('temporary-text-session-v1')||!capabilities.includes('txt-prompt-attachment-v1'))return json(res,400,{error:'Reload ChatGPT Bridge 1.11.3 for TXT file attachments.',not_submitted:true});
+  if(!capabilities.includes('temporary-text-session-v1')||!capabilities.includes('txt-prompt-attachment-v1')||!capabilities.includes('serialized-submission-v1'))return json(res,400,{error:'Reload ChatGPT Bridge 1.11.4 for coordinated text tab submission.',not_submitted:true});
  }
  if(p.pageUrl!==undefined){
   try{const u=new URL(p.pageUrl);if(u.origin!=='https://chatgpt.com'||u.username||u.password||u.hash||!(u.pathname==='/'||/^\/g\/g-[A-Za-z0-9_-]+\/?$/.test(u.pathname)))throw Error();
@@ -143,7 +143,7 @@ const server=createServer(async(req,res)=>{
  const requestId=randomUUID(),timeout=Math.min(p.attachment?1800000:600000,Math.max(30000,Number(p.timeout)||180000));
  held.set(worker.id,{requestId,worker,jobId:p.srtJobId,state:'RUNNING'});
  const result=await new Promise(resolve=>{
-  const timer=setTimeout(()=>fail(requestId,'Response deadline exceeded; review the worker tab.'),timeout+(p.attachment?450000:p.textSessionId?240000:65000));
+  const timer=setTimeout(()=>fail(requestId,'Response deadline exceeded; review the worker tab.'),timeout+(p.attachment?1050000:660000));
   active.set(requestId,{resolve,timer,worker,jobId:p.srtJobId});
   res.on('close',()=>{if(!res.writableEnded)fail(requestId,'Client disconnected; submission may have completed.');});
   try{send({type:'chat',requestId,workerId:worker.id,messages:p.messages,model:p.model||'auto',timeout,temporary:p.temporary!==false,attachment:p.attachment,composerMode:p.composerMode,freshTab:p.freshTab===true,preparedTabToken:p.preparedTabToken,pageUrl:p.pageUrl,downloadSrt:p.downloadSrt===true,srtJobId:p.srtJobId,textSessionId:p.textSessionId,promptTemplate:p.promptTemplate});}catch(e){fail(requestId,e.message);}
@@ -164,7 +164,7 @@ wss.on('connection',ws=>{
  ws.on('message',raw=>{
   let m;try{m=JSON.parse(raw);}catch{return;}
   if(m.type==='pool'&&m.protocol===2){
-   capabilities=Array.isArray(m.capabilities)?m.capabilities.filter(x=>['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1','srt-prepare-v1','srt-download-v1','srt-cancel-v1','temporary-text-session-v1','text-worker-recovery-v1','txt-prompt-attachment-v1'].includes(x)):[];
+   capabilities=Array.isArray(m.capabilities)?m.capabilities.filter(x=>['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1','srt-prepare-v1','srt-download-v1','srt-cancel-v1','temporary-text-session-v1','text-worker-recovery-v1','txt-prompt-attachment-v1','serialized-submission-v1'].includes(x)):[];
    const seen=new Set(),ids=new Set();workers=(Array.isArray(m.workers)?m.workers:[]).filter(w=>{
     if(!w||typeof w.id!=='string'||w.id===SRT_WORKER_ID||w.kind==='srt'||(!Number.isInteger(w.tabId)&&w.tabId!==null)||ids.has(w.id))return false;
     if(w.tabId!==null&&seen.has(w.tabId))return false;

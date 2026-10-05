@@ -170,7 +170,7 @@ async def complete(prompt, model=None, validate=None, job_id=None, *, attachment
             if job_id:
                 c.execute('UPDATE chat_queue SET audit_id=? WHERE id=?',(rid,job_id))
         audited = True
-        async with httpx.AsyncClient(trust_env=False, timeout=timeout+(480 if download_srt else 240 if attachment is not None or text_session_id else 90)) as client:
+        async with httpx.AsyncClient(trust_env=False, timeout=timeout+(1080 if download_srt else 840 if attachment is not None else 690)) as client:
             response = await client.post(URL+'/v1/chat/completions',json={
                 'messages':[{'role':'user','content':prompt}], 'model':model or 'auto',
                 'timeout':timeout*1000,'workers':config['workers'],'temporary':temporary, **extra})
@@ -184,6 +184,10 @@ async def complete(prompt, model=None, validate=None, job_id=None, *, attachment
             error = GatewayNotSubmitted if response.status_code==400 else GatewayBusy
             raise error(result.get('error','No available worker'))
         remote_id = result.get('id') or result.get('request_id')
+        if response.is_error and isinstance(result,dict) and result.get('error'):
+            phase = str(result.get('phase') or 'GATEWAY')
+            sent = 'after Send' if result.get('submitted') is True else 'before Send' if result.get('submitted') is False else 'submission status unknown'
+            raise ValueError(f"{phase} ({sent}): {str(result['error'])[:1500]}")
         response.raise_for_status()
         text = result['choices'][0]['message']['content']
         if not isinstance(text,str) or not text.strip():

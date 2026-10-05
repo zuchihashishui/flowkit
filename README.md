@@ -1,3 +1,7 @@
+## Studio v0.7.67 / ChatGPT Bridge 1.11.4
+
+Coordinate focus, upload and Send across worker windows, then let responses generate concurrently. Upload TXT before typing the sentence so a rebuilt composer cannot erase it. Preserve completed answers even if conversation reuse cannot be verified, and display the original extension error with its phase instead of a generic HTTP 502. See [release notes](docs/releases/0.7.67.md).
+
 ## Studio v0.7.66 / ChatGPT Bridge 1.11.3
 
 Text to Prompt attaches the saved instructions as a UTF-8 TXT file on the first turn of each Temporary Chat; only the SRT sentence is typed. Later turns send only the next sentence. Temporary response completion now recognizes the supplied sibling toolbar layout without using another turn or a code-block Copy button as completion evidence. See [release notes](docs/releases/0.7.66.md).

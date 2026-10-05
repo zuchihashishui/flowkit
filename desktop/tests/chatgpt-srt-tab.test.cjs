@@ -3,11 +3,11 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const tick=()=>new Promise(r=>setImmediate(r));
 const until=async condition=>{for(let i=0;i<40&&!condition();i++)await tick();assert.ok(condition(),'Expected asynchronous transition');};
 const attachment={name:'transcript-11111111-1111-1111-1111-111111111111.json',base64:'e30='};
-async function bridge(initial=[],create,downloadMock){
+async function bridge(initial=[],create,downloadMock,manualSubmission=false){
  const saved={enabled:true,composerMode:'chat',workers:structuredClone(initial)};
  const tabs=new Map(initial.filter(w=>w.tabId!==null).map(w=>[w.tabId,{id:w.tabId,url:'https://chatgpt.com/c/old',status:'complete'}]));
  tabs.set(9,{id:9,url:'https://example.com/',status:'complete'});
- let socket,listener,nextId=100,removed;const replies=[],created=[],updated=[],messages=[],pending=new Map(),proofs=new Map();
+ let socket,listener,nextId=100,removed;const replies=[],created=[],updated=[],messages=[],pending=new Map(),proofs=new Map(),focused=[];
  class WS{constructor(){socket=this;this.readyState=1;}send(s){replies.push(JSON.parse(s));}close(){this.readyState=3;this.onclose();}}
  const chrome={storage:{local:{get:async()=>structuredClone(saved),set:async d=>Object.assign(saved,structuredClone(d))}},
   tabs:{get:async id=>{if(!tabs.has(id))throw Error('Missing tab');return tabs.get(id);},
@@ -17,17 +17,17 @@ async function bridge(initial=[],create,downloadMock){
    onRemoved:{addListener:f=>removed=f},sendMessage:async(id,m)=>{
     if(m.type==='stopSrt')return {ok:true};
     if(m.type==='clickSrtDownload')return downloadMock.click(m);
-    if(m.type==='prepareSrt')return {ok:true};if(m.type==='ping')return {ok:true,textSessionProof:proofs.get(id)};if(m.type==='probe')return {streaming:false};if(m.type==='preflight')return {ok:true,data:{passed:true}};
-    messages.push({id,...m});return new Promise(resolve=>pending.set(m.requestId,resolve));}},
+    if(m.type==='prepareSrt')return {ok:true};if(m.type==='ping')return {ok:true,submissionAck:true,textSessionProof:proofs.get(id)};if(m.type==='probe')return {streaming:false};if(m.type==='preflight')return {ok:true,data:{passed:true}};
+    messages.push({id,...m});if(!manualSubmission)setImmediate(()=>listener({type:'requestSubmitted',requestId:m.requestId},{id:'ext',frameId:0,tab:{id}},()=>{}));return new Promise(resolve=>pending.set(m.requestId,resolve));}},
   runtime:{id:'ext',onMessage:{addListener:f=>listener=f},onStartup:{addListener(){}},onInstalled:{addListener(){}}},alarms:{create(){},onAlarm:{addListener(){}}}};
  chrome.downloads=downloadMock?.api;
- chrome.windows={update:async()=>{},create:async options=>{assert.equal(options.type,'normal');const tab=await chrome.tabs.create({url:options.url,active:options.focused});return {id:tab.id,tabs:[tab]};}};
+ chrome.windows={update:async(id)=>{focused.push(id);},create:async options=>{assert.equal(options.type,'normal');const tab=await chrome.tabs.create({url:options.url,active:options.focused});return {id:tab.id,tabs:[tab]};}};
  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../extensions/chatgpt/background.js'),'utf8'),{chrome,crypto:require('node:crypto').webcrypto,WebSocket:WS,URL,console,setTimeout:(f,ms)=>ms===500?setImmediate(f):setTimeout(f,ms),clearTimeout,setInterval(){}});
  await tick();await tick();socket.onopen();
  const send=m=>socket.onmessage({data:JSON.stringify(m)});
  const request=(id,workerId='srt-worker',extra={})=>send({type:'chat',requestId:id,workerId,messages:[{content:'Prompt '+id}],attachment,model:'GPT-6 Astra',composerMode:'work',temporary:false,freshTab:true,...extra});
  const complete=async id=>{pending.get(id)({ok:true,content:'Saved answer'});await until(()=>saved.workers.some(w=>w.requestId===id&&w.state==='AWAITING_SAVE'));};
- return {saved,tabs,replies,created,updated,messages,pending,proofs,request,complete,send,socket,
+ return {saved,tabs,replies,created,updated,messages,pending,proofs,focused,request,complete,send,socket,
   page:(m,tabId)=>new Promise(resolve=>listener(m,{id:'ext',frameId:0,tab:{id:tabId}},resolve)),
   ui:m=>new Promise(resolve=>listener(m,{id:'ext'},resolve)),remove:id=>{tabs.delete(id);removed(id);}};
 }
@@ -42,7 +42,7 @@ test('SRT opens and binds a fresh Work tab without assignments, then each next S
  await b.send({type:'commit',requestId:'srt-1',controlId:'c1',ok:true});
  await b.request('srt-2');await until(()=>b.messages.length===2);
  assert.equal(b.created.length,2);assert.equal(b.saved.workers[0].tabId,101);assert.equal(b.messages[1].id,101);
- assert.equal(b.tabs.has(100),false,'Saved SRT tab closes');assert.equal(b.updated.length,0,'Never navigates the old tab for SRT');
+ assert.equal(b.tabs.has(100),false,'Saved SRT tab closes');assert.equal(b.updated.filter(x=>x.url).length,0,'Never navigates the old tab for SRT');
  await b.complete('srt-2');await b.send({type:'commit',requestId:'srt-2',controlId:'c2',ok:true});
  await b.request('text','srt-worker',{freshTab:false,attachment:undefined,composerMode:'chat',temporary:true,model:'auto'});
  assert.equal(b.replies.at(-1).not_submitted,true);assert.equal(b.messages.length,2);
@@ -57,7 +57,7 @@ test('one SRT and three text workers run concurrently without changing text bind
  await until(()=>b.messages.length===3);await b.request('srt');await until(()=>b.messages.length===4);
  const status=await b.ui({type:'status'});
  assert.deepEqual(Array.from(status.workers,w=>w.tabId),[1,2,3]);assert.equal(status.srtWorker.tabId,100);
- assert.equal(b.created.length,1);assert.deepEqual(b.updated.map(x=>x.id),[1,2,3]);
+ assert.equal(b.created.length,1);assert.deepEqual(b.updated.filter(x=>x.url).map(x=>x.id),[1,2,3]);
  for(const id of ['text-1','text-2','text-3','srt'])await b.complete(id);
 });
 
@@ -137,11 +137,11 @@ test('project GPT jobs allocate three windows once and reuse each tab with the r
  const opts=url=>({freshTab:false,attachment:undefined,composerMode:'chat',temporary:false,model:'auto',pageUrl:url});
  for(let i=1;i<=3;i++)await b.request('gpt-'+i,'worker-'+i,opts(image));
  await until(()=>b.messages.length===3);
- assert.equal(b.created.length,3);assert.ok(b.created.every(t=>t.url==='https://chatgpt.com/'));assert.ok(b.updated.every(t=>t.url===image));
+ assert.equal(b.created.length,3);assert.ok(b.created.every(t=>t.url==='https://chatgpt.com/'));assert.ok(b.updated.filter(t=>t.url).every(t=>t.url===image));
  assert.ok(b.messages.every(m=>m.customGPT&&m.pageUrl===image&&!m.attachment&&m.temporary===false));
  for(let i=1;i<=3;i++){await b.complete('gpt-'+i);await b.send({type:'commit',requestId:'gpt-'+i,controlId:'c'+i,ok:true});}
  await b.request('next-project','worker-1',opts(video));await until(()=>b.messages.length===4);
- assert.equal(b.created.length,3);assert.equal(b.updated.at(-1).url,video);assert.equal(b.messages.at(-1).pageUrl,video);
+ assert.equal(b.created.length,3);assert.equal(b.updated.filter(t=>t.url).at(-1).url,video);assert.equal(b.messages.at(-1).pageUrl,video);
  assert.equal(b.messages[0].id,b.messages[3].id);await b.complete('next-project');
 });
 test('invalid project destinations are rejected before opening a tab or typing',async()=>{
@@ -248,7 +248,7 @@ test('200 SRT rows reuse three Temporary conversations and send TXT only once in
   await until(()=>b.messages.length===start+size);
   for(let offset=size-1;offset>=0;offset--){const m=b.messages[start+offset];await finish(m.requestId,m.id);}
  }
- assert.equal(b.messages.length,200);assert.equal(b.created.length,3);assert.equal(b.updated.length,3,'No navigation after the first row per tab');
+ assert.equal(b.messages.length,200);assert.equal(b.created.length,3);assert.equal(b.updated.filter(x=>x.url).length,3,'No navigation after the first row per tab');
  const seen=new Set();for(const m of b.messages){const first=!seen.has(m.id);seen.add(m.id);assert.equal(m.userMessage,'Prompt '+m.requestId);assert.equal(m.promptAttachment?.text,first?options.promptTemplate:undefined);assert.equal(m.promptAttachment?.name,first?'prompt-instructions.txt':undefined);assert.equal(m.continueConversation,!first);assert.equal(m.temporary,true);assert.equal(m.composerMode,'chat');}
  assert.equal(seen.size,3);assert.ok(b.saved.workers.every(w=>w.state==='IDLE'));
  // Reloading may keep the SAME URL while erasing Temporary conversation memory.
@@ -302,4 +302,29 @@ test('text preparation preserves running and awaiting-save requests and refuses 
  b.pending.get('running')({ok:false,error:'Stopped'});await until(()=>b.replies.some(r=>r.type==='response'&&r.requestId==='running'));
  await b.send({type:'ensureTextWorkers',controlId:'after-stop'});assert.equal(b.replies.at(-1).ok,true);assert.equal(b.created.length,1);
  assert.ok(b.tabs.has(1));assert.equal(b.saved.workers[1].state,'AWAITING_SAVE');
+});
+
+test('three tabs serialize focus/upload/send but generate responses concurrently',async()=>{
+ const b=await bridge([],null,null,true);await b.send({type:'ensureTextWorkers',controlId:'ensure'});
+ const options={freshTab:false,attachment:undefined,composerMode:'chat',temporary:true,textSessionId:'session',promptTemplate:'Instructions'};
+ for(let i=1;i<=3;i++)await b.request('row'+i,'worker-'+i,options);
+ await until(()=>b.messages.length===1);for(let i=0;i<10;i++)await tick();
+ assert.equal(b.messages.length,1,'Next window must not steal focus during upload');assert.equal(b.focused.length,1);
+ const first=b.messages[0];assert.equal((await b.page({type:'requestSubmitted',requestId:'row1'},999)).ok,false);
+ assert.equal(b.messages.length,1,'Unrelated tabs cannot unlock setup');
+ await b.page({type:'requestSubmitted',requestId:'row1'},first.id);await until(()=>b.messages.length===2);
+ assert.ok(b.pending.has('row1'),'The first response is still generating');
+ await b.page({type:'requestSubmitted',requestId:'row2'},b.messages[1].id);await until(()=>b.messages.length===3);
+ await b.page({type:'requestSubmitted',requestId:'row3'},b.messages[2].id);
+ assert.equal(b.focused.length,3);assert.equal(b.pending.size,3);
+ // Losing continuation proof must not discard already completed content.
+ for(const m of b.messages){b.pending.get(m.requestId)({ok:true,content:'Completed '+m.requestId,conversation_url:b.tabs.get(m.id).url});}
+ await until(()=>b.saved.workers.every(w=>w.state==='AWAITING_SAVE'));
+ assert.equal(b.replies.filter(r=>r.type==='response'&&r.ok).length,3);
+ for(const m of b.messages)await b.send({type:'commit',requestId:m.requestId,controlId:'save-'+m.requestId,ok:true});
+ await b.request('next','worker-1',options);await until(()=>b.messages.length===4);
+ assert.equal(b.messages[3].continueConversation,false);assert.equal(b.messages[3].promptAttachment.text,'Instructions');
+ b.pending.get('next')({ok:false,error:'Upload failed',phase:'ATTACHING_FILE',submitted:false});
+ await until(()=>b.replies.some(r=>r.type==='response'&&r.requestId==='next'));
+ assert.equal(b.replies.find(r=>r.type==='response'&&r.requestId==='next').phase,'ATTACHING_FILE');
 });
