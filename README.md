@@ -1,3 +1,7 @@
+## Studio v0.7.69
+
+Opening the SRT menu or selecting a transcript for SRT now only refreshes saved data. ChatGPT opens when you click Create SRT or explicitly choose Open / select SRT window. ChatGPT Bridge remains 1.11.5. See [release notes](docs/releases/0.7.69.md).
+
 ## Studio v0.7.68 / ChatGPT Bridge 1.11.5
 
 Restore Text to Prompt entry before TXT upload, then restore the sentence if uploading rebuilds the editor. Recognize attachments across the unified composer and an already-active Temporary Chat with a hidden mode switch. Focus each worker before checking the editor, and show each tab’s current step and errors directly in Text to Prompt. See [release notes](docs/releases/0.7.68.md).
@@ -32,7 +36,7 @@ See [the update guide](docs/releases/0.7.63.md). Choose an SRT file and a prompt
 
 > **Studio 0.7.57:** Create SRT no longer opens the global preflight checklist or blocks on historical ChatGPT review records. The standalone ChatGPT menu is removed; SRT and Text to Prompt keep their extension integration. Restart Studio. [Details](docs/releases/0.7.57.md).
 
-> **Studio 0.7.56 / ChatGPT Bridge 1.9.1:** Opening SRT immediately prepares a separate, focused ChatGPT window, binds its tab and selects Work. Create SRT sends the prompt and indexed JSON in that same tab. Restart Studio/backend/gateway and reload the ChatGPT extension. [Upgrade guide](docs/releases/0.7.56.md).
+> **Studio 0.7.56 / ChatGPT Bridge 1.9.1:** In that release, opening SRT immediately prepared a separate, focused ChatGPT window; v0.7.69 removes this navigation side effect. Create SRT sends the prompt and indexed JSON in that same tab. Restart Studio/backend/gateway and reload the ChatGPT extension. [Upgrade guide](docs/releases/0.7.56.md).
 
 > **Studio 0.7.55:** Per-video production dashboard, preflight checks, recovery center, shared project defaults with video overrides, Scene Board, configuration duplication and portable backups. Final assembly supports optional slow **Zoom in / Zoom out** for still images; **None** remains the default. Electron pauses between stages. The new CLI supports explicit continuous runs with saved checkpoints. Restart Studio with the complete source; extension versions are unchanged from 0.7.54. [Release and upgrade guide](docs/releases/0.7.55.md).
 

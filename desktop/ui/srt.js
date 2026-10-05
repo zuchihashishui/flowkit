@@ -208,7 +208,9 @@ Use consecutive numbering and HH:MM:SS,mmm --> HH:MM:SS,mmm timestamps. Separate
   prepared=null;
   say('Queued for the selected Work tab. Studio will paste your prompt, attach your original JSON, download the returned SRT file and save it to this video.');void refresh();
  });};
- document.querySelector('[data-page="srt"]').addEventListener('click',()=>{upgradeLegacyPrompt();void refresh().catch(e=>say(e.message));void action(prepareTab);});
+ // Navigation (including source handoffs) only loads saved data. Browser
+ // preparation belongs to Create SRT or the explicit Open SRT window button.
+ document.querySelector('[data-page="srt"]').addEventListener('click',()=>{upgradeLegacyPrompt();void refresh().catch(e=>say(e.message));});
  window.openSRT=source=>{if(source!==$('srt-source').value)changedSource();selected=source;document.querySelector('[data-page="srt"]').click();};
  setInterval(()=>{if(!document.querySelector('[data-view="srt"]').hidden&&!busy)refresh().catch(e=>say(e.message));},3000);
  document.addEventListener('workflow-changed',async()=>{prepared=null;changedSource();selected='';signature='';importedSources=[];whisperxSources=[];recentImports.clear();$('srt-jobs').replaceChildren();$('srt-preview').textContent='';renderSources();await Promise.allSettled([...inFlight.values()]);await refresh();});

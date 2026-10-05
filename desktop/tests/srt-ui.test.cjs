@@ -11,12 +11,18 @@ test('SRT UI selects JSON, preserves long prompt, sends Work options, previews a
   return {sources,jobs:[{id:'done',title:'<script>bad</script>',state:'COMPLETED',model:'GPT-6 Astra',cues:1}]};
  },srtImport:async()=>{sources.push({id:'file',title:'My JSON'});return sources.at(-1);},srtSave:async id=>{calls.push({save:id});return {path:'test.srt'};}};
  w.eval(fs.readFileSync(path.join(__dirname,'../ui/srt.js'),'utf8'));
+ assert.equal(calls.length,0,'Loading the SRT UI must not prepare a browser tab');
+ for(let i=0;i<2;i++){d.querySelector('[data-page="srt"]').click();await tick();}
+ assert.ok(calls.length>0,'Opening SRT still refreshes saved sources and jobs');
+ assert.ok(calls.every(c=>c.method==='GET'),'Menu navigation must not prepare a tab or submit a job');
  await $('srt-refresh').onclick();assert.equal($('srt-source').options.length,2);
  assert.match($('srt-bridge').textContent,/SRT: Ready.*One request \/ one dedicated tab.*binds automatically/);
  assert.doesNotMatch($('srt-bridge').textContent,/TEXT_ONLY_PHASE|text-1/);
  await $('srt-choose').onclick();assert.equal($('srt-source').value,'file');
+ assert.ok(calls.every(c=>c.method==='GET'),'Selecting JSON must not prepare a browser tab');
  $('srt-prompt').value='長い指示'.repeat(1000);$('srt-model').value='GPT-6 Astra :: High';
  await $('srt-form').onsubmit({preventDefault(){}});
+ assert.deepEqual(calls.filter(c=>c.method==='POST').map(c=>c.url),['/api/srt/prepare','/api/srt/jobs'],'Create SRT prepares its tab before submitting');
  const submitted=calls.find(c=>c.url==='/api/srt/jobs');assert.equal(submitted.body.source_id,'file');assert.equal(submitted.body.timeout,1800);assert.equal(submitted.body.prompt,'長い指示'.repeat(1000));
  assert.match($('srt-message').textContent,/selected Work tab/);
  assert.equal($('srt-source').value,'file');assert.equal($('srt-jobs').querySelector('script'),null);

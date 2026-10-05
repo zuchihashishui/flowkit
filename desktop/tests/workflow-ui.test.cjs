@@ -73,7 +73,7 @@ test('all stage lists follow the active video; handoffs select sources without g
   await button('Use for WhisperX').onclick();await flush();assert.equal($('wx-source').value,'el-a');
   await button('Use for SRT').onclick();await flush();assert.equal($('srt-source').value,'wx-a');
   await button('Use for Video Assembly').onclick();await flush();assert.equal($('va-srt').value,'job:srt-a');
-  assert(!calls.some(c=>c.method==='POST'&&c.route!=='/api/srt/prepare'));
+  assert(!calls.some(c=>c.method==='POST'),'Selecting a source for SRT must not prepare a tab or submit work');
   $('srt-preview').textContent='Old subtitles';$('wx-result').hidden=false;
   await s.select('b');
   for(const id of ['wx-source','srt-source','va-srt','va-audio','el-job-rows'])assert.doesNotMatch($(id).textContent,/Narration a|Transcript a|Subtitles a|Imported JSON a/);
