@@ -648,10 +648,12 @@
       checkModelSelection(selectedModel);
       const beforeMessages = new Set(assistantMessages().map(messageKey));
       const failure=pageFailure();if(failure)throw failure;
+      const fileFirst=!!msg.promptAttachment&&msg.downloadPromptZip===true;
+      if(fileFirst){progress('ATTACHING_FILE');await attachFile(msg.promptAttachment,true);}
       progress('TYPING');
       await typeMessage(msg.userMessage);
       const attachment=msg.promptAttachment||msg.attachment;
-      if (attachment) {
+      if (attachment&&!fileFirst) {
         progress('ATTACHING_FILE');await attachFile(attachment,!!msg.promptAttachment);
         // Both JSON and TXT use the same upload, editor recovery and Send path.
         if(normalizedPrompt(editorText(findInput()))!==normalizedPrompt(msg.userMessage)){

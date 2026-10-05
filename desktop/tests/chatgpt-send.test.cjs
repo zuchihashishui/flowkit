@@ -15,7 +15,7 @@ for(const kind of ['TXT','JSON'])for(const scenario of cases)test(`Work ${kind} 
  w.setTimeout=(f,ms)=>setImmediate(()=>{if(uploads&&ms===300&&scenario==='delayed-send'&&++waits===3)button.disabled=false;f();});
  d.execCommand=(_,__,value)=>{edits++;editor().replaceChildren(...value.split('\n').map(line=>{const p=d.createElement('p');p.textContent=line;return p;}));if(scenario==='remount')button.disabled=false;return true;};
  d.querySelector('input').onchange=e=>{
-  uploads++;assert.equal(e.target.files[0].name,name);assert.equal(e.target.files[0].type,kind==='TXT'?'text/plain':'application/json');
+  uploads++;if(kind==='TXT')assert.equal(edits,0,'TXT must upload before SRT typing');assert.equal(e.target.files[0].name,name);assert.equal(e.target.files[0].type,kind==='TXT'?'text/plain':'application/json');
   if(scenario==='remount'){editor().replaceWith(editor().cloneNode(false));button.disabled=true;}
   if(['delayed-send','disabled-send'].includes(scenario))button.disabled=true;
   if(scenario==='missing-card')return;
@@ -48,7 +48,7 @@ for(const kind of ['TXT','JSON'])for(const scenario of cases)test(`Work ${kind} 
   if(blocked){assert.equal(result.ok,false);assert.equal(result.submitted,false);assert.equal(notifications.includes('requestSubmitted'),false);assert.match(result.error,/upload|attachment|disabled/i);}
   else if(scenario==='no-ack'){assert.equal(result.ok,false);assert.equal(result.submitted,true);assert.equal(result.phase,'VERIFYING_SUBMISSION');assert.match(result.error,/15 seconds/);assert.equal(notifications.includes('requestSubmitted'),false);}
   else {assert.equal(notifications.filter(t=>t==='requestSubmitted').length,1,result.error);assert.ok(progress.some(p=>p.phase==='VERIFYING_SUBMISSION'));if(kind==='JSON')assert.equal(result.ok,true,result.error);else assert.match(result.error,/zip/i);}
-  if(scenario==='remount')assert.equal(edits,2);
+  if(scenario==='remount')assert.equal(edits,kind==='TXT'?1:2);
   if(scenario==='disabled-send')assert.ok(progress.some(p=>p.phase==='WAITING_SEND_BUTTON'&&/disabled/.test(p.detail)));
  }finally{dom.window.close();}
 });
