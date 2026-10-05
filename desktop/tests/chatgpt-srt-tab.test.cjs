@@ -277,3 +277,29 @@ test('three Temporary Chat sessions and the single regular Work/SRT tab stay iso
  const before=b.messages.length;await b.request('wrong','worker-1',{...options,temporary:false});
  assert.equal(b.replies.at(-1).not_submitted,true);assert.equal(b.messages.length,before);
 });
+
+test('text preparation replaces inactive failed bindings while preserving old tabs and SRT',async()=>{
+ const initial=[1,2,3].map(i=>({id:'worker-'+i,kind:'text',tabId:i,state:'NEEDS_REVIEW',requestId:'old-'+i}));
+ initial.push({id:'srt-worker',kind:'srt',tabId:4,state:'NEEDS_REVIEW',requestId:'old-srt'});
+ const b=await bridge(initial);await b.send({type:'ensureTextWorkers',controlId:'recover'});
+ assert.equal(b.replies.at(-1).ok,true);assert.equal(b.created.length,3);
+ for(let i=1;i<=4;i++)assert.ok(b.tabs.has(i),'Old tab retained');
+ assert.equal(b.messages.length,0,'No old request replayed');
+ const text=b.saved.workers.filter(w=>w.kind==='text');assert.ok(text.every(w=>w.state==='IDLE'&&w.tabId>=100&&!w.requestId&&!w.textSession));
+ assert.equal(b.saved.workers.find(w=>w.kind==='srt').requestId,'old-srt');
+ await b.send({type:'ensureTextWorkers',controlId:'again'});assert.equal(b.created.length,3);
+});
+
+test('text preparation preserves running and awaiting-save requests and refuses quarantine while executing',async()=>{
+ const b=await bridge([1,2,3].map(i=>({id:'worker-'+i,tabId:i,state:'IDLE'})));
+ const options={freshTab:false,attachment:undefined,composerMode:'chat',temporary:true};
+ await b.request('running','worker-1',options);await until(()=>b.messages.length===1);
+ await b.request('saving','worker-2',options);await until(()=>b.messages.length===2);await b.complete('saving');
+ await b.send({type:'ensureTextWorkers',controlId:'prepare'});
+ assert.equal(b.created.length,0);assert.equal(b.saved.workers[0].state,'RUNNING');assert.equal(b.saved.workers[1].state,'AWAITING_SAVE');
+ await b.send({type:'quarantine',requestId:'running'});
+ await b.send({type:'ensureTextWorkers',controlId:'blocked'});assert.equal(b.replies.at(-1).ok,false);assert.equal(b.created.length,0);
+ b.pending.get('running')({ok:false,error:'Stopped'});await until(()=>b.replies.some(r=>r.type==='response'&&r.requestId==='running'));
+ await b.send({type:'ensureTextWorkers',controlId:'after-stop'});assert.equal(b.replies.at(-1).ok,true);assert.equal(b.created.length,1);
+ assert.ok(b.tabs.has(1));assert.equal(b.saved.workers[1].state,'AWAITING_SAVE');
+});

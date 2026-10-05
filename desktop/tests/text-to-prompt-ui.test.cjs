@@ -42,3 +42,16 @@ test('SRT + TXT import, row filters, errors, retry and selection survive refresh
   assert.ok(!notices.some(n=>/Unexpected|not defined/.test(n)),notices.join('\n'));
  }finally{dom.window.close();}
 });
+
+test('ChatGPT prompt start and explicit retry reach preparation despite historical preflight errors; media and CLI keep checks',async()=>{
+ const calls=[],checks=[];let saved=0;
+ const window={studio:{api:async(...args)=>{calls.push(args);return {ok:true};}},projectSettings:{assertSaved:()=>saved++},videoSettings:{assertSaved:()=>saved++},workflow:{context:()=>({project_id:'p',video_id:'v'}),assertCurrent(){}},production:{check:async stage=>{checks.push(stage);return false;}}};
+ const source=fs.readFileSync(path.join(__dirname,'../ui/app.js'),'utf8').split('const ACTIVE =')[0];
+ const context=vm.createContext({window,document:{getElementById(){}},});
+ vm.runInContext(source+';globalThis.submit=api;',context);
+ for(const route of ['generate-concepts','retry-failed'])await context.submit('POST','/api/storyboard/videos/v/'+route,{provider:'chatgpt-web',kind:'concept',prompt_kind:'image'});
+ assert.equal(calls.length,2);assert.equal(checks.length,0);assert.equal(saved,4);
+ await assert.rejects(context.submit('POST','/api/storyboard/videos/v/generate-media',{kind:'image'}),/Preflight blocked/);
+ await assert.rejects(context.submit('POST','/api/storyboard/videos/v/generate-concepts',{provider:'codex'}),/Preflight blocked/);
+ assert.equal(calls.length,2);assert.deepEqual(checks,['images','image_prompts']);
+});

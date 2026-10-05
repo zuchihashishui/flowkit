@@ -10,7 +10,9 @@ const api = async (method, path, body) => {
       if(media.length){stage=media[0].kind==='image'?'images':'videos';options={direct_jobs:media};}
     }else if(path.endsWith('/generate-concepts')||body.kind==='concept')stage=body.prompt_kind==='video'?'video_prompts':'image_prompts';
     else stage=body.kind==='image'?'images':'videos';
-    if(stage&&window.production&&ctx?.video_id){
+    // ChatGPT prompt jobs prepare/recover their own tabs, just like JSON → SRT.
+    const preparesTextTabs=['image_prompts','video_prompts'].includes(stage)&&body.provider==='chatgpt-web';
+    if(stage&&!preparesTextTabs&&window.production&&ctx?.video_id){
       if(!await window.production.check(stage,{...options,...ctx,silentOnSuccess:true}))throw Error('Preflight blocked this request. Resolve the listed checks before starting.');
       window.workflow.assertCurrent(ctx);
     }

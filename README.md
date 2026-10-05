@@ -1,3 +1,7 @@
+## Studio v0.7.65 / ChatGPT Bridge 1.11.2
+
+Text to Prompt prepares its three Chat / Temporary tabs directly, like JSON → SRT. Historical review records no longer block Start selected rows in the generic preflight dialog. Inactive failed bindings get replacement tabs; their old tabs and audit records remain available. Running requests, pending saves, and account rate limits remain protected. Reload the extension after updating. See [release notes](docs/releases/0.7.65.md).
+
 ## Studio 0.7.64 — Separate Chat/Temporary and Work modes
 
 [Update guide](docs/releases/0.7.64.md): **Text to Prompt uses three Chat tabs with Temporary Chat ON. JSON → SRT uses one separate Work tab with Temporary OFF.** Reload ChatGPT Bridge **1.11.1** and restart Studio/backend/gateway. Each Temporary conversation receives TXT + its first SRT row once, then only the following row text. A reload or replaced conversation is detected and receives its instructions again.

@@ -327,7 +327,7 @@ async def test_text_prompt_import_200_cues_and_frozen_session(document, monkeypa
     assert len(imported['segments']) == 200
     assert imported['segments'][199]['text'] == '日本語 200\nSecond line.'
     assert imported['segments'][199]['end_ms'] == 800000
-    monkeypatch.setattr(gateway, 'status', AsyncMock(return_value={'available':True,'extensionConnected':True}))
+    monkeypatch.setattr(gateway, 'status', AsyncMock(return_value={'available':True,'extensionConnected':True,'hasReviewJobs':True}))
     ensure = AsyncMock(); monkeypatch.setattr(gateway, 'ensure_project_workers', ensure)
     ids = [row['id'] for row in imported['segments']]
     result = await s.generate_concepts(video['id'], s.GenerateBody(segment_ids=list(reversed(ids)), provider='chatgpt-web', prompt_kind='image'))

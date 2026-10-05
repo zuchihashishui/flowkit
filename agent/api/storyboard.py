@@ -333,8 +333,10 @@ async def generate_concepts(video_id: str, body: GenerateBody):
     if body.provider == 'chatgpt-web':
         from agent.services.chatgpt_gateway import status
         info = await status()
-        if not info.get('available') or not info.get('extensionConnected') or info.get('needsReview'):
-            raise HTTPException(503, 'Connect ChatGPT Web and resolve pending review in Settings first.')
+        if not info.get('available') or not info.get('extensionConnected') or info.get('enabled') is False:
+            raise HTTPException(503, 'Connect ChatGPT Web and turn on the extension first.')
+        if info.get('needsReview'):
+            raise HTTPException(503, 'ChatGPT reported an account rate limit. Wait and resume after the limit clears.')
     elif not shutil.which(body.provider):
         raise HTTPException(503, f'{body.provider} CLI is not installed or not on PATH. Install and sign in to it before creating concepts.')
     project_settings = None

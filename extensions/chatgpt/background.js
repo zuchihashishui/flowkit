@@ -36,7 +36,7 @@ async function inspectTabs(kind,options={}) {
   return lastInspection;
  }finally{inspecting=false;announce();}
 }
-function announce(){transmit({type:'pool',protocol:2,capabilities:['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1','srt-prepare-v1','srt-download-v1','srt-cancel-v1','temporary-text-session-v1'],enabled,workers:textWorkers(),srtWorker:srtWorker(),inspecting:inspecting||configuring});}
+function announce(){transmit({type:'pool',protocol:2,capabilities:['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1','srt-prepare-v1','srt-download-v1','srt-cancel-v1','temporary-text-session-v1','text-worker-recovery-v1'],enabled,workers:textWorkers(),srtWorker:srtWorker(),inspecting:inspecting||configuring});}
 async function persist(){await chrome.storage.local.set({workers,enabled,composerMode,modelPreference});announce();}
 async function initialize(){const saved=await chrome.storage.local.get(['workers','enabled','tabId','composerMode','modelPreference']);enabled=saved.enabled!==false;composerMode=saved.composerMode==='work'?'work':'chat';modelPreference=typeof saved.modelPreference==='string'&&saved.modelPreference.length<=100?saved.modelPreference:'auto';
  const previous=saved.workers || (saved.tabId?[{id:'worker-1',tabId:saved.tabId,state:'IDLE'}]:[]);
@@ -131,7 +131,22 @@ function connect(){if(!initialized || (ws&&ws.readyState<2))return;
       const id=[1,2,3].map(n=>'worker-'+n).find(id=>!workers.some(w=>w.id===id));
       workers.push({id,kind:'text',tabId:null,state:'IDLE',owned:true});
      }
-     for(const w of textWorkers())if(w.state==='IDLE'&&w.tabId===null){await openWorkerWindow(w,false);await persist();}
+     for(let w of textWorkers()){
+      const recover=w.state==='NEEDS_REVIEW'||m.recoverWorkers?.includes(w.id);
+      if(recover){
+       // Keep the old tab and answer; never revive or resend its request.
+       if(executing.has(w.id)||!['IDLE','NEEDS_REVIEW'].includes(w.state))throw Error('A text request is still running or saving. Wait for it to finish.');
+       const replacement={id:w.id,kind:'text',tabId:null,state:'IDLE',owned:true};
+       await openWorkerWindow(replacement,false);
+       record('Detached previous text request '+(w.requestId||'')+' in tab '+w.tabId+'; opened a replacement');
+       workers=workers.map(item=>item===w?replacement:item);w=replacement;
+       await persist();
+      }
+      if(w.state==='IDLE'){
+       if(w.tabId!==null){try{await chrome.tabs.get(w.tabId);}catch{w.tabId=null;w.textSession=null;w.pendingTextSession=null;}}
+       if(w.tabId===null){await openWorkerWindow(w,false);await persist();}
+      }
+     }
     }finally{configuring=false;await persist();}
    }else if(m.type==='closeIdleText'){
     if(configuring||inspecting||textExecuting()||textWorkers().some(w=>w.state!=='IDLE'))throw Error('Text workers still busy or require review');

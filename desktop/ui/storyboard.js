@@ -224,6 +224,7 @@
     const items=selected(1000);
     if($('sb-provider').value==='chatgpt-web'&&!data.document.prompt_template?.trim())throw Error('Choose and save your prompt TXT first.');
     if(!confirm(`Create prompts for up to ${items.length} row(s)? Three Chat / Temporary tabs process one row each at a time. The prompt TXT is sent once per tab at the start of this run.`))return;
+    notice('Preparing 3 Chat / Temporary tabs…');
     const result=await api('POST',path('/generate-concepts'),{segment_ids:items.map(s=>s.id),provider:$('sb-provider').value,prompt_kind:$('sb-provider').value==='chatgpt-web'?$('sb-prompt-kind').value:'both',model:$('sb-model').value.trim()||null,regenerate:$('sb-regenerate').checked});
     await reload();notice(`${result.ids.length} concept job(s) queued; ${result.skipped.length} skipped because current or pending concepts already exist.`);
   });

@@ -79,8 +79,18 @@ const server=createServer(async(req,res)=>{
   catch(e){return json(res,409,{error:e.message});}
  }
  if(req.url==='/workers/ensure'){
-  if(!capabilities.includes('temporary-text-session-v1'))return json(res,409,{error:'Reload ChatGPT Bridge 1.11.1 for automatic tabs and TXT conversation memory.'});
-  try{await control('ensureTextWorkers',{},10000);return json(res,200,{ok:true});}catch(e){return json(res,409,{error:e.message});}
+  if(!capabilities.includes('text-worker-recovery-v1'))return json(res,409,{error:'Reload ChatGPT Bridge 1.11.2 for automatic text tab preparation and recovery.'});
+  if(!enabled)return json(res,409,{error:'Turn on the ChatGPT extension before creating prompts.'});
+  if(accountPaused)return json(res,409,{error:'ChatGPT reported an account rate limit. Wait and resume after the limit clears.'});
+  if(textCleanupActive||inspectionActive||extensionInspecting)return json(res,409,{error:'Text tab preparation or inspection is in progress. Try again when it finishes.'});
+  const recover=pool().filter(w=>!isSrt(w)&&w.state==='NEEDS_REVIEW'&&![...active.values()].some(r=>r.worker.id===w.id));
+  const reservations=new Map(recover.map(w=>[w.id,held.get(w.id)]));
+  textCleanupActive=true;
+  try{
+   await control('ensureTextWorkers',{recoverWorkers:recover.map(w=>w.id)},10000);
+   for(const [id,reservation] of reservations)if(reservation&&held.get(id)===reservation&&reservation.state==='NEEDS_REVIEW')held.delete(id);
+   return json(res,200,{ok:true});
+  }catch(e){return json(res,409,{error:e.message});}finally{textCleanupActive=false;}
  }
  if(req.url==='/workers/close'){
   if(!capabilities.includes('worker-lifecycle-v1'))return json(res,200,{ok:true,skipped:true});
@@ -154,7 +164,7 @@ wss.on('connection',ws=>{
  ws.on('message',raw=>{
   let m;try{m=JSON.parse(raw);}catch{return;}
   if(m.type==='pool'&&m.protocol===2){
-   capabilities=Array.isArray(m.capabilities)?m.capabilities.filter(x=>['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1','srt-prepare-v1','srt-download-v1','srt-cancel-v1','temporary-text-session-v1'].includes(x)):[];
+   capabilities=Array.isArray(m.capabilities)?m.capabilities.filter(x=>['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1','srt-prepare-v1','srt-download-v1','srt-cancel-v1','temporary-text-session-v1','text-worker-recovery-v1'].includes(x)):[];
    const seen=new Set(),ids=new Set();workers=(Array.isArray(m.workers)?m.workers:[]).filter(w=>{
     if(!w||typeof w.id!=='string'||w.id===SRT_WORKER_ID||w.kind==='srt'||(!Number.isInteger(w.tabId)&&w.tabId!==null)||ids.has(w.id))return false;
     if(w.tabId!==null&&seen.has(w.tabId))return false;

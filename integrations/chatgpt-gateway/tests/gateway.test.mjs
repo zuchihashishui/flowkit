@@ -206,7 +206,7 @@ test('cleanup waits for save ACK, blocks new text reservations and preserves clo
 });
 
 test('project GPT routing verifies capability, ensures workers and forwards one text message',async()=>{
- const s=await setup(undefined,['project-urls-v1','temporary-text-session-v1']);const received=[];
+ const s=await setup(undefined,['project-urls-v1','temporary-text-session-v1','text-worker-recovery-v1']);const received=[];
  s.ws.on('message',raw=>{const m=JSON.parse(raw);received.push(m);
   if(m.type==='chat')s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:true,content:'A visual prompt'}));
   else if(m.controlId)s.ws.send(JSON.stringify({type:'controlResult',controlId:m.controlId,ok:true}));
@@ -313,4 +313,28 @@ test('TXT session metadata is validated and forwarded separately from SRT text',
   assert.equal(messages[0].promptTemplate,payload.promptTemplate);assert.equal(messages[0].textSessionId,payload.textSessionId);assert.deepEqual(messages[0].messages,payload.messages);
  }finally{await s.close();}
  const old=await setup(undefined,['project-urls-v1']);try{const r=await old.post('/v1/chat/completions',payload);assert.equal(r.status,400);assert.equal((await r.json()).not_submitted,true);}finally{await old.close();}
+});
+
+test('text preparation releases only failed reservations after recovery ACK and retains pending saves',async()=>{
+ const s=await setup(undefined,['text-worker-recovery-v1']),messages=[];let failPrepare=true;
+ s.ws.on('message',raw=>{const m=JSON.parse(raw);messages.push(m);
+  if(m.type==='chat')s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:m.messages[0].content==='saved',content:'answer',error:'Old failure'}));
+  if(m.type==='ensureTextWorkers'){
+   if(!failPrepare){for(const id of m.recoverWorkers){const w=s.workers.find(w=>w.id===id);w.tabId+=100;w.state='IDLE';}s.announce();}
+   s.ws.send(JSON.stringify({type:'controlResult',controlId:m.controlId,ok:!failPrepare,error:'Cannot open tab'}));
+  }
+ });
+ try{
+  assert.equal((await s.request('failed')).status,502);assert.equal((await s.request('saved')).status,200);
+  assert.equal((await s.post('/workers/ensure',{})).status,409);assert.equal((await s.health()).reviewWorkers,1);
+  failPrepare=false;assert.equal((await s.post('/workers/ensure',{})).status,200);
+  const state=await s.health();assert.equal(state.reviewWorkers,0);assert.equal(state.workers.filter(w=>w.state==='AWAITING_SAVE').length,1);
+  assert.deepEqual(messages.filter(m=>m.type==='ensureTextWorkers').at(-1).recoverWorkers,['w1']);assert.equal(messages.filter(m=>m.type==='chat').length,2);
+ }finally{await s.close();}
+});
+
+test('text preparation does not clear an account rate limit',async()=>{
+ const s=await setup(undefined,['text-worker-recovery-v1']);let controls=0;
+ s.ws.on('message',raw=>{const m=JSON.parse(raw);if(m.type==='chat')s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:false,error:'Limit',code:'RATE_LIMIT'}));else controls++;});
+ try{await s.request();assert.equal((await s.post('/workers/ensure',{})).status,409);assert.equal((await s.health()).needsReview,true);assert.equal(controls,0);}finally{await s.close();}
 });
