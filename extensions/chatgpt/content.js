@@ -28,20 +28,26 @@
     return null;
   }
 
+  function composerScope() {
+    const editor=findInput();
+    return editor?.closest('[data-type="unified-composer"], [data-testid="composer"], #composer-background') || editor?.closest('form') || editor?.parentElement?.parentElement || editor?.parentElement;
+  }
+
+  function sendButtons() {
+    const scope=composerScope();
+    if(!scope)return [];
+    return [...scope.querySelectorAll('button, [role="button"]')].filter(btn=>{
+      if(!visible(btn))return false;
+      const label=(btn.getAttribute('aria-label')||btn.getAttribute('title')||btn.textContent||'').trim();
+      if(/stop|cancel|dictat|voice/i.test(label)||btn.getAttribute('data-testid')==='stop-button')return false;
+      return btn.id==='composer-submit-button'||btn.getAttribute('data-testid')==='send-button'||/^(send(?: prompt| message)?|gửi(?: tin nhắn)?|送信)$/i.test(label)||
+        !label&&btn.matches('button[type="submit"]')&&btn.form?.contains(findInput());
+    });
+  }
+
   function findSendButton() {
-    const selectors = [
-      'button[type="submit"][aria-label="Send"]',
-      '[data-testid="send-button"]',
-      "#composer-submit-button",
-      'button[aria-label="Send prompt"]',
-      'button[aria-label*="Send"]',
-    ];
-    for (const sel of selectors) {
-      for (const btn of document.querySelectorAll(sel)) {
-        if (visible(btn) && !btn.disabled && btn.getAttribute("aria-disabled") !== "true" && btn.getAttribute('data-loading') !== 'true') return btn;
-      }
-    }
-    return null;
+    const enabled=sendButtons().filter(btn=>!btn.disabled&&!btn.closest('[aria-disabled="true"], [data-loading="true"], [inert]'));
+    return enabled.length===1?enabled[0]:null;
   }
 
   // Modern Chat/Work markup plus the older ChatGPT assistant wrapper.
@@ -439,21 +445,24 @@
     throw new Error('ChatGPT input did not stabilize. No prompt was sent. Refresh the worker tab before retrying.');
   }
 
-  function attachmentPresent(name) {
+  function attachmentState(name) {
     const editor = findInput();
-    const scope = editor?.closest('[data-type="unified-composer"]') || editor?.closest('form') || editor?.parentElement?.parentElement;
-    if (!scope) return false;
-    const named = [...scope.querySelectorAll('[title], [aria-label], [data-filename], span, p, div, button')].filter(el =>
-      visible(el) && (el.getAttribute('title') === name || el.getAttribute('data-filename') === name ||
-      (el.getAttribute('aria-label') || '').includes(name) || (el.textContent || '').trim() === name));
-    if (!named.length) return false;
-    const cards = named.map(el => el.closest('[data-testid*="file"], [data-testid*="attachment"], [data-file-id]') || el);
+    const scope = composerScope();
+    if (!scope) return 'missing';
+    const named = [...scope.querySelectorAll('[title], [aria-label], [data-filename], [data-file-name], span, p, div, button')].filter(el =>
+      visible(el) && !el.contains(editor) && !editor?.contains(el) && !el.closest('[data-user-message-bubble], [data-message-author-role], [data-markdown-text-style]') &&
+      (el.getAttribute('title') === name || el.getAttribute('data-filename') === name || el.getAttribute('data-file-name') === name ||
+      (el.getAttribute('aria-label') || '').includes(name) || (el.textContent || '').replace(/\s+/g,'').trim() === name));
+    if (!named.length) return 'missing';
+    const cards = named.map(el => el.closest('[data-testid*="file"], [data-testid*="attachment"], [data-file-id], [data-file-reference]') || el);
     // A spinner elsewhere in the composer is not evidence that this file is uploading.
-    const busy = cards.some(el => el.matches('[role="progressbar"], [aria-busy="true"], [data-loading="true"], .animate-spin') ||
-      el.querySelector('[role="progressbar"], [aria-busy="true"], [data-loading="true"], .animate-spin'));
+    // Completed cards may retain a hidden progress node: only visible state counts.
+    const busySelector='[role="progressbar"], [aria-busy="true"], [data-loading="true"], .animate-spin';
+    const busy = cards.some(el => [el,...el.querySelectorAll(busySelector)].some(node=>node.matches(busySelector)&&hasVisibleState(node)));
+    const status=scope.cloneNode(true);status.querySelectorAll('textarea, [contenteditable], [hidden], [aria-hidden="true"]').forEach(el=>el.remove());
     const failed = cards.some(el => /upload failed|error uploading|unable to upload|unsupported file|file too large/i.test(
-      el.textContent || '')) || /upload failed|error uploading|unable to upload|unsupported file|file too large/i.test(scope.textContent || '');
-    return !busy && !failed;
+      el.textContent || '')) || /upload failed|error uploading|unable to upload|unsupported file|file too large/i.test(status.textContent || '');
+    return failed?'failed':busy?'uploading':'ready';
   }
 
   async function attachFile(attachment, textPrompt=false) {
@@ -483,31 +492,49 @@
     if (!input) throw Error(label+' file input was not found. No prompt was sent. Open the attachment menu and check the page.');
     const transfer = new DataTransfer();transfer.items.add(file);input.files = transfer.files;
     input.dispatchEvent(new Event('change', {bubbles:true}));
-    let stable = 0;
+    let stable = 0, state = 'missing';
     for (let i=0;i<240;i++) {
       await sleep(500);
       const failure=pageFailure();if(failure)throw failure;
-      const button=findSendButton();
-      if(attachmentPresent(attachment.name) && (textPrompt || button && !button.disabled && button.getAttribute('aria-disabled')!=='true')) {
+      state=attachmentState(attachment.name);
+      if(state==='failed')throw Error(label+' upload failed. No prompt was sent. Check the attachment in the Work tab.');
+      progress('WAITING_ATTACHMENT',{detail:state==='missing'?'Waiting for the attached file card':state==='uploading'?'File upload is still busy':'Checking the completed file upload'});
+      if(state==='ready') {
         if(++stable>=2)return;
       }else stable=0;
     }
-    throw Error(label+' attachment did not become ready within 120 seconds. No prompt was sent. Check the upload in the worker tab.');
+    throw Error(label+' attachment did not become ready within 120 seconds ('+state+'). No prompt was sent. Check the upload in the worker tab.');
   }
 
   async function clickSend(text, attachmentName) {
-    // Wait a moment for the send button to become enabled
+    let detail='';
     for (let i = 0; i < (attachmentName ? 400 : 10); i++) {
       const failure=pageFailure();if(failure)throw failure;
       const btn = findSendButton();
-      if (btn && !btn.disabled && (!attachmentName || attachmentPresent(attachmentName))) {
+      const fileState=attachmentName?attachmentState(attachmentName):'ready';
+      if(fileState==='failed')throw Error('Attachment upload failed before Send. No prompt was sent.');
+      if (btn && fileState==='ready') {
         checkEnteredPrompt(text);
+        const before=new Set(assistantMessages().map(messageKey));
+        const users=new Set([...document.querySelectorAll('[data-user-message-bubble], [data-message-author-role="user"]')].map(messageKey));
+        // Once clicked the result can be uncertain; never automatically click again.
+        submitted=true;
         btn.click();
-        return;
+        progress('VERIFYING_SUBMISSION');
+        for(let tick=0;tick<60;tick++){
+          const error=pageFailure();if(error)throw error;
+          const userSent=[...document.querySelectorAll('[data-user-message-bubble], [data-message-author-role="user"]')].some(el=>!users.has(messageKey(el))&&hasVisibleState(el)&&normalizedPrompt(assistantText(el)).replace(/\s+/g,' ')===normalizedPrompt(text).replace(/\s+/g,' '));
+          if(isStreaming()||assistantMessages().some(el=>!before.has(messageKey(el)))||userSent)return;
+          await sleep(250);
+        }
+        throw Error('Timeout confirming Send after 15 seconds. The button was clicked once, but ChatGPT did not confirm a new message. Review the Work tab before retrying; no second click was made.');
       }
+      const buttons=sendButtons();
+      detail=fileState!=='ready'?'Attachment: '+fileState:!buttons.length?'Send button not found in the active composer':buttons.filter(b=>!b.disabled&&b.getAttribute('aria-disabled')!=='true').length>1?'More than one Send button in the active composer':'Send button is disabled';
+      progress('WAITING_SEND_BUTTON',{detail});
       await sleep(300);
     }
-    throw new Error("Send button did not become enabled. No prompt was sent.");
+    throw new Error('Send could not start: '+detail+'. No prompt was sent.');
   }
 
   let pendingSrtLink = null;
@@ -623,15 +650,14 @@
       const failure=pageFailure();if(failure)throw failure;
       progress('TYPING');
       await typeMessage(msg.userMessage);
-      if (msg.promptAttachment) {
-        progress('ATTACHING_FILE');await attachFile(msg.promptAttachment,true);
-        // Match the SRT flow: enter text before uploading. If upload remounted
-        // the editor, restore only the cue, keeping the TXT attached once.
+      const attachment=msg.promptAttachment||msg.attachment;
+      if (attachment) {
+        progress('ATTACHING_FILE');await attachFile(attachment,!!msg.promptAttachment);
+        // Both JSON and TXT use the same upload, editor recovery and Send path.
         if(normalizedPrompt(editorText(findInput()))!==normalizedPrompt(msg.userMessage)){
           progress('TYPING');await typeMessage(msg.userMessage);
         }
       }
-      if (msg.attachment) {progress('ATTACHING_FILE');await attachFile(msg.attachment);}
       if (msg.temporary && !temporaryEnabled()) throw new Error("Temporary Chat is no longer confirmed. No prompt was sent.");
       if (msg.temporary === false && temporaryEnabled()) throw new Error('Temporary Chat became active during setup. No prompt was sent.');
       if(continuing&&msg.textSessionId&&currentTextSessionProof()?.proof!==msg.textSessionProof)throw Error((msg.downloadPromptZip?'Work':'Temporary')+' conversation changed before sending. No text was sent.');
@@ -704,7 +730,7 @@
       sendResponse({ok:true, streaming:isStreaming(), temporary:temporaryEnabled()}); return;
     }
     if (msg.type === "ping") {
-      sendResponse({ ok: true, submissionAck:true, promptZip:true, inputReady:!!findInput(), url: window.location.href, textSessionProof:currentTextSessionProof() });
+      sendResponse({ ok: true, submissionAck:true, verifiedSend:true, promptZip:true, inputReady:!!findInput(), url: window.location.href, textSessionProof:currentTextSessionProof() });
       return;
     }
 

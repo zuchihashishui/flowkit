@@ -17,7 +17,7 @@ async function bridge(initial=[],create,downloadMock,manualSubmission=false,opti
    onRemoved:{addListener:f=>removed=f},sendMessage:async(id,m)=>{
     if(m.type==='stopSrt')return {ok:true};
     if(m.type==='clickSrtDownload'||m.type==='clickPromptZipDownload')return downloadMock.click(m);
-    if(m.type==='prepareSrt')return {ok:true};if(m.type==='ping')return options.ping?options.ping(id,{tabs,focused}):{ok:true,submissionAck:true,promptZip:true,inputReady:true,url:tabs.get(id)?.url,textSessionProof:proofs.get(id)};if(m.type==='probe')return {streaming:false};if(m.type==='preflight')return {ok:true,data:{passed:true}};
+    if(m.type==='prepareSrt')return {ok:true};if(m.type==='ping')return options.ping?options.ping(id,{tabs,focused}):{ok:true,submissionAck:true,verifiedSend:true,promptZip:true,inputReady:true,url:tabs.get(id)?.url,textSessionProof:proofs.get(id)};if(m.type==='probe')return {streaming:false};if(m.type==='preflight')return {ok:true,data:{passed:true}};
     messages.push({id,...m});if(!manualSubmission)setImmediate(()=>listener({type:'requestSubmitted',requestId:m.requestId},{id:'ext',frameId:0,tab:{id}},()=>{}));return new Promise(resolve=>pending.set(m.requestId,resolve));}},
   runtime:{id:'ext',onMessage:{addListener:f=>listener=f},onStartup:{addListener(){}},onInstalled:{addListener(){}}},alarms:{create(){},onAlarm:{addListener(){}}}};
  chrome.downloads=downloadMock?.api;
@@ -378,4 +378,13 @@ test('switching the text pool to one Work worker closes only idle owned extra ta
  const b=await bridge([1,2,3].map(i=>({id:'worker-'+i,tabId:i,state:'IDLE',owned:true})));
  await b.send({type:'ensureTextWorkers',workerCount:1,controlId:'one'});
  assert.equal(b.replies.at(-1).ok,true);assert.equal(b.saved.workers.length,1);assert.equal(b.saved.workers[0].tabId,1);assert.ok(!b.tabs.has(2)&&!b.tabs.has(3));assert.equal(b.created.length,0);
+});
+
+test('Work ZIP refuses an old content script before entering text or uploading',async()=>{
+ const b=await bridge([],null,null,false,{ping:(id,{tabs})=>({ok:true,submissionAck:true,promptZip:true,inputReady:true,url:tabs.get(id).url})});
+ await b.send({type:'ensureTextWorkers',workerCount:1,controlId:'one'});
+ await b.request('stale-page','worker-1',{attachment:undefined,freshTab:false,downloadPromptZip:true,textSessionId:'run',promptTemplate:'Instructions'});
+ await until(()=>b.replies.some(r=>r.type==='response'&&r.requestId==='stale-page'));
+ const reply=b.replies.find(r=>r.type==='response'&&r.requestId==='stale-page');
+ assert.equal(reply.ok,false);assert.match(reply.error,/1.12.1/);assert.equal(b.messages.length,0);
 });

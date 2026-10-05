@@ -16,7 +16,7 @@ const record=message=>{events.unshift({time:new Date().toISOString(),message});e
 const transmit=m=>{if(ws?.readyState===1)ws.send(JSON.stringify(m));};
 let inspecting=false,lastInspection=null,modelCatalog=null;
 function inspectMessage(tabId,message){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Tab inspection timed out; refresh the tab')),5000);chrome.tabs.sendMessage(tabId,message).then(r=>{clearTimeout(timer);resolve(r);},e=>{clearTimeout(timer);reject(e);});});}
-const phases=new Set(['WAITING_SETUP','OPENING_TAB','SELECTING_MODE','ENABLING_TEMPORARY','DISABLING_TEMPORARY','SELECTING_MODEL','TYPING','ATTACHING_FILE','SENDING','WAITING_RESPONSE','GENERATING','WORKING','THINKING','USING_TOOLS','VERIFYING_COMPLETION','WAITING_COMPLETION','DOWNLOADING_SRT','DOWNLOADING_ZIP']);
+const phases=new Set(['WAITING_SETUP','OPENING_TAB','SELECTING_MODE','ENABLING_TEMPORARY','DISABLING_TEMPORARY','SELECTING_MODEL','TYPING','ATTACHING_FILE','WAITING_ATTACHMENT','WAITING_SEND_BUTTON','VERIFYING_SUBMISSION','SENDING','WAITING_RESPONSE','GENERATING','WORKING','THINKING','USING_TOOLS','VERIFYING_COMPLETION','WAITING_COMPLETION','DOWNLOADING_SRT','DOWNLOADING_ZIP']);
 async function inspectTabs(kind,options={}) {
  if(inspecting||configuring||textExecuting()||textWorkers().some(w=>w.state!=='IDLE'))throw Error('Pause the text queue and finish or review text worker jobs before checking tabs.');
  const limit=Math.max(1,Math.min(3,Number(options.workers)||3));
@@ -43,7 +43,7 @@ async function inspectTabs(kind,options={}) {
   return lastInspection;
  }finally{inspecting=false;announce();}
 }
-function announce(){transmit({type:'pool',protocol:2,capabilities:['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1','srt-prepare-v1','srt-download-v1','srt-cancel-v1','temporary-text-session-v1','text-worker-recovery-v1','txt-prompt-attachment-v1','serialized-submission-v1','work-prompt-zip-v1'],enabled,workers:textWorkers(),srtWorker:srtWorker(),inspecting:inspecting||configuring});}
+function announce(){transmit({type:'pool',protocol:2,capabilities:['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1','srt-prepare-v1','srt-download-v1','srt-cancel-v1','temporary-text-session-v1','text-worker-recovery-v1','txt-prompt-attachment-v1','serialized-submission-v1','work-prompt-zip-v1','verified-send-v1'],enabled,workers:textWorkers(),srtWorker:srtWorker(),inspecting:inspecting||configuring});}
 async function persist(){await chrome.storage.local.set({workers,enabled,composerMode,modelPreference});announce();}
 async function initialize(){const saved=await chrome.storage.local.get(['workers','enabled','tabId','composerMode','modelPreference']);enabled=saved.enabled!==false;composerMode=saved.composerMode==='work'?'work':'chat';modelPreference=typeof saved.modelPreference==='string'&&saved.modelPreference.length<=100?saved.modelPreference:'auto';
  const previous=saved.workers || (saved.tabId?[{id:'worker-1',tabId:saved.tabId,state:'IDLE'}]:[]);
@@ -266,7 +266,7 @@ async function run(m,peer){let w=workers.find(w=>w.id===m.workerId);
   if(!ready)throw Error('ChatGPT composer did not become ready within 30 seconds. Check sign-in, page loading and the Flowkit extension in this tab. No prompt was sent.');
   if(w.state!=='RUNNING')throw Error('Worker interrupted before submission');
   if(session&&ready.submissionAck!==true)throw Error('Refresh the ChatGPT tab to load Bridge 1.11.5 before retrying.');
-  if(workZip&&ready.promptZip!==true)throw Error('Refresh the Work tab to load Bridge 1.12.0 for ZIP downloads before retrying.');
+  if(workZip&&(ready.promptZip!==true||ready.verifiedSend!==true))throw Error('Reload the ChatGPT extension and refresh the Work tab to load Bridge 1.12.1 before retrying.');
   const userMessage=m.messages[0].content;
   const promptAttachment=session&&!continuing?{name:'prompt-instructions.txt',text:m.promptTemplate}:undefined;
   const result=await chrome.tabs.sendMessage(w.tabId,{type:'chat',requestId:m.requestId,userMessage,promptAttachment,attachment:m.attachment,model:jobModel,timeout:m.timeout,newConversation:false,selectModel:!continuing,temporary:m.temporary,composerMode:jobComposerMode,customGPT,pageUrl,continueConversation:continuing,conversationUrl,textSessionId:session,textSessionProof:continuing?w.textSession.proof:null,downloadSrt:m.downloadSrt===true,downloadPromptZip:workZip});
@@ -335,7 +335,7 @@ chrome.runtime.onMessage.addListener((m,sender,reply)=>{
  }
  if(m.type==='jobProgress'&&sender.id===chrome.runtime.id&&sender.tab&&(sender.frameId===undefined||sender.frameId===0)){
   const w=workers.find(w=>w.tabId===sender.tab.id&&w.requestId===m.requestId&&w.state==='RUNNING');
-  if(w&&phases.has(m.phase)){w.progress={phase:m.phase,updated:Date.now(),chars:Math.max(0,Math.min(2000000,Number(m.chars)||0)),lastChange:Number(m.lastChange)||null,completionEvidence:['final-assistant-marker','response-actions','srt-file-ready','zip-file-ready'].includes(m.completionEvidence)?m.completionEvidence:''};announce();}
+  if(w&&phases.has(m.phase)){w.progress={phase:m.phase,detail:typeof m.detail==='string'?m.detail.slice(0,300):'',updated:Date.now(),chars:Math.max(0,Math.min(2000000,Number(m.chars)||0)),lastChange:Number(m.lastChange)||null,completionEvidence:['final-assistant-marker','response-actions','srt-file-ready','zip-file-ready'].includes(m.completionEvidence)?m.completionEvidence:''};announce();}
   reply({ok:!!w});return false;
  }
  if(m.type==='downloadPromptZip'&&sender.id===chrome.runtime.id&&sender.tab&&(sender.frameId===undefined||sender.frameId===0)){

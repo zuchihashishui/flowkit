@@ -137,11 +137,11 @@
     $('sb-workers').hidden=$('sb-provider').value!=='chatgpt-web';
     if($('sb-workers').hidden)return;
     $('sb-workers-status').textContent=status.error||(!status.available?'Gateway unavailable':!status.extensionConnected?'ChatGPT extension disconnected':status.settings?.paused?'Queue paused':status.needsReview?'Account needs review':'Work / Temporary OFF · 1 tab · 5 numbered rows → ZIP → next group');
-    const phases={WAITING_SETUP:'Waiting for another tab to finish input / upload / Send',OPENING_TAB:'Opening tab',BINDING_TAB:'Binding tab',WAITING_PAGE:'Waiting for ChatGPT input',SELECTING_MODE:'Selecting Work',ENABLING_TEMPORARY:'Enabling Temporary Chat',SELECTING_MODEL:'Checking model',TYPING:'Entering numbered SRT rows',ATTACHING_FILE:'Uploading prompt TXT',SENDING:'Sending batch',WAITING_RESPONSE:'Waiting for response',VERIFYING_COMPLETION:'Checking completed response',DOWNLOADING_ZIP:'Downloading ZIP',AWAITING_SAVE:'Checking ZIP and saving TXT files'};
+    const phases={WAITING_SETUP:'Waiting for another tab to finish input / upload / Send',OPENING_TAB:'Opening tab',BINDING_TAB:'Binding tab',WAITING_PAGE:'Waiting for ChatGPT input',SELECTING_MODE:'Selecting Work',ENABLING_TEMPORARY:'Enabling Temporary Chat',SELECTING_MODEL:'Checking model',TYPING:'Entering numbered SRT rows',ATTACHING_FILE:'Uploading prompt TXT',WAITING_ATTACHMENT:'Checking attached file',WAITING_SEND_BUTTON:'Waiting for Send button',VERIFYING_SUBMISSION:'Confirming message was sent',SENDING:'Sending batch',WAITING_RESPONSE:'Waiting for response',VERIFYING_COMPLETION:'Checking completed response',DOWNLOADING_ZIP:'Downloading ZIP',AWAITING_SAVE:'Checking ZIP and saving TXT files'};
     $('sb-worker-rows').replaceChildren(...(status.workers||[]).map(w=>{
       const row=element('tr'),phase=w.progress?.phase;
       row.append(element('td',w.id),element('td',Number.isInteger(w.tabId)?String(w.tabId):'Not open'),element('td',w.error?w.state:(phases[phase]||phase?.replaceAll('_',' ')||w.state)));
-      row.append(element('td',w.error||[w.state==='RUNNING'&&w.started?Math.max(0,Math.round((Date.now()-w.started)/1000))+' s elapsed':'',w.progress?.chars?String(w.progress.chars)+' response characters':''].filter(Boolean).join(' · ')));
+      row.append(element('td',w.error||[w.progress?.detail||'',w.state==='RUNNING'&&w.started?Math.max(0,Math.round((Date.now()-w.started)/1000))+' s elapsed':'',w.progress?.chars?String(w.progress.chars)+' response characters':''].filter(Boolean).join(' · ')));
       return row;
     }));
   }

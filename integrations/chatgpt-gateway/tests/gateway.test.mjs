@@ -340,7 +340,7 @@ test('text preparation does not clear an account rate limit',async()=>{
 });
 
 test('Work ZIP batches use one reserved worker and preserve download metadata until save ACK',async()=>{
- const caps=['project-urls-v1','temporary-text-session-v1','txt-prompt-attachment-v1','serialized-submission-v1','text-worker-recovery-v1','work-prompt-zip-v1'];
+ const caps=['project-urls-v1','temporary-text-session-v1','txt-prompt-attachment-v1','serialized-submission-v1','text-worker-recovery-v1','work-prompt-zip-v1','verified-send-v1'];
  const s=await setup([{id:'w1',tabId:1,state:'IDLE'}],caps),messages=[];
  s.ws.on('message',raw=>{const m=JSON.parse(raw);messages.push(m);
   if(m.type==='chat')s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:true,content:'image_prompts.zip',nativeDownload:{path:'/downloads/prompts.zip',token:'token'}}));
@@ -355,4 +355,10 @@ test('Work ZIP batches use one reserved worker and preserve download metadata un
   assert.equal((await s.post('/v1/chat/completions',payload)).status,409);
   await s.post('/commit',{request_id:result.id,ok:true});assert.equal((await s.health()).availableSlots,1);
  }finally{await s.close();}
+});
+
+test('Work ZIP requires the updated Send extension before preparing workers',async()=>{
+ const s=await setup([{id:'w1',tabId:1,state:'IDLE'}],['project-urls-v1','text-worker-recovery-v1','work-prompt-zip-v1']);
+ let commands=0;s.ws.on('message',()=>commands++);
+ try{const response=await s.post('/workers/ensure',{workers:1});assert.equal(response.status,409);assert.match((await response.json()).error,/1.12.1/);assert.equal(commands,0);}finally{await s.close();}
 });

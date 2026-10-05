@@ -79,7 +79,7 @@ const server=createServer(async(req,res)=>{
   catch(e){return json(res,409,{error:e.message});}
  }
  if(req.url==='/workers/ensure'){
-  if(p.workers===1&&!capabilities.includes('work-prompt-zip-v1'))return json(res,409,{error:'Reload ChatGPT Bridge 1.12.0 for the single Work tab and prompt ZIP batches.'});
+  if(p.workers===1&&(!capabilities.includes('work-prompt-zip-v1')||!capabilities.includes('verified-send-v1')))return json(res,409,{error:'Reload ChatGPT Bridge 1.12.1 for the single Work tab and prompt ZIP batches.'});
   if(!capabilities.includes('text-worker-recovery-v1')||!capabilities.includes('txt-prompt-attachment-v1')||!capabilities.includes('serialized-submission-v1'))return json(res,409,{error:'Reload ChatGPT Bridge 1.11.4 for coordinated text tab submission.'});
   if(!enabled)return json(res,409,{error:'Turn on the ChatGPT extension before creating prompts.'});
   if(accountPaused)return json(res,409,{error:'ChatGPT reported an account rate limit. Wait and resume after the limit clears.'});
@@ -110,7 +110,7 @@ const server=createServer(async(req,res)=>{
   }catch(e){return json(res,409,{error:e.message});}
  }
  if(req.url!=='/v1/chat/completions')return json(res,404,{error:'Not found'});
- if(p.downloadPromptZip===true&&(!p.textSessionId||p.composerMode!=='work'||p.temporary!==false||p.workers!==1||!capabilities.includes('work-prompt-zip-v1')))return json(res,400,{error:'Prompt ZIP batches require one Work worker and Bridge 1.12.0.',not_submitted:true});
+ if(p.downloadPromptZip===true&&(!p.textSessionId||p.composerMode!=='work'||p.temporary!==false||p.workers!==1||!capabilities.includes('work-prompt-zip-v1')||!capabilities.includes('verified-send-v1')))return json(res,400,{error:'Prompt ZIP batches require one Work worker and Bridge 1.12.1.',not_submitted:true});
  if(p.textSessionId!==undefined){
   if(typeof p.textSessionId!=='string'||!/^[a-f0-9-]{36}$/.test(p.textSessionId)||typeof p.promptTemplate!=='string'||!p.promptTemplate.trim()||p.promptTemplate.length>100000||(p.downloadPromptZip===true?(p.temporary!==false||p.composerMode!=='work'):(p.temporary!==true||p.composerMode!=='chat'))||p.freshTab||p.attachment)return json(res,400,{error:'Invalid text conversation session',not_submitted:true});
   if(!capabilities.includes('temporary-text-session-v1')||!capabilities.includes('txt-prompt-attachment-v1')||!capabilities.includes('serialized-submission-v1'))return json(res,400,{error:'Reload ChatGPT Bridge 1.11.4 for coordinated text tab submission.',not_submitted:true});
@@ -166,7 +166,7 @@ wss.on('connection',ws=>{
  ws.on('message',raw=>{
   let m;try{m=JSON.parse(raw);}catch{return;}
   if(m.type==='pool'&&m.protocol===2){
-   capabilities=Array.isArray(m.capabilities)?m.capabilities.filter(x=>['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1','srt-prepare-v1','srt-download-v1','srt-cancel-v1','temporary-text-session-v1','text-worker-recovery-v1','txt-prompt-attachment-v1','serialized-submission-v1','work-prompt-zip-v1'].includes(x)):[];
+   capabilities=Array.isArray(m.capabilities)?m.capabilities.filter(x=>['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1','srt-prepare-v1','srt-download-v1','srt-cancel-v1','temporary-text-session-v1','text-worker-recovery-v1','txt-prompt-attachment-v1','serialized-submission-v1','work-prompt-zip-v1','verified-send-v1'].includes(x)):[];
    const seen=new Set(),ids=new Set();workers=(Array.isArray(m.workers)?m.workers:[]).filter(w=>{
     if(!w||typeof w.id!=='string'||w.id===SRT_WORKER_ID||w.kind==='srt'||(!Number.isInteger(w.tabId)&&w.tabId!==null)||ids.has(w.id))return false;
     if(w.tabId!==null&&seen.has(w.tabId))return false;

@@ -1,3 +1,7 @@
+## Studio v0.7.73 / ChatGPT Bridge 1.12.1
+
+SRT to Prompt and JSON → SRT share upload readiness, editor recovery and Send verification. Completed hidden spinners no longer block attachments, split filenames are recognized, Send is scoped to the active composer, and the gateway is notified only after submission is observed. The UI distinguishes waiting for the attachment, waiting for Send and verifying submission. **Reload ChatGPT Bridge 1.12.1 and refresh existing ChatGPT tabs after updating.** See [release notes](docs/releases/0.7.73.md).
+
 ## Studio v0.7.72 / ChatGPT Bridge 1.12.0
 
 The desktop menu is now **SRT to Prompt**. Related buttons, help text and scene messages use the same name. This workflow still uses one Work tab, Temporary OFF, five SRT rows per group, a prompt TXT attachment on the first group, one output folder per run and a 30-minute ZIP generation timeout. JSON → SRT has its own separate Work tab. See [release notes](docs/releases/0.7.72.md).
