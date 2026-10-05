@@ -3,7 +3,7 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const tick=()=>new Promise(r=>setImmediate(r));
 const until=async condition=>{for(let i=0;i<40&&!condition();i++)await tick();assert.ok(condition(),'Expected asynchronous transition');};
 const attachment={name:'transcript-11111111-1111-1111-1111-111111111111.json',base64:'e30='};
-async function bridge(initial=[],create,downloadMock,manualSubmission=false){
+async function bridge(initial=[],create,downloadMock,manualSubmission=false,options={}){
  const saved={enabled:true,composerMode:'chat',workers:structuredClone(initial)};
  const tabs=new Map(initial.filter(w=>w.tabId!==null).map(w=>[w.tabId,{id:w.tabId,url:'https://chatgpt.com/c/old',status:'complete'}]));
  tabs.set(9,{id:9,url:'https://example.com/',status:'complete'});
@@ -17,7 +17,7 @@ async function bridge(initial=[],create,downloadMock,manualSubmission=false){
    onRemoved:{addListener:f=>removed=f},sendMessage:async(id,m)=>{
     if(m.type==='stopSrt')return {ok:true};
     if(m.type==='clickSrtDownload')return downloadMock.click(m);
-    if(m.type==='prepareSrt')return {ok:true};if(m.type==='ping')return {ok:true,submissionAck:true,textSessionProof:proofs.get(id)};if(m.type==='probe')return {streaming:false};if(m.type==='preflight')return {ok:true,data:{passed:true}};
+    if(m.type==='prepareSrt')return {ok:true};if(m.type==='ping')return options.ping?options.ping(id,{tabs,focused}):{ok:true,submissionAck:true,inputReady:true,url:tabs.get(id)?.url,textSessionProof:proofs.get(id)};if(m.type==='probe')return {streaming:false};if(m.type==='preflight')return {ok:true,data:{passed:true}};
     messages.push({id,...m});if(!manualSubmission)setImmediate(()=>listener({type:'requestSubmitted',requestId:m.requestId},{id:'ext',frameId:0,tab:{id}},()=>{}));return new Promise(resolve=>pending.set(m.requestId,resolve));}},
   runtime:{id:'ext',onMessage:{addListener:f=>listener=f},onStartup:{addListener(){}},onInstalled:{addListener(){}}},alarms:{create(){},onAlarm:{addListener(){}}}};
  chrome.downloads=downloadMock?.api;
@@ -327,4 +327,25 @@ test('three tabs serialize focus/upload/send but generate responses concurrently
  b.pending.get('next')({ok:false,error:'Upload failed',phase:'ATTACHING_FILE',submitted:false});
  await until(()=>b.replies.some(r=>r.type==='response'&&r.requestId==='next'));
  assert.equal(b.replies.find(r=>r.type==='response'&&r.requestId==='next').phase,'ATTACHING_FILE');
+});
+
+test('text worker focuses before ping and can use a ready composer while page resources still load',async()=>{
+ let pinged=0;
+ const b=await bridge([{id:'worker-1',tabId:1,windowId:11,state:'IDLE'}],null,null,false,{ping:(id,{tabs,focused})=>{
+  pinged++;assert.equal(focused.at(-1),11,'Focus must precede composer readiness checks');
+  return {ok:true,submissionAck:true,inputReady:pinged>1,url:tabs.get(id).url};
+ }});
+ b.tabs.get(1).status='loading';
+ await b.request('loading','worker-1',{freshTab:false,attachment:undefined,composerMode:'chat',temporary:true,textSessionId:'s',promptTemplate:'Instructions'});
+ await until(()=>b.messages.length===1||b.replies.some(m=>m.type==='response'));
+ assert.equal(b.messages.length,1,JSON.stringify(b.replies.filter(m=>m.type==='response')));
+ assert.ok(pinged>=2);assert.equal(b.messages[0].userMessage,'Prompt loading');await b.complete('loading');
+});
+
+test('a tab without a ready composer reports WAITING_PAGE failure without submitting',async()=>{
+ const b=await bridge([{id:'worker-1',tabId:1,windowId:11,state:'IDLE'}],null,null,false,{ping:()=>({ok:true,inputReady:false})});
+ await b.request('not-ready','worker-1',{freshTab:false,attachment:undefined,composerMode:'chat',temporary:true});
+ for(let i=0;i<90&&!b.replies.some(m=>m.type==='response');i++)await tick();
+ const reply=b.replies.find(m=>m.type==='response');
+ assert.equal(reply?.ok,false);assert.equal(reply.phase,'WAITING_PAGE');assert.match(reply.error,/composer did not become ready/);assert.equal(b.messages.length,0);
 });

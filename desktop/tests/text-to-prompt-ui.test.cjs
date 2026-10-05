@@ -8,6 +8,7 @@ test('SRT + TXT import, row filters, errors, retry and selection survive refresh
  w.action=async fn=>{try{return await fn();}catch(error){notices.push(error.message);}};
  w.api=async(method,route,body)=>{
   calls.push({method,route,body});
+  if(route==='/api/chatgpt/status')return {available:true,extensionConnected:true,workers:[{id:'worker-1',tabId:101,state:'RUNNING',progress:{phase:'ATTACHING_FILE'}},{id:'worker-2',tabId:102,state:'RUNNING',progress:{phase:'WAITING_SETUP'}},{id:'worker-3',tabId:103,state:'NEEDS_REVIEW',error:'Upload failed <script>unsafe()</script>'}]};
   if(route.startsWith('/api/videos'))return [data.video];
   if(route==='/api/storyboard/videos/v1')return structuredClone(data);
   if(route.endsWith('/prompt-input')){
@@ -33,6 +34,7 @@ test('SRT + TXT import, row filters, errors, retry and selection survive refresh
   data.segments[0].ready=true;data.segments[0].active_concept={id:'c1',version:1,image_prompt:'A saved image',video_prompt:''};data.segments[0].job={state:'COMPLETED'};
   data.segments[1].job={state:'FAILED',error:'Rate limit <script>unsafe()</script>'};data.segments[2].job={state:'RUNNING'};data.segments[3].job={state:'QUEUED'};
   await $('sb-refresh').onclick();assert.match($('sb-summary').textContent,/Completed: 1/);assert.match($('sb-summary').textContent,/Error \/ review: 1/);
+  assert.equal($('sb-worker-rows').children.length,3);assert.match($('sb-worker-rows').textContent,/Uploading prompt TXT/);assert.match($('sb-worker-rows').textContent,/Waiting for another tab/);assert.match($('sb-worker-rows').textContent,/Upload failed/);assert.equal($('sb-worker-rows').querySelector('script'),null);
   $('sb-filter').value='error';$('sb-filter').onchange();assert.equal($('sb-rows').children.length,1);assert.equal($('sb-rows').firstChild.dataset.rowId,'s2');assert.equal($('sb-rows').querySelector('script'),null);
   $('sb-select-visible').click();assert.equal(w.storyboard.count(),1);await $('sb-refresh').onclick();assert.equal(w.storyboard.count(),1);
   const retry=[...$('sb-rows').querySelectorAll('button')].find(b=>b.textContent==='Retry row');await retry.onclick();

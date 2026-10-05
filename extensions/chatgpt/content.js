@@ -100,6 +100,9 @@
     for (let i = 0; i < 20; i++) {
       const button = composerButton(mode);
       if (button?.getAttribute('aria-pressed') === 'true') return;
+      // Entering Temporary Chat can remove the mode switch entirely.
+      // Positive Temporary UI is sufficient for Chat, never for Work.
+      if(mode==='chat'&&!button&&!composerButton('work')&&temporaryEnabled())return;
       if (button && !button.disabled && button.getAttribute('aria-disabled') !== 'true' && !clicked) {
         button.click(); clicked = true;
       }
@@ -437,7 +440,7 @@
 
   function attachmentPresent(name) {
     const editor = findInput();
-    const scope = editor?.closest('form') || editor?.closest('[data-type="unified-composer"]') || editor?.parentElement?.parentElement;
+    const scope = editor?.closest('[data-type="unified-composer"]') || editor?.closest('form') || editor?.parentElement?.parentElement;
     if (!scope) return false;
     const named = [...scope.querySelectorAll('[title], [aria-label], [data-filename], span, p, div, button')].filter(el =>
       visible(el) && (el.getAttribute('title') === name || el.getAttribute('data-filename') === name ||
@@ -616,10 +619,16 @@
       checkModelSelection(selectedModel);
       const beforeMessages = new Set(assistantMessages().map(messageKey));
       const failure=pageFailure();if(failure)throw failure;
-      // Uploading can rebuild the composer. For TXT, type only after upload.
-      if (msg.promptAttachment) {progress('ATTACHING_FILE');await attachFile(msg.promptAttachment,true);}
       progress('TYPING');
       await typeMessage(msg.userMessage);
+      if (msg.promptAttachment) {
+        progress('ATTACHING_FILE');await attachFile(msg.promptAttachment,true);
+        // Match the SRT flow: enter text before uploading. If upload remounted
+        // the editor, restore only the cue, keeping the TXT attached once.
+        if(normalizedPrompt(editorText(findInput()))!==normalizedPrompt(msg.userMessage)){
+          progress('TYPING');await typeMessage(msg.userMessage);
+        }
+      }
       if (msg.attachment) {progress('ATTACHING_FILE');await attachFile(msg.attachment);}
       if (msg.temporary && !temporaryEnabled()) throw new Error("Temporary Chat is no longer confirmed. No prompt was sent.");
       if (msg.temporary === false && temporaryEnabled()) throw new Error('Temporary Chat became active during setup. No prompt was sent.');
@@ -629,7 +638,8 @@
       progress('SENDING');
       await clickSend(msg.userMessage, msg.attachment?.name||msg.promptAttachment?.name);
       submitted=true;
-      await chrome.runtime.sendMessage?.({type:'requestSubmitted',requestId:msg.requestId});
+      // A failed progress notification must not discard an already sent answer.
+      try{await chrome.runtime.sendMessage?.({type:'requestSubmitted',requestId:msg.requestId});}catch{}
 
       const response = await waitForNewResponse(beforeMessages, msg.timeout, !!msg.attachment, msg.downloadSrt===true);
       if(response?.hasSrtFile){
@@ -684,7 +694,7 @@
       sendResponse({ok:true, streaming:isStreaming(), temporary:temporaryEnabled()}); return;
     }
     if (msg.type === "ping") {
-      sendResponse({ ok: true, submissionAck:true, url: window.location.href, textSessionProof:currentTextSessionProof() });
+      sendResponse({ ok: true, submissionAck:true, inputReady:!!findInput(), url: window.location.href, textSessionProof:currentTextSessionProof() });
       return;
     }
 

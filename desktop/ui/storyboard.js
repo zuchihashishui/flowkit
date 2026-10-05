@@ -123,9 +123,21 @@
       if(audio.getAttribute('src')!==url)audio.src=url;
     } else audio.removeAttribute('src');
   }
+  function renderWorkers(status) {
+    $('sb-workers').hidden=$('sb-provider').value!=='chatgpt-web';
+    if($('sb-workers').hidden)return;
+    $('sb-workers-status').textContent=status.error||(!status.available?'Gateway unavailable':!status.extensionConnected?'ChatGPT extension disconnected':status.settings?.paused?'Queue paused':status.needsReview?'Account needs review':'Chat / Temporary ON · 3 tabs · input and upload take turns');
+    const phases={WAITING_SETUP:'Waiting for another tab to finish input / upload / Send',OPENING_TAB:'Opening tab',BINDING_TAB:'Binding tab',WAITING_PAGE:'Waiting for ChatGPT input',SELECTING_MODE:'Selecting Chat',ENABLING_TEMPORARY:'Enabling Temporary Chat',SELECTING_MODEL:'Checking model',TYPING:'Entering SRT sentence',ATTACHING_FILE:'Uploading prompt TXT',SENDING:'Sending',WAITING_RESPONSE:'Waiting for response',VERIFYING_COMPLETION:'Checking completed response',AWAITING_SAVE:'Saving response'};
+    $('sb-worker-rows').replaceChildren(...(status.workers||[]).map(w=>{
+      const row=element('tr'),phase=w.progress?.phase;
+      row.append(element('td',w.id),element('td',Number.isInteger(w.tabId)?String(w.tabId):'Not open'),element('td',w.error?w.state:(phases[phase]||phase?.replaceAll('_',' ')||w.state)));
+      row.append(element('td',w.error||[w.state==='RUNNING'&&w.started?Math.max(0,Math.round((Date.now()-w.started)/1000))+' s elapsed':'',w.progress?.chars?String(w.progress.chars)+' response characters':''].filter(Boolean).join(' · ')));
+      return row;
+    }));
+  }
   async function reload(fields=false) {
     assertCollection();const ticket=++requestId,vid=collection,pid=owner;
-    const result=await api('GET',path());
+    const [result,workers]=await Promise.all([api('GET',path()),$('sb-provider').value==='chatgpt-web'?api('GET','/api/chatgpt/status').catch(e=>({error:'Could not read worker status: '+e.message})):null]);
     if(ticket!==requestId||vid!==collection||pid!==$('project-select').value)return;
     const oldIds=new Set(data?.segments.map(s=>s.id)||[]);
     data=result;
@@ -133,7 +145,7 @@
     for(const id of checked)if(!ids.has(id))checked.delete(id);
     for(const s of data.segments)if(!oldIds.has(s.id))checked.add(s.id);
     if(fields){$('sb-script').value=data.document?.script_text||'';$('sb-style').value=data.document?.visual_style||'';documentDirty=false;fillInputs();}
-    showAudio();render();
+    showAudio();render();renderWorkers(workers||{});
   }
   async function open() {
     const pid=$('project-select').value;
@@ -212,7 +224,7 @@
   });
   $('sb-collection').onchange=()=>{const next=$('sb-collection').value;if(!discard()){$('sb-collection').value=collection;return;}collection=next;data=null;checked.clear();if(collection)action(()=>reload(true));else render();};
   $('sb-prompt-kind').onchange=()=>{$('sb-prompt-heading').textContent=$('sb-prompt-kind').value==='video'?'Video prompt':'Image prompt';render();};
-  function providerChanged(){const web=$('sb-provider').value==='chatgpt-web';$('sb-model').disabled=web;$('sb-model').placeholder=web?'Uses the Chat page model':'Provider default';$('sb-prompt-kind').disabled=!web;}
+  function providerChanged(){const web=$('sb-provider').value==='chatgpt-web';$('sb-model').disabled=web;$('sb-model').placeholder=web?'Uses the Chat page model':'Provider default';$('sb-prompt-kind').disabled=!web;$('sb-workers').hidden=!web;}
   $('sb-provider').onchange=providerChanged;providerChanged();
   $('sb-refresh').onclick=()=>action(()=>open());
   $('sb-check-provider').onclick=()=>run(async()=>{
@@ -295,7 +307,7 @@
   });
   setInterval(async()=>{
     if(pollBusy||busy||!collection||owner!==$('project-select').value)return;
-    if(!data?.segments.some(s=>['QUEUED','RUNNING'].includes(s.job?.state)||s.media_jobs?.some(j=>['QUEUED','SUBMITTING','RUNNING','DOWNLOADING'].includes(j.state))))return;
+    if(!data?.segments.some(s=>['QUEUED','RUNNING'].includes(s.job?.state)||Object.values(s.prompt_jobs||{}).some(j=>['QUEUED','RUNNING'].includes(j?.state))||s.media_jobs?.some(j=>['QUEUED','SUBMITTING','RUNNING','DOWNLOADING'].includes(j.state))))return;
     pollBusy=true;try{await reload();}catch(e){$('sb-status').textContent='Refresh failed: '+e.message;}finally{pollBusy=false;}
   },4000);
 })();

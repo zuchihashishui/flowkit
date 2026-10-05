@@ -217,13 +217,14 @@ async function run(m,peer){let w=workers.find(w=>w.id===m.workerId);
   await persist();
   releaseSetup=await acquireSetup(m.requestId);
   if(w.state!=='RUNNING'||peer.readyState!==1)throw Error('Worker interrupted while waiting to prepare its tab');
+  w.progress={phase:'OPENING_TAB',updated:Date.now(),chars:0};await persist();
   let continuing=false;
   if(session&&w.textSession?.id===session&&w.textSession.pageUrl===pageUrl&&w.textSession.template===m.promptTemplate&&Number.isInteger(w.tabId)){
    const tab=await chrome.tabs.get(w.tabId);
    if(tab.url===w.textSession.conversationUrl&&!tab.pendingUrl){
     // Temporary chats may stay on the home URL. A URL alone cannot prove that
     // the page still has the TXT; reloading clears this in-page proof.
-    const state=await chrome.tabs.sendMessage(w.tabId,{type:'ping'}).catch(()=>null);
+    const state=await inspectMessage(w.tabId,{type:'ping'}).catch(()=>null);
     const proof=state?.textSessionProof;
     continuing=!!proof&&proof.id===session&&proof.proof===w.textSession.proof&&proof.url===tab.url;
    }
@@ -240,17 +241,24 @@ async function run(m,peer){let w=workers.find(w=>w.id===m.workerId);
    if(!tab.url?.startsWith('https://chatgpt.com/'))throw Error('Worker tab must be on ChatGPT');
    if(prepared){await chrome.windows.update(w.windowId,{focused:true,state:'normal'});await chrome.tabs.update(w.tabId,{active:true});}else if(!continuing)await chrome.tabs.update(w.tabId,{url:pageUrl});
   }
-  let ready=false;for(let i=0;i<60;i++){
-   if(w.state!=='RUNNING')throw Error('Worker interrupted before submission');
-   await new Promise(r=>setTimeout(r,500));const t=await chrome.tabs.get(w.tabId);
-   if(t.status==='complete'&&new URL(t.url).origin==='https://chatgpt.com'&&(continuing?t.url===conversationUrl:new URL(t.url).pathname.replace(/\/$/,'')===new URL(pageUrl).pathname.replace(/\/$/,'')))try{const p=await chrome.tabs.sendMessage(w.tabId,{type:'ping'});if(p.ok){ready=true;break;}}catch{}
-  }
-  if(!ready)throw Error('ChatGPT tab did not become ready');
-  if(w.state!=='RUNNING')throw Error('Worker interrupted before submission');
   const liveTab=await chrome.tabs.get(w.tabId);
   if(Number.isInteger(liveTab.windowId??w.windowId))await chrome.windows.update(liveTab.windowId??w.windowId,{focused:true,state:'normal'});
   await chrome.tabs.update(w.tabId,{active:true});
-  if(session&&(await chrome.tabs.sendMessage(w.tabId,{type:'ping'})).submissionAck!==true)throw Error('Refresh the ChatGPT tab to load Bridge 1.11.4 before retrying.');
+  w.progress={phase:'WAITING_PAGE',updated:Date.now(),chars:0};await persist();
+  let ready=null;const readyDeadline=Date.now()+30000;
+  for(let i=0;i<60&&Date.now()<readyDeadline;i++){
+   if(w.state!=='RUNNING')throw Error('Worker interrupted before submission');
+   await new Promise(r=>setTimeout(r,500));const t=await chrome.tabs.get(w.tabId);
+   if(t.url&&!t.pendingUrl&&new URL(t.url).origin==='https://chatgpt.com'&&(continuing?t.url===conversationUrl:new URL(t.url).pathname.replace(/\/$/,'')===new URL(pageUrl).pathname.replace(/\/$/,'')))try{
+    const p=await inspectMessage(w.tabId,{type:'ping'});
+    // Resource loading can outlive the usable composer. Ask the content script
+    // itself, after focusing the window, instead of requiring tab.complete.
+    if(p?.ok&&p.inputReady!==false&&(!p.url||p.url===t.url)){ready=p;break;}
+   }catch{}
+  }
+  if(!ready)throw Error('ChatGPT composer did not become ready within 30 seconds. Check sign-in, page loading and the Flowkit extension in this tab. No prompt was sent.');
+  if(w.state!=='RUNNING')throw Error('Worker interrupted before submission');
+  if(session&&ready.submissionAck!==true)throw Error('Refresh the ChatGPT tab to load Bridge 1.11.5 before retrying.');
   const userMessage=m.messages[0].content;
   const promptAttachment=session&&!continuing?{name:'prompt-instructions.txt',text:m.promptTemplate}:undefined;
   const result=await chrome.tabs.sendMessage(w.tabId,{type:'chat',requestId:m.requestId,userMessage,promptAttachment,attachment:m.attachment,model:jobModel,timeout:m.timeout,newConversation:false,selectModel:!continuing,temporary:m.temporary,composerMode:jobComposerMode,customGPT,pageUrl,continueConversation:continuing,conversationUrl,textSessionId:session,textSessionProof:continuing?w.textSession.proof:null,downloadSrt:m.downloadSrt===true});

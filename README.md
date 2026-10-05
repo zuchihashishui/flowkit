@@ -1,3 +1,7 @@
+## Studio v0.7.68 / ChatGPT Bridge 1.11.5
+
+Restore Text to Prompt entry before TXT upload, then restore the sentence if uploading rebuilds the editor. Recognize attachments across the unified composer and an already-active Temporary Chat with a hidden mode switch. Focus each worker before checking the editor, and show each tab’s current step and errors directly in Text to Prompt. See [release notes](docs/releases/0.7.68.md).
+
 ## Studio v0.7.67 / ChatGPT Bridge 1.11.4
 
 Coordinate focus, upload and Send across worker windows, then let responses generate concurrently. Upload TXT before typing the sentence so a rebuilt composer cannot erase it. Preserve completed answers even if conversation reuse cannot be verified, and display the original extension error with its phase instead of a generic HTTP 502. See [release notes](docs/releases/0.7.67.md).
