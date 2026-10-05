@@ -298,11 +298,12 @@ async def test_zip_batch_awaits_file_and_row_save_before_ack(monkeypatch,fail_sa
         saving.set();await release.wait()
         if fail_save:raise ValueError('Row save failed')
         return 'rows saved'
-    task=asyncio.create_task(g.complete('001 First\n\n002 Second',composer_mode='work',temporary=False,text_session_id='session',prompt_template='Instructions',download_prompt_zip=True,validate_payload=save))
+    task=asyncio.create_task(g.complete('001 First\n\n002 Second',composer_mode='work',temporary=False,text_session_id='session',prompt_template='Instructions',download_prompt_zip=True,validate_payload=save,timeout_seconds=1800))
     await saving.wait()
     assert all(r.url.path!='/commit' for r in calls)
     sent=json.loads(calls[0].content)
     assert sent['workers']==1 and sent['downloadPromptZip'] is True
+    assert sent['timeout']==1800000
     release.set()
     if fail_save:
         with pytest.raises(g.GatewayReviewRequired):await task

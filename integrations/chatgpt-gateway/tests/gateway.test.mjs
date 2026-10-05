@@ -346,11 +346,12 @@ test('Work ZIP batches use one reserved worker and preserve download metadata un
   if(m.type==='chat')s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:true,content:'image_prompts.zip',nativeDownload:{path:'/downloads/prompts.zip',token:'token'}}));
   else if(m.controlId)s.ws.send(JSON.stringify({type:'controlResult',controlId:m.controlId,ok:true}));
  });
- const payload={messages:[{role:'user',content:'001 First\n\n002 Second'}],workers:1,pageUrl:'https://chatgpt.com/',temporary:false,composerMode:'work',downloadPromptZip:true,textSessionId:'11111111-1111-1111-1111-111111111111',promptTemplate:'Create ZIP'};
+ const payload={messages:[{role:'user',content:'001 First\n\n002 Second'}],workers:1,pageUrl:'https://chatgpt.com/',temporary:false,composerMode:'work',downloadPromptZip:true,textSessionId:'11111111-1111-1111-1111-111111111111',promptTemplate:'Create ZIP',timeout:1800000};
  try{
   assert.equal((await s.post('/workers/ensure',{workers:1})).status,200);assert.equal(messages[0].workerCount,1);
   for(const wrong of [{workers:3},{composerMode:'chat'},{temporary:true}])assert.equal((await s.post('/v1/chat/completions',{...payload,...wrong})).status,400);
   const result=await (await s.post('/v1/chat/completions',payload)).json();assert.equal(result.nativeDownload.token,'token');assert.equal(messages.find(m=>m.type==='chat').downloadPromptZip,true);
+  assert.equal(messages.find(m=>m.type==='chat').timeout,1800000);
   assert.equal((await s.post('/v1/chat/completions',payload)).status,409);
   await s.post('/commit',{request_id:result.id,ok:true});assert.equal((await s.health()).availableSlots,1);
  }finally{await s.close();}

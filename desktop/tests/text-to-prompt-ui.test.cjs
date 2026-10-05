@@ -35,7 +35,11 @@ test('SRT + TXT import, row filters, errors, retry and selection survive refresh
   data.segments[0].ready=true;data.segments[0].active_concept={id:'c1',version:1,image_prompt:'A saved image',video_prompt:''};data.segments[0].job={state:'COMPLETED'};
   data.segments[1].job={state:'FAILED',error:'Rate limit <script>unsafe()</script>'};data.segments[2].job={state:'RUNNING'};data.segments[3].job={state:'QUEUED'};
   for(const i of [1,2,3])data.segments[i].job.text_batch_id='batch-1';
+  data.prompt_outputs=[{kind:'image',directory:'/output/text_prompts/run-1'},{kind:'video',directory:'/output/text_prompts/video-run'}];
   await $('sb-refresh').onclick();assert.match($('sb-summary').textContent,/Completed: 1/);assert.match($('sb-summary').textContent,/Error \/ review: 1/);
+  assert.equal($('sb-output-folders').hidden,false);assert.equal($('sb-output-folders').textContent,'TXT folder: /output/text_prompts/run-1');
+  $('sb-prompt-kind').value='video';$('sb-prompt-kind').onchange();assert.equal($('sb-output-folders').textContent,'TXT folder: /output/text_prompts/video-run');
+  $('sb-prompt-kind').value='image';$('sb-prompt-kind').onchange();
   assert.equal($('sb-worker-rows').children.length,3);assert.match($('sb-worker-rows').textContent,/Uploading prompt TXT/);assert.match($('sb-worker-rows').textContent,/Waiting for another tab/);assert.match($('sb-worker-rows').textContent,/Upload failed/);assert.equal($('sb-worker-rows').querySelector('script'),null);
   $('sb-filter').value='error';$('sb-filter').onchange();assert.equal($('sb-rows').children.length,1);assert.equal($('sb-rows').firstChild.dataset.rowId,'s2');assert.equal($('sb-rows').querySelector('script'),null);
   assert.match($('sb-rows').textContent,/Batch: 002, 003, 004/);

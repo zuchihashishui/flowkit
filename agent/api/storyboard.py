@@ -218,10 +218,19 @@ async def read_document(video_id: str):
     segments = await query('SELECT * FROM script_segment WHERE document_id=? ORDER BY ordinal', (doc['id'],))
     concepts = await query('SELECT c.* FROM scene_concept c JOIN script_segment s ON s.id=c.segment_id WHERE s.document_id=? ORDER BY c.version DESC', (doc['id'],))
     jobs = await query('SELECT j.id,j.segment_id,j.state,j.error,j.created,j.payload FROM concept_job j JOIN script_segment s ON s.id=j.segment_id WHERE s.document_id=? ORDER BY j.created DESC', (doc['id'],))
+    from agent.services.prompt_batch import session_folder
+    prompt_outputs = {}
     for job in jobs:
         payload = json.loads(job.pop('payload'))
         job['prompt_kind'] = payload.get('prompt_kind', 'both')
         job['text_batch_id'] = payload.get('text_batch_id')
+        session = payload.get('text_session_id')
+        if job['text_batch_id'] and session and session not in prompt_outputs:
+            try:
+                folder = session_folder(session)
+            except ValueError:
+                continue
+            prompt_outputs[session] = {'kind': job['prompt_kind'], 'directory': str(folder)} if folder.is_dir() else None
     from agent.api.desktop import rows
     media = rows()
     warnings = []
@@ -247,7 +256,8 @@ async def read_document(video_id: str):
             warnings.append(f"Segment {s['ordinal']} extends beyond the audio duration.")
     if doc['audio_duration_ms'] and previous_end < doc['audio_duration_ms']:
         warnings.append(f"Audio continues {doc['audio_duration_ms'] - previous_end} ms after the last segment.")
-    return {'video': video, 'document': doc, 'segments': segments, 'warnings': warnings}
+    return {'video': video, 'document': doc, 'segments': segments, 'warnings': warnings,
+            'prompt_outputs': [item for item in prompt_outputs.values() if item]}
 
 
 @router.post('/videos/{video_id}/segments')

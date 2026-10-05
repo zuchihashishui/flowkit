@@ -74,7 +74,7 @@ async def write_concept_batch(payloads, save_result=None):
         return concepts
     return await complete(prompt, 'auto', validate_payload=save_download,
                           page_url=first['project_settings'].get('chatgpt_url', 'https://chatgpt.com/'),
-                          composer_mode='work', temporary=False, timeout_seconds=600,
+                          composer_mode='work', temporary=False, timeout_seconds=1800,
                           text_session_id=first['text_session_id'], download_prompt_zip=True,
                           prompt_template=template)
 

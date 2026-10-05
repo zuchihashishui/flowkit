@@ -1,3 +1,7 @@
+## Studio v0.7.71 / ChatGPT Bridge 1.12.0
+
+Text to Prompt saves all numbered TXT files from one run together in `output/text_prompts/<run-id>/` (for example `001.txt` through `300.txt`). Original ZIPs are retained in its `zips/` subfolder. The UI shows the saved folder path. Each message still contains up to five `[row] [srt text]` entries; the first group attaches the prompt TXT. The ZIP generation timeout is now **30 minutes per group**. See [release notes](docs/releases/0.7.71.md).
+
 ## Studio v0.7.70 / ChatGPT Bridge 1.12.0
 
 Text to Prompt now uses **one Work tab, Temporary OFF**. Each message sends up to five original numbered SRT rows. The first message attaches the prompt TXT; later groups reuse the same conversation. Studio downloads each returned ZIP, validates its numbered UTF-8 TXT files and saves every row before allowing the next group. ZIP and TXT copies are retained under `output/text_prompts/<download-id>/`. See [release notes](docs/releases/0.7.70.md).

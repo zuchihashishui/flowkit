@@ -7,13 +7,24 @@ from agent.config import OUTPUT_DIR
 from agent.services.concept_writer import Concept
 
 ARCHIVE_DIR = OUTPUT_DIR / 'text_prompts'
+UUID_PATTERN = r'[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}'
+
+
+def session_folder(session_id):
+    if not isinstance(session_id, str) or not re.fullmatch(UUID_PATTERN, session_id):
+        raise ValueError('Invalid prompt run identifier.')
+    return ARCHIVE_DIR / session_id
 
 
 def read_and_save_zip(native, payloads):
+    session = payloads[0].get('text_session_id') if payloads else None
+    folder = session_folder(session)
+    if any(p.get('text_session_id') != session for p in payloads):
+        raise ValueError('Prompt ZIP rows must belong to the same run.')
     if not isinstance(native, dict):
         raise ValueError('No downloaded prompt ZIP was returned. Check the Work tab.')
     token = str(native.get('token', ''))
-    if not re.fullmatch(r'[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}', token):
+    if not re.fullmatch(UUID_PATTERN, token):
         raise ValueError('Invalid ZIP download identifier.')
     path = Path(native.get('path', ''))
     if not path.is_absolute() or path.parts[-3:] != ('flowkit-chatgpt', token, 'prompts.zip') or path.resolve() != path or not path.is_file():
@@ -50,11 +61,12 @@ def read_and_save_zip(native, payloads):
         target = payload['prompt_kind']
         concepts[row] = Concept(title=payload['text'][:150] or 'Scene prompt', description=payload['text'][:3000],
                                **{target+'_prompt':records[row], ('video' if target=='image' else 'image')+'_prompt':payload.get('retained_prompt','')})
-    # Use the validated download UUID, not paths/names supplied inside the ZIP.
-    folder = ARCHIVE_DIR / token
-    folder.mkdir(parents=True, exist_ok=True)
-    part = folder / 'image_prompts.zip.part'
-    part.write_bytes(raw); part.replace(folder / 'image_prompts.zip')
+    # Every batch in this run shares one TXT folder. Retain each source ZIP
+    # separately, so subsequent groups cannot overwrite earlier downloads.
+    archives = folder / 'zips'
+    archives.mkdir(parents=True, exist_ok=True)
+    part = archives / f'{token}.zip.part'
+    part.write_bytes(raw); part.replace(archives / f'{token}.zip')
     for row, text in records.items():
         part = folder / f'{row:03d}.txt.part'
         part.write_text(text, encoding='utf-8'); part.replace(folder / f'{row:03d}.txt')

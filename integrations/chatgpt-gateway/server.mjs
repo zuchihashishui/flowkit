@@ -142,7 +142,7 @@ const server=createServer(async(req,res)=>{
  const worker=p.freshTab?(srt?.state==='IDLE'?srt:!srt?{id:SRT_WORKER_ID,kind:'srt',tabId:null,state:'IDLE'}:null):current.filter(w=>!isSrt(w)).slice(0,limit).find(w=>w.state==='IDLE');
  const running=[...active.values()].filter(r=>isSrt(r.worker)===!!p.freshTab).length;
  if((textCleanupActive&&!p.freshTab)||inspectionActive||extensionInspecting||!enabled||accountPaused||!worker||running>=limit)return json(res,409,{error:'No available worker or account paused',not_submitted:true});
- const requestId=randomUUID(),timeout=Math.min(p.attachment?1800000:600000,Math.max(30000,Number(p.timeout)||180000));
+ const requestId=randomUUID(),timeout=Math.min((p.attachment||p.downloadPromptZip===true)?1800000:600000,Math.max(30000,Number(p.timeout)||180000));
  held.set(worker.id,{requestId,worker,jobId:p.srtJobId,state:'RUNNING'});
  const result=await new Promise(resolve=>{
   const timer=setTimeout(()=>fail(requestId,'Response deadline exceeded; review the worker tab.'),timeout+(p.attachment?1050000:660000));

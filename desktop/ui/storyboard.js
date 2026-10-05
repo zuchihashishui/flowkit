@@ -110,6 +110,9 @@
     $('sb-count').textContent=`${checked.size} of ${data?.segments.length||0} segments selected`;
     const counts={};for(const s of data?.segments||[])counts[rowState(s)]=(counts[rowState(s)]||0)+1;
     $('sb-summary').replaceChildren(...Object.entries(labels).map(([state,label])=>element('span',`${label}: ${counts[state]||0}`)));
+    const outputs=(data?.prompt_outputs||[]).filter(item=>item.kind===$('sb-prompt-kind').value);
+    $('sb-output-folders').replaceChildren(...outputs.map(item=>element('p','TXT folder: '+item.directory)));
+    $('sb-output-folders').hidden=!outputs.length;
     $('sb-warnings').textContent=(data?.warnings||[]).join('\n');
     $('sb-status').textContent=data?.document ? `${data.video.title} · ${data.segments.length} segments · ${data.segments.filter(s=>s.ready).length} current concepts` : 'Save your script, then import audio and SRT / JSON segments.';
     const source=data?.document?.source;

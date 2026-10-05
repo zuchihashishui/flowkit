@@ -318,32 +318,32 @@ async def test_separate_gpt_prompts_keep_image_media_and_snapshot_project_urls(d
 
 
 @pytest.mark.asyncio
-async def test_text_prompt_import_200_cues_and_frozen_session(document, monkeypatch, tmp_path):
+async def test_text_prompt_import_300_cues_and_frozen_session(document, monkeypatch, tmp_path):
     from agent.services import chatgpt_gateway as gateway
     source = await s.read_document(document)
-    video = await crud.create_video(project_id=source['video']['project_id'], title='200 SRT rows')
+    video = await crud.create_video(project_id=source['video']['project_id'], title='300 SRT rows')
     def stamp(ms):
         return f'{ms//3600000:02}:{ms//60000%60:02}:{ms//1000%60:02},{ms%1000:03}'
-    content = '\ufeff'+'\r\n\r\n'.join(f'{i+1}\r\n{stamp(i*4000)} --> {stamp((i+1)*4000)}\r\n日本語 {i+1}\r\nSecond line.' for i in range(200))
-    imported = await s.import_prompt_input(video['id'], s.PromptInputBody(srt_content=content, srt_name='200.srt', prompt_template='Create one image prompt.\nKeep the style.', prompt_name='instructions.txt'))
-    assert len(imported['segments']) == 200
-    assert imported['segments'][199]['text'] == '日本語 200\nSecond line.'
-    assert imported['segments'][199]['end_ms'] == 800000
+    content = '\ufeff'+'\r\n\r\n'.join(f'{i+1}\r\n{stamp(i*4000)} --> {stamp((i+1)*4000)}\r\n日本語 {i+1}\r\nSecond line.' for i in range(300))
+    imported = await s.import_prompt_input(video['id'], s.PromptInputBody(srt_content=content, srt_name='300.srt', prompt_template='Create one image prompt.\nKeep the style.', prompt_name='instructions.txt'))
+    assert len(imported['segments']) == 300
+    assert imported['segments'][299]['text'] == '日本語 300\nSecond line.'
+    assert imported['segments'][299]['end_ms'] == 1200000
     monkeypatch.setattr(gateway, 'status', AsyncMock(return_value={'available':True,'extensionConnected':True,'hasReviewJobs':True}))
     ensure = AsyncMock(); monkeypatch.setattr(gateway, 'ensure_project_workers', ensure)
     ids = [row['id'] for row in imported['segments']]
     result = await s.generate_concepts(video['id'], s.GenerateBody(segment_ids=list(reversed(ids)), provider='chatgpt-web', prompt_kind='image'))
     jobs = await s.query('SELECT * FROM concept_job ORDER BY created')
-    assert len(result['ids']) == len(jobs) == 200
+    assert len(result['ids']) == len(jobs) == 300
     ensure.assert_awaited_once()
     assert [job['segment_id'] for job in jobs] == ids
     payloads = [json.loads(job['payload']) for job in jobs]
     assert len({p['text_session_id'] for p in payloads}) == 1
-    assert result['batch_count'] == 40
-    assert len({p['text_batch_id'] for p in payloads}) == 40
-    assert [p['ordinal'] for p in payloads] == list(range(1, 201))
+    assert result['batch_count'] == 60
+    assert len({p['text_batch_id'] for p in payloads}) == 60
+    assert [p['ordinal'] for p in payloads] == list(range(1, 301))
     assert all(p['prompt_template'] == imported['document']['prompt_template'] for p in payloads)
-    assert payloads[199]['text'] == imported['segments'][199]['text']
+    assert payloads[299]['text'] == imported['segments'][299]['text']
     # Completing in a different order must still store each result on its own row.
     calls=[]
     async def complete(message, model, validate_payload, **options):
@@ -358,27 +358,36 @@ async def test_text_prompt_import_200_cues_and_frozen_session(document, monkeypa
     from agent.services import prompt_batch
     monkeypatch.setattr(prompt_batch,'ARCHIVE_DIR',tmp_path/'saved')
     monkeypatch.setattr(gateway, 'complete', complete)
-    for start in range(0,200,15):
-        await asyncio.gather(*(s.process_concept(jobs[i]) for i in reversed(range(start,min(start+15,200),5))))
-    assert len(calls) == 40
+    for start in range(0,300,15):
+        await asyncio.gather(*(s.process_concept(jobs[i]) for i in reversed(range(start,min(start+15,300),5))))
+    assert len(calls) == 60
     assert all(len(message.split('\n\n')) == 5 for message,_ in calls)
     assert any(message.startswith('001 日本語 1 Second line.\n\n002 ') for message,_ in calls)
     assert all(options['prompt_template'].startswith(imported['document']['prompt_template']) and 'image_prompts.zip' in options['prompt_template'] for _,options in calls)
+    assert all(options['timeout_seconds'] == 1800 for _,options in calls)
     assert all(options['temporary'] is False and options['composer_mode']=='work' and options['download_prompt_zip'] is True for _,options in calls)
+    folder=tmp_path/'saved'/payloads[0]['text_session_id']
+    assert list((tmp_path/'saved').iterdir()) == [folder]
+    assert {file.name for file in folder.glob('*.txt')} == {f'{row:03d}.txt' for row in range(1,301)}
+    assert len(list((folder/'zips').glob('*.zip'))) == 60
+    for row in range(1,301):
+        assert (folder/f'{row:03d}.txt').read_text(encoding='utf-8') == 'Result: '+imported['segments'][row-1]['text']
     finished = await s.read_document(video['id'])
+    assert finished['prompt_outputs'] == [{'kind':'image','directory':str(folder)}]
     assert all(row['job']['state']=='COMPLETED' and row['active_concept']['image_prompt']=='Result: '+row['text'] for row in finished['segments'])
     assert not (await s.generate_concepts(video['id'], s.GenerateBody(segment_ids=ids, provider='chatgpt-web', prompt_kind='image')))['ids']
     # Legacy callers cannot erase the saved TXT. Configuration survives restart.
     await s.save_document(video['id'], s.DocumentBody())
     await schema.close_db(); await schema.init_db()
     restored = await s.read_document(video['id'])
+    assert restored['prompt_outputs'] == finished['prompt_outputs']
     assert restored['document']['prompt_template'] == imported['document']['prompt_template']
     assert restored['document']['prompt_name'] == 'instructions.txt'
-    assert restored['document']['srt_name'] == '200.srt'
+    assert restored['document']['srt_name'] == '300.srt'
     with pytest.raises(HTTPException) as duplicate:
         await s.import_prompt_input(video['id'], s.PromptInputBody(srt_content=content, srt_name='other.srt', prompt_template='Changed'))
     assert duplicate.value.status_code == 409
-    assert len((await s.read_document(video['id']))['segments']) == 200
+    assert len((await s.read_document(video['id']))['segments']) == 300
 
 
 @pytest.mark.asyncio
