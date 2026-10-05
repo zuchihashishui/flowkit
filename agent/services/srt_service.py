@@ -77,8 +77,8 @@ def dispatch_status(state):
             return waiting('WORKER_REVIEW', 'The previous SRT worker stopped. Open SRT or click Open / select SRT window to prepare a new tab for this queued job. Use Stop job to cancel it.')
         if worker.get('state') == 'AWAITING_SAVE':
             return waiting('AWAITING_SAVE', 'The SRT result is waiting for save confirmation; check ChatGPT Request History before releasing that worker.')
-        return waiting('WORKERS_BUSY', 'Waiting for the dedicated SRT worker. Text to Prompt uses its own three tabs.')
-    return {'ready': True, 'code': 'READY', 'message': 'Ready. One SRT job opens and binds one new ChatGPT tab, selects Work, and sends the prompt + JSON once. The three Text to Prompt tabs are separate.'}
+        return waiting('WORKERS_BUSY', 'Waiting for the dedicated SRT worker. SRT to Prompt uses its own single Work tab.')
+    return {'ready': True, 'code': 'READY', 'message': 'Ready. One SRT job opens and binds one new ChatGPT tab, selects Work, and sends the prompt + JSON once. The SRT to Prompt Work tab is separate.'}
 
 
 def parse_srt(answer):

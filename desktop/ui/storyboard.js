@@ -103,7 +103,7 @@
       }
       target.append(tr);
     }
-    if(!data?.segments.length){const tr=element('tr'),td=element('td','Import SRT / JSON in Text to Prompt to load timed segments.');td.colSpan=mode==='editor'?6:5;tr.append(td);target.append(tr);}
+    if(!data?.segments.length){const tr=element('tr'),td=element('td','Import SRT / JSON in SRT to Prompt to load timed segments.');td.colSpan=mode==='editor'?6:5;tr.append(td);target.append(tr);}
     else if(!target.children.length){const tr=element('tr'),td=element('td','No rows match this filter.');td.colSpan=6;tr.append(td);target.append(tr);}
   }
   function render() {
@@ -119,7 +119,7 @@
     if(source)$('sb-status').textContent+=source.source_id?` · Source: ${source.kind} / ${source.source_id}`:' · Source: manually imported segments';
     renderRows($('sb-rows'),'editor');
     for(const kind of ['image','video']) {
-      $(kind+'-storyboard-name').textContent=data ? data.video.title+' · '+checked.size+' selected segments' : 'Choose a script in Text to Prompt.';
+      $(kind+'-storyboard-name').textContent=data ? data.video.title+' · '+checked.size+' selected segments' : 'Choose a script in SRT to Prompt.';
       renderRows($(kind+'-storyboard-rows'),kind);
     }
     document.dispatchEvent(new Event('storyboard-selection'));
@@ -302,7 +302,7 @@
     canImportSource:()=>discard(),
     projectChanged:()=>{if(owner!==$('project-select').value){++requestId;owner='';collection='';data=null;checked.clear();$('sb-script').value='';$('sb-style').value='';$('sb-collection').replaceChildren(option('','Select a collection'));fillInputs();showAudio();render();}},
     generateMedia:async kind=>{
-      const items=selected();if(items.some(s=>!s.ready||!s.active_concept?.[kind+'_prompt']?.trim()))throw Error('Selected segments need current concepts and a saved prompt for this media type. Create it in Text to Prompt.');
+      const items=selected();if(items.some(s=>!s.ready||!s.active_concept?.[kind+'_prompt']?.trim()))throw Error('Selected segments need current concepts and a saved prompt for this media type. Create it in SRT to Prompt.');
       if(!confirm(`Generate ${kind} for up to ${items.length} selected segment(s)? Uses Google Flow credits.`))return;
       const r=await api('POST',path('/generate-media'),{segment_ids:items.map(s=>s.id),kind,orientation:$(kind+'-ratio').value,duration:Number($('duration').value),duration_mode:kind==='video'&&$('video-duration-auto').checked?'srt':'manual',image_model:kind==='image'?$('image-model').value||null:null,regenerate:$(kind+'-regenerate').checked});
       await reload();await refreshJobs();notice(`${r.ids.length} media job(s) queued; ${r.skipped.length} existing jobs/results skipped.${r.durations?.some(d=>d.short)?' Some scenes exceed 10 seconds; their clips need hold/loop during assembly.':''}`);

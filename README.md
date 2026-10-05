@@ -1,3 +1,7 @@
+## Studio v0.7.72 / ChatGPT Bridge 1.12.0
+
+The desktop menu is now **SRT to Prompt**. Related buttons, help text and scene messages use the same name. This workflow still uses one Work tab, Temporary OFF, five SRT rows per group, a prompt TXT attachment on the first group, one output folder per run and a 30-minute ZIP generation timeout. JSON → SRT has its own separate Work tab. See [release notes](docs/releases/0.7.72.md).
+
 ## Studio v0.7.71 / ChatGPT Bridge 1.12.0
 
 Text to Prompt saves all numbered TXT files from one run together in `output/text_prompts/<run-id>/` (for example `001.txt` through `300.txt`). Original ZIPs are retained in its `zips/` subfolder. The UI shows the saved folder path. Each message still contains up to five `[row] [srt text]` entries; the first group attaches the prompt TXT. The ZIP generation timeout is now **30 minutes per group**. See [release notes](docs/releases/0.7.71.md).

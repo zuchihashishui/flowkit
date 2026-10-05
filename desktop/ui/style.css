@@ -31,7 +31,7 @@ aside{position:sticky;top:0;height:100vh;overflow-y:auto}#scenes{max-height:560p
 
 nav .nav-secondary{margin-top:12px;border-top:1px solid var(--line);border-radius:0 0 8px 8px;padding-top:18px}
 
-/* Text to Prompt: cue-level progress and bounded table cells. */
+/* SRT to Prompt: cue-level progress and bounded table cells. */
 .sb-summary{display:flex;flex-wrap:wrap;gap:10px}.sb-summary span{padding:8px 12px;border:1px solid var(--border,#394050);border-radius:8px}
 .sb-filters{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:16px 0}.sb-filters label{margin:0;min-width:180px}.sb-filters input{min-width:240px}
 .sb-badge{display:inline-block;padding:4px 9px;border-radius:6px;font-weight:600;background:#333b49;color:#e3e9f2;white-space:nowrap}

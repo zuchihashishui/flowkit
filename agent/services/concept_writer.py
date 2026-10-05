@@ -49,7 +49,7 @@ các hướng dẫn về nội dung, phong cách và chất lượng.
 
 def batch_message(payloads):
     if not 1 <= len(payloads) <= TEXT_BATCH_SIZE:
-        raise ValueError('A Text to Prompt batch must contain 1–5 rows.')
+        raise ValueError('An SRT to Prompt batch must contain 1–5 rows.')
     rows = [p['ordinal'] for p in payloads]
     if any(type(row) is not int or row < 1 for row in rows) or len(set(rows)) != len(rows):
         raise ValueError('Batch row numbers must be unique positive integers.')
@@ -62,7 +62,7 @@ async def write_concept_batch(payloads, save_result=None):
     first = payloads[0]
     keys = ('provider', 'prompt_kind', 'text_session_id', 'prompt_template', 'project_settings')
     if not first.get('text_session_id') or first.get('provider') != 'chatgpt-web' or first.get('prompt_kind') not in {'image', 'video'} or any(any(p.get(k) != first.get(k) for k in keys) for p in payloads):
-        raise ValueError('A Text to Prompt batch must share its session, prompt instructions and project settings.')
+        raise ValueError('An SRT to Prompt batch must share its session, prompt instructions and project settings.')
     template = first['prompt_template'] + TEXT_BATCH_CONTRACT
     if len(template) > 100000:
         raise ValueError('Shorten the prompt TXT to leave space for the batch output rules (100,000 characters total).')
