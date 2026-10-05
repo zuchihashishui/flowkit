@@ -348,3 +348,16 @@ test('production IPC permits scoped progress/settings/backup operations and reje
   assert.equal(stale.requests.some(r=>r.options.method==='POST'||r.options.method==='PUT'),false);
  }finally{await fs.rm(folder,{recursive:true,force:true});}
 });
+
+test('Text to Prompt IPC imports UTF-8 SRT and TXT and permits the atomic input route',async()=>{
+ const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-prompt-input-'));
+ try{
+  const main=await mainProcess(folder),filters=[];
+  const source=path.join(folder,'instructions.txt');await fs.writeFile(source,'\ufeff日本語の指示。\nNext line','utf8');
+  main.dialog.showOpenDialog=async(_,options)=>{filters.push(options.filters[0].extensions);return {canceled:false,filePaths:[source]};};
+  for(const kind of ['prompt','srt']){const result=await main.invoke('import-script-source',kind);assert.equal(result.text,'日本語の指示。\nNext line');}
+  assert.deepEqual(Array.from(filters[0]),['txt']);assert.deepEqual(Array.from(filters[1]),['srt']);
+  await main.invoke('api','POST','/api/storyboard/videos/video-123/prompt-input',{srt_content:'SRT',srt_name:'input.srt',prompt_template:'Instructions',prompt_name:'prompt.txt'});
+  assert.ok(main.requests.some(r=>r.url.endsWith('/prompt-input')&&JSON.parse(r.options.body).prompt_name==='prompt.txt'));
+ }finally{await fs.rm(folder,{recursive:true,force:true});}
+});

@@ -48,3 +48,31 @@ for(const mode of ['pressed','switch','exit','missing-exit','disabled-exit','stu
  if(!ok){assert.match(r.error,/Temporary Chat/);assert.equal(typed,mode==='reactivated'?1:0);}
  dom.window.close();
 });
+
+for(const change of ['none','temporary-off','same-url-new-chat','reload'])test(`Temporary TXT conversation continuity: ${change}`,async()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../../extensions/chatgpt/content.js'),'utf8');
+ const markup='<div role="group" aria-label="Composer mode"><button aria-pressed="false">Chat</button><button aria-pressed="true">Work</button></div><button aria-label="Temporary chat" aria-pressed="false"></button><textarea id="prompt-textarea"></textarea><button type="submit" aria-label="Send">Send</button>';
+ const dom=new JSDOM(markup,{url:'https://chatgpt.com/?temporary-chat=true',runScripts:'outside-only'});
+ const w=dom.window,d=w.document;let listener,sent=0,toggleClicks=0;const typed=[];
+ Object.defineProperty(w.HTMLElement.prototype,'offsetParent',{get(){return this.hidden?null:d.body;}});
+ w.chrome={runtime:{onMessage:{addListener:f=>listener=f}}};w.setTimeout=fn=>setImmediate(fn);
+ const [chat,work]=d.querySelectorAll('[role="group"] button'),toggle=d.querySelector('[aria-label="Temporary chat"]');
+ chat.onclick=()=>{chat.setAttribute('aria-pressed','true');work.setAttribute('aria-pressed','false');};
+ toggle.onclick=()=>{toggleClicks++;assert.equal(chat.getAttribute('aria-pressed'),'true');toggle.setAttribute('aria-pressed','true');};
+ d.execCommand=(cmd,_,value)=>{if(cmd==='insertText'){typed.push(value);d.querySelector('textarea').value=value;}};
+ d.querySelector('[aria-label="Send"]').onclick=()=>{sent++;d.body.insertAdjacentHTML('beforeend',`<div data-message-author-role="assistant" data-message-id="a${sent}" data-local-conversation-final-assistant="true">Prompt ${sent}</div>`);};
+ w.eval(source);
+ const message={type:'chat',requestId:'first',textSessionId:'session-1',userMessage:'TXT instructions\n\nFirst SRT row',composerMode:'chat',temporary:true,newConversation:false,timeout:10000};
+ const call=m=>new Promise(resolve=>listener(m,{},resolve));
+ const first=await call(message);assert.equal(first.ok,true,first.error);assert.equal(toggleClicks,1);assert.equal(first.textSessionProof.proof,'first');
+ let state=await call({type:'ping'});assert.equal(state.textSessionProof.id,'session-1');
+ if(change==='temporary-off')toggle.setAttribute('aria-pressed','false');
+ if(change==='same-url-new-chat'){d.querySelector('[data-message-author-role]').remove();d.body.insertAdjacentHTML('beforeend','<div data-message-author-role="assistant" data-message-id="new">Unrelated reply</div>');}
+ if(change==='reload')w.eval(source); // Fresh script with identical DOM/URL has no memory.
+ state=await call({type:'ping'});assert.equal(!!state.textSessionProof,change==='none');
+ const next=await call({...message,requestId:'second',userMessage:'Second SRT row',continueConversation:true,conversationUrl:w.location.href,textSessionProof:'first'});
+ assert.equal(next.ok,change==='none',next.error);assert.equal(sent,change==='none'?2:1);
+ if(change==='none'){assert.deepEqual(typed,['TXT instructions\n\nFirst SRT row','Second SRT row']);assert.equal(toggleClicks,1);assert.equal(next.textSessionProof.proof,'second');assert.equal(chat.getAttribute('aria-pressed'),'true');}
+ else assert.match(next.error,/Temporary conversation memory/);
+ dom.window.close();
+});

@@ -54,6 +54,8 @@ async def transaction():
 class DocumentBody(BaseModel):
     script_text: str = Field(default='', max_length=200000)
     visual_style: str = Field(default='', max_length=3000)
+    prompt_template: str | None = Field(default=None, max_length=100000)
+    prompt_name: str = Field(default='', max_length=255)
 
 
 class SegmentBody(BaseModel):
@@ -140,9 +142,47 @@ async def save_document(video_id: str, body: DocumentBody):
         if doc:
             d = doc[0]
             changed = body.script_text != d['script_text'] or body.visual_style != d['visual_style']
+            current = await query('SELECT prompt_template FROM text_prompt_input WHERE document_id=?', (d['id'],))
+            changed |= body.prompt_template is not None and body.prompt_template != (current[0]['prompt_template'] if current else '')
             await db.execute('UPDATE script_document SET script_text=?,visual_style=?,revision=revision+?,updated=? WHERE id=?', (body.script_text, body.visual_style, int(changed), time.time(), d['id']))
         else:
-            await db.execute('INSERT INTO script_document(id,video_id,script_text,visual_style,created,updated) VALUES(?,?,?,?,?,?)', (uid(), video_id, body.script_text, body.visual_style, time.time(), time.time()))
+            d = {'id': uid()}
+            await db.execute('INSERT INTO script_document(id,video_id,script_text,visual_style,created,updated) VALUES(?,?,?,?,?,?)', (d['id'], video_id, body.script_text, body.visual_style, time.time(), time.time()))
+        if body.prompt_template is not None:
+            await db.execute('INSERT INTO text_prompt_input(document_id,prompt_template,prompt_name) VALUES(?,?,?) ON CONFLICT(document_id) DO UPDATE SET prompt_template=excluded.prompt_template,prompt_name=excluded.prompt_name', (d['id'], body.prompt_template, body.prompt_name))
+    return await read_document(video_id)
+
+
+class PromptInputBody(BaseModel):
+    srt_content: str = Field(min_length=1, max_length=2000000)
+    srt_name: str = Field(min_length=1, max_length=255)
+    prompt_template: str = Field(min_length=1, max_length=100000)
+    prompt_name: str = Field(default='', max_length=255)
+
+
+@router.post('/videos/{video_id}/prompt-input')
+async def import_prompt_input(video_id: str, body: PromptInputBody):
+    """Import the two inputs atomically, preserving one row per SRT cue."""
+    await one('SELECT id FROM video WHERE id=?', (video_id,))
+    if not body.prompt_template.strip():
+        raise HTTPException(400, 'The prompt TXT is empty.')
+    try:
+        items = parse_segments(ImportBody(format='srt', content=body.srt_content))
+    except ValueError as exc:
+        raise HTTPException(400, f'Invalid SRT: {exc}') from exc
+    async with transaction() as db:
+        docs = await query('SELECT * FROM script_document WHERE video_id=?', (video_id,))
+        if docs:
+            doc = docs[0]
+            if await query('SELECT id FROM script_segment WHERE document_id=? LIMIT 1', (doc['id'],)):
+                raise HTTPException(409, 'This video already has SRT rows. Save the prompt TXT for these rows, or select a new video to import another SRT.')
+            await db.execute('UPDATE script_document SET revision=revision+1,updated=? WHERE id=?', (time.time(), doc['id']))
+        else:
+            doc = {'id': uid()}
+            await db.execute('INSERT INTO script_document(id,video_id,created,updated) VALUES(?,?,?,?)', (doc['id'], video_id, time.time(), time.time()))
+        await db.executemany('INSERT INTO script_segment(id,document_id,ordinal,start_ms,end_ms,text) VALUES(?,?,?,?,?,?)', [(uid(), doc['id'], i+1, s.start_ms, s.end_ms, s.text) for i, s in enumerate(items)])
+        await db.execute('INSERT INTO document_source VALUES(?,?,?,?,?)', (doc['id'], 'external', None, body.srt_content, time.time()))
+        await db.execute('INSERT INTO text_prompt_input VALUES(?,?,?,?) ON CONFLICT(document_id) DO UPDATE SET prompt_template=excluded.prompt_template,prompt_name=excluded.prompt_name,srt_name=excluded.srt_name', (doc['id'], body.prompt_template, body.prompt_name, body.srt_name))
     return await read_document(video_id)
 
 
@@ -171,11 +211,15 @@ async def read_document(video_id: str):
     if not docs:
         return {'video': video, 'document': None, 'segments': [], 'warnings': []}
     doc = docs[0]
+    inputs = await query('SELECT prompt_template,prompt_name,srt_name FROM text_prompt_input WHERE document_id=?', (doc['id'],))
+    doc.update(inputs[0] if inputs else {'prompt_template':'', 'prompt_name':'', 'srt_name':''})
     provenance = await query('SELECT kind,source_id,imported FROM document_source WHERE document_id=?', (doc['id'],))
     doc['source'] = provenance[0] if provenance else None
     segments = await query('SELECT * FROM script_segment WHERE document_id=? ORDER BY ordinal', (doc['id'],))
     concepts = await query('SELECT c.* FROM scene_concept c JOIN script_segment s ON s.id=c.segment_id WHERE s.document_id=? ORDER BY c.version DESC', (doc['id'],))
-    jobs = await query('SELECT j.id,j.segment_id,j.state,j.error,j.created FROM concept_job j JOIN script_segment s ON s.id=j.segment_id WHERE s.document_id=? ORDER BY j.created DESC', (doc['id'],))
+    jobs = await query('SELECT j.id,j.segment_id,j.state,j.error,j.created,j.payload FROM concept_job j JOIN script_segment s ON s.id=j.segment_id WHERE s.document_id=? ORDER BY j.created DESC', (doc['id'],))
+    for job in jobs:
+        job['prompt_kind'] = json.loads(job.pop('payload')).get('prompt_kind', 'both')
     from agent.api.desktop import rows
     media = rows()
     warnings = []
@@ -188,6 +232,7 @@ async def read_document(video_id: str):
         s['image_ready']=bool(s['ready'] and active['image_prompt'].strip())
         s['video_ready']=bool(s['ready'] and active['video_prompt'].strip())
         s['job'] = next((j for j in jobs if j['segment_id'] == s['id']), None)
+        s['prompt_jobs'] = {kind: next((j for j in jobs if j['segment_id']==s['id'] and j['prompt_kind'] in {kind,'both'}), None) for kind in ('image','video')}
         s['media_jobs'] = []
         for j in media:
             payload = json.loads(j['payload'])
@@ -276,7 +321,7 @@ async def select_concept(concept_id: str):
 
 
 class GenerateBody(BaseModel):
-    segment_ids: list[str] = Field(min_length=1, max_length=200)
+    segment_ids: list[str] = Field(min_length=1, max_length=1000)
     provider: Literal['codex','claude','agy','chatgpt-web'] = 'codex'
     model: str | None = Field(default=None, max_length=100, pattern=r'^[^-\s][^\r\n]*$')
     regenerate: bool = False
@@ -303,13 +348,16 @@ async def generate_concepts(video_id: str, body: GenerateBody):
         except ValueError as error:
             raise HTTPException(503,str(error)) from error
     ids, skipped = [], []
+    session_id = uid()
     async with transaction() as db:
         doc = await one('SELECT * FROM script_document WHERE video_id=?', (video_id,))
         segments = await query('SELECT * FROM script_segment WHERE document_id=? ORDER BY ordinal', (doc['id'],))
         mapping = {s['id']: (i,s) for i,s in enumerate(segments)}
+        inputs = await query('SELECT prompt_template FROM text_prompt_input WHERE document_id=?', (doc['id'],))
+        prompt_template = inputs[0]['prompt_template'] if inputs else ''
         if any(sid not in mapping for sid in body.segment_ids):
             raise HTTPException(400, 'All selected segments must belong to this collection.')
-        for sid in dict.fromkeys(body.segment_ids):
+        for sid in sorted(set(body.segment_ids), key=lambda sid: mapping[sid][0]):
             i,s = mapping[sid]
             active = await query('SELECT * FROM scene_concept WHERE id=?', (s['active_concept_id'],))
             ready = active and active[0]['segment_revision'] == s['revision'] and active[0]['document_revision'] == doc['revision']
@@ -322,6 +370,9 @@ async def generate_concepts(video_id: str, body: GenerateBody):
             if project_settings is not None:
                 payload['project_settings']=project_settings
                 payload['retained_prompt']=active[0]['video_prompt' if body.prompt_kind=='image' else 'image_prompt'] if ready else ''
+                if prompt_template.strip():
+                    payload['prompt_template'] = prompt_template
+                    payload['text_session_id'] = session_id
             jid = uid()
             await db.execute("INSERT INTO concept_job(id,segment_id,state,payload,created) VALUES(?,?,'QUEUED',?,?)", (jid, sid, json.dumps(payload), time.time()))
             ids.append(jid)
@@ -497,10 +548,14 @@ async def retry_failed(video_id: str, body: RetryBody):
         raise HTTPException(400, 'All scenes must belong to the active project.')
     terminal = {'FAILED','NEEDS_REVIEW','INTERRUPTED','CANCELLED'}
     if body.kind == 'concept':
-        eligible = [sid for sid in selected if (not segments[sid]['ready'] or (body.prompt_kind!='both' and not segments[sid]['active_concept'][body.prompt_kind+'_prompt'].strip())) and segments[sid]['job'] and segments[sid]['job']['state'] in terminal]
+        def failed(sid):
+            segment=segments[sid]
+            job=segment['prompt_jobs'].get(body.prompt_kind) if body.prompt_kind!='both' else segment['job']
+            return job and job['state'] in terminal
+        eligible = [sid for sid in selected if failed(sid)]
         if eligible and not body.reviewed:
             raise HTTPException(409, 'Review failed ChatGPT requests before retrying. A new request may use credits.')
-        result = await generate_concepts(video_id, GenerateBody(segment_ids=eligible, provider=body.provider, model=body.model, prompt_kind=body.prompt_kind)) if eligible else {'ids':[], 'skipped':[]}
+        result = await generate_concepts(video_id, GenerateBody(segment_ids=eligible, provider=body.provider, model=body.model, prompt_kind=body.prompt_kind, regenerate=True)) if eligible else {'ids':[], 'skipped':[]}
         return {**result, 'skipped':list(set(selected)-set(eligible)) + result.get('skipped',[]), 'resumed':[]}
     async with _db_lock:
         data = await read_document(video_id)

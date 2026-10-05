@@ -263,3 +263,17 @@ async def test_rejected_project_url_is_not_an_uncertain_browser_submission(monke
         await g.complete('Scene',page_url='https://chatgpt.com/g/g-test',temporary=False)
     assert g.audit_rows()[0]['state']=='NOT_SUBMITTED'
     assert not g.blocked()
+
+
+@pytest.mark.asyncio
+async def test_txt_instructions_are_session_metadata_and_scene_is_the_only_message(monkeypatch):
+    calls=transport(monkeypatch,{'choices':[{'message':{'content':'Generated image prompt'}}]})
+    payload={'provider':'chatgpt-web','prompt_kind':'image','text':'日本語のSRT行。','retained_prompt':'','project_settings':{'image_prompt_url':'https://chatgpt.com/g/g-old-image','chatgpt_url':'https://chatgpt.com/'},'text_session_id':'11111111-1111-1111-1111-111111111111','prompt_template':'Create a visual prompt.\nKeep the same style.'}
+    result=await write_concept(payload)
+    request=json.loads(calls[0].content)
+    assert request['messages']==[{'role':'user','content':payload['text']}]
+    assert request['textSessionId']==payload['text_session_id']
+    assert request['promptTemplate']==payload['prompt_template']
+    assert request['pageUrl']=='https://chatgpt.com/'
+    assert request['temporary'] is True and request['composerMode']=='chat'
+    assert result.image_prompt=='Generated image prompt'

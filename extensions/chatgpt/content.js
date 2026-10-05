@@ -37,8 +37,9 @@
       'button[aria-label*="Send"]',
     ];
     for (const sel of selectors) {
-      const btn = document.querySelector(sel);
-      if (btn && !btn.disabled && btn.getAttribute("aria-disabled") !== "true" && !btn.closest("[hidden], [aria-hidden=\"true\"]")) return btn;
+      for (const btn of document.querySelectorAll(sel)) {
+        if (visible(btn) && !btn.disabled && btn.getAttribute("aria-disabled") !== "true" && btn.getAttribute('data-loading') !== 'true') return btn;
+      }
     }
     return null;
   }
@@ -267,6 +268,14 @@
   }
 
   let activeRequest = null;
+  // Only live page memory: reload/new chat must receive the TXT again.
+  let textSession = null;
+  function currentTextSessionProof() {
+    if(!textSession||!temporaryEnabled()||window.location.href!==textSession.url)return null;
+    const latest=assistantMessages().at(-1);
+    if(!latest||messageKey(latest)!==textSession.lastAnswer||assistantText(latest)!==textSession.answerText)return null;
+    return {id:textSession.id,proof:textSession.proof,url:textSession.url};
+  }
   function progress(phase, extra={}) {
     if(!activeRequest)return;
     try{chrome.runtime.sendMessage({type:'jobProgress',requestId:activeRequest,phase,...extra})?.catch(()=>{});}catch{}
@@ -413,13 +422,17 @@
     const editor = findInput();
     const scope = editor?.closest('form') || editor?.closest('[data-type="unified-composer"]') || editor?.parentElement?.parentElement;
     if (!scope) return false;
-    const named = [...scope.querySelectorAll('[title], [aria-label], span, p, div')].filter(el =>
-      el.getAttribute('title') === name || el.getAttribute('aria-label') === name ||
-      (el.textContent || '').trim() === name);
-    const busy = scope.querySelector('[role="progressbar"], [aria-busy="true"], [data-loading="true"], .animate-spin');
-    const failed = named.some(el => /upload failed|error uploading|unable to upload|unsupported file|file too large/i.test(
-      (el.closest('[data-testid*="file"], [data-testid*="attachment"]') || el.parentElement)?.textContent || ''));
-    return named.length > 0 && !busy && !failed;
+    const named = [...scope.querySelectorAll('[title], [aria-label], [data-filename], span, p, div, button')].filter(el =>
+      visible(el) && (el.getAttribute('title') === name || el.getAttribute('data-filename') === name ||
+      (el.getAttribute('aria-label') || '').includes(name) || (el.textContent || '').trim() === name));
+    if (!named.length) return false;
+    const cards = named.map(el => el.closest('[data-testid*="file"], [data-testid*="attachment"], [data-file-id]') || el);
+    // A spinner elsewhere in the composer is not evidence that this file is uploading.
+    const busy = cards.some(el => el.matches('[role="progressbar"], [aria-busy="true"], [data-loading="true"], .animate-spin') ||
+      el.querySelector('[role="progressbar"], [aria-busy="true"], [data-loading="true"], .animate-spin'));
+    const failed = cards.some(el => /upload failed|error uploading|unable to upload|unsupported file|file too large/i.test(
+      el.textContent || '')) || /upload failed|error uploading|unable to upload|unsupported file|file too large/i.test(scope.textContent || '');
+    return !busy && !failed;
   }
 
   async function attachJSON(attachment) {
@@ -448,7 +461,7 @@
       const failure=pageFailure();if(failure)throw failure;
       const button=findSendButton();
       if(attachmentPresent(attachment.name) && button && !button.disabled && button.getAttribute('aria-disabled')!=='true') {
-        if(++stable>=10)return;
+        if(++stable>=2)return;
       }else stable=0;
     }
     throw Error('JSON attachment did not become ready within 120 seconds. No prompt was sent. Check the upload in the worker tab.');
@@ -456,20 +469,31 @@
 
   async function clickSend(text, attachmentName) {
     // Wait a moment for the send button to become enabled
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < (attachmentName ? 400 : 10); i++) {
+      const failure=pageFailure();if(failure)throw failure;
       const btn = findSendButton();
-      if (btn && !btn.disabled) {
+      if (btn && !btn.disabled && (!attachmentName || attachmentPresent(attachmentName))) {
         checkEnteredPrompt(text);
-        if (attachmentName && !attachmentPresent(attachmentName)) throw Error('The JSON attachment is no longer ready. No prompt was sent.');
         btn.click();
         return;
       }
       await sleep(300);
     }
-    throw new Error("Send button not found or disabled");
+    throw new Error("Send button did not become enabled. No prompt was sent.");
   }
 
-  async function waitForNewResponse(beforeMessages, timeout = MAX_WAIT, srtOutput = false) {
+  let pendingSrtLink = null;
+  function findSrtLink(message) {
+    const links = [...message.querySelectorAll('a[href], button[aria-label], [role="link"], [role="button"][data-file-reference="true"], [role="button"][aria-label^="Download "]')].filter(el => {
+      if (!visible(el) || el.disabled || el.closest('[aria-busy="true"], [aria-disabled="true"], [data-loading="true"]')) return false;
+      const label = [el.textContent, el.getAttribute('data-markdown-copy-text'), el.getAttribute('download'), el.getAttribute('title'), el.getAttribute('aria-label'), el.getAttribute('href')].join(' ');
+      return /\.srt(?:$|[\s?#"'<>])/i.test(label);
+    });
+    if (links.length > 1 && new Set(links.map(el=>el.getAttribute('href')||el.textContent)).size > 1) throw Error('More than one SRT file was returned. Select the correct file in ChatGPT; no file was downloaded.');
+    return links[0] || null;
+  }
+
+  async function waitForNewResponse(beforeMessages, timeout = MAX_WAIT, srtOutput = false, downloadSrt = false) {
     let lastText = "";
     let stableCount = 0;
     let lastKey = null;
@@ -484,7 +508,12 @@
       if (!latest) { stableCount = 0; progress(generationPhase(null)||'WAITING_RESPONSE'); continue; }
       const key = messageKey(latest);
       const text = assistantText(latest);
-      const phase=generationPhase(latest),evidence=completionEvidence(latest);
+      const phase=generationPhase(latest);
+      // Work can return an interactive file span without a final-message marker
+      // or response toolbar. A ready file is evidence only for file-output jobs;
+      // generation must still stop and the response must pass the stable polls.
+      const readyFile=downloadSrt && !phase ? findSrtLink(latest) : null;
+      const evidence=completionEvidence(latest) || (readyFile?.matches('[data-file-reference="true"][aria-busy="false"]') ? 'srt-file-ready' : '');
       if(text!==lastText || key!==lastKey)lastChange=Date.now();
       progress(phase || (evidence?'VERIFYING_COMPLETION':'WAITING_COMPLETION'),{chars:text.length,lastChange,completionEvidence:evidence});
       if (phase || !text || !evidence) {
@@ -492,6 +521,14 @@
       } else if (text !== lastText || key !== lastKey) {
         stableCount = 0;
       } else if (++stableCount >= 4) {
+        if(downloadSrt) {
+          const link=findSrtLink(latest);
+          if(link){
+            pendingSrtLink={element:link,requestId:activeRequest};
+            return {content:text,hasSrtFile:true};
+          }
+          throw Error('ChatGPT finished without a downloadable .srt link. The response remains in the tab. No new prompt was sent.');
+        }
         if(srtOutput) {
           const blocks=[...latest.querySelectorAll('pre code')].filter(el=>!el.closest('[hidden], [aria-hidden="true"]'));
           if(blocks.length){
@@ -519,6 +556,7 @@
     activeRequest=msg.requestId || 'local-request';
     try {
       if (isStreaming()) throw new Error("ChatGPT is already generating. Wait before submitting.");
+      if(msg.textSessionId&&(msg.temporary!==true||msg.composerMode!=='chat'||msg.customGPT||msg.attachment))throw Error('Text to Prompt requires Chat / Temporary ON. No text was sent.');
 
       // Start new conversation if requested
       if (msg.newConversation !== false) {
@@ -527,17 +565,25 @@
 
       const composerMode = msg.composerMode ?? 'chat';
       const customGPT=msg.customGPT===true;
+      const continuing=msg.continueConversation===true;
+      if(continuing&&(msg.newConversation!==false||window.location.href!==msg.conversationUrl||!assistantMessages().length))throw Error('The saved conversation is no longer available. No text was sent.');
+      if(continuing&&msg.textSessionId){
+        const proof=currentTextSessionProof();
+        if(proof?.id!==msg.textSessionId||proof?.proof!==msg.textSessionProof)throw Error('Temporary conversation memory changed. No text was sent.');
+      }else if(continuing&&msg.temporary!==false)throw Error('Temporary continuation requires verified page memory. No text was sent.');
+      if(!continuing)textSession=null;
       if(customGPT){
         const target=new URL(msg.pageUrl),here=new URL(window.location.href);
-        if(target.origin!=='https://chatgpt.com'||!/^\/g\/g-[A-Za-z0-9_-]+\/?$/.test(target.pathname)||here.origin!==target.origin||here.pathname.replace(/\/$/,'')!==target.pathname.replace(/\/$/,'')||msg.attachment||msg.temporary)throw Error('The requested GPT is not ready. No text was sent.');
+        const correctPath=continuing?here.pathname.startsWith(target.pathname.replace(/\/$/,'')+'/c/'):here.pathname.replace(/\/$/,'')===target.pathname.replace(/\/$/,'');
+        if(target.origin!=='https://chatgpt.com'||!/^\/g\/g-[A-Za-z0-9_-]+\/?$/.test(target.pathname)||here.origin!==target.origin||!correctPath||msg.attachment||msg.temporary)throw Error('The requested GPT is not ready. No text was sent.');
       }
       // Temporary mode may hide the Chat/Work switch, so exit before choosing Work.
       if (msg.temporary === false && temporaryEnabled()) {progress('DISABLING_TEMPORARY');await disableTemporaryChat();}
       progress('SELECTING_MODE');
-      if(!customGPT)await selectComposerMode(composerMode);
+      if(!customGPT&&!continuing)await selectComposerMode(composerMode);
       if (msg.temporary){progress('ENABLING_TEMPORARY');await enableTemporaryChat();}
       progress('SELECTING_MODEL');
-      const selectedModel = await selectModel(customGPT?'auto':msg.model);
+      const selectedModel = continuing?null:await selectModel(customGPT?'auto':msg.model);
       if(!customGPT)checkComposerStillSelected(composerMode);
       if (msg.temporary === false && temporaryEnabled()) throw new Error('Temporary Chat is still active for a regular-chat request. No prompt was sent.');
       checkModelSelection(selectedModel);
@@ -548,14 +594,28 @@
       if (msg.attachment) {progress('ATTACHING_FILE');await attachJSON(msg.attachment);}
       if (msg.temporary && !temporaryEnabled()) throw new Error("Temporary Chat is no longer confirmed. No prompt was sent.");
       if (msg.temporary === false && temporaryEnabled()) throw new Error('Temporary Chat became active during setup. No prompt was sent.');
+      if(continuing&&msg.textSessionId&&currentTextSessionProof()?.proof!==msg.textSessionProof)throw Error('Temporary conversation changed before sending. No text was sent.');
       if(!customGPT)checkComposerStillSelected(composerMode);
       checkModelSelection(selectedModel);
       progress('SENDING');
       await clickSend(msg.userMessage, msg.attachment?.name);
 
-      const response = await waitForNewResponse(beforeMessages, msg.timeout, !!msg.attachment);
+      const response = await waitForNewResponse(beforeMessages, msg.timeout, !!msg.attachment, msg.downloadSrt===true);
+      if(response?.hasSrtFile){
+        progress('DOWNLOADING_SRT');
+        const saved=await chrome.runtime.sendMessage({type:'downloadSrt',requestId:msg.requestId});
+        if(!saved?.ok)throw Error(saved?.error||'SRT download failed. The file remains available in ChatGPT.');
+        return {ok:true,content:response.content,nativeDownload:saved.nativeDownload,conversation_url:window.location.href};
+      }
 
-      return { ok: true, content: response, conversation_url: window.location.href };
+      if(msg.textSessionId){
+        if(!temporaryEnabled())throw Error('Temporary Chat is no longer active. Review the answer before retrying.');
+        checkComposerStillSelected('chat');
+        const latest=assistantMessages().filter(el=>!beforeMessages.has(messageKey(el))).at(-1);
+        if(!latest)throw Error('Temporary conversation response could not be verified.');
+        textSession={id:msg.textSessionId,proof:msg.requestId,url:window.location.href,lastAnswer:messageKey(latest),answerText:assistantText(latest)};
+      }
+      return { ok: true, content: response, conversation_url: window.location.href, textSessionProof:currentTextSessionProof() };
     } catch (err) {
       return { ok: false, error: err.message, code: err.code };
     } finally { activeRequest=null; }
@@ -564,14 +624,36 @@
   // ── Listen for messages from background script ───────────
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if(msg.type==='stopSrt'){
+      if(activeRequest!==msg.requestId){sendResponse({ok:false});return;}
+      const stop=[...document.querySelectorAll('button[aria-label="Stop"], button[aria-label="Stop streaming"], [data-testid="stop-button"]')].find(hasVisibleState);
+      if(stop)stop.click();
+      sendResponse({ok:true});return;
+    }
+    if(msg.type==='clickSrtDownload'){
+      const pending=pendingSrtLink;
+      if(!pending||pending.requestId!==msg.requestId||activeRequest!==msg.requestId||!pending.element.isConnected){
+        sendResponse({ok:false,error:'The completed SRT file link is no longer available.'});return;
+      }
+      pendingSrtLink=null;
+      pending.element.click();sendResponse({ok:true});return;
+    }
     if (msg.type === 'discoverModels' || msg.type === 'preflight') {
       (msg.type==='discoverModels'?discoverModels():preflight(msg)).then(data=>sendResponse({ok:true,data})).catch(e=>sendResponse({ok:false,error:e.message}));return true;
+    }
+    if(msg.type==='prepareSrt'){
+      (async()=>{
+        if(activeRequest||isStreaming())throw Error('This tab is already working.');
+        activeRequest='prepare-srt';
+        try{if(temporaryEnabled())await disableTemporaryChat();await selectComposerMode('work');checkComposerStillSelected('work');return {ok:true};}
+        finally{activeRequest=null;}
+      })().then(sendResponse).catch(error=>sendResponse({ok:false,error:error.message}));return true;
     }
     if (msg.type === "probe") {
       sendResponse({ok:true, streaming:isStreaming(), temporary:temporaryEnabled()}); return;
     }
     if (msg.type === "ping") {
-      sendResponse({ ok: true, url: window.location.href });
+      sendResponse({ ok: true, url: window.location.href, textSessionProof:currentTextSessionProof() });
       return;
     }
 

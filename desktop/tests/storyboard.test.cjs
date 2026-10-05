@@ -26,7 +26,7 @@ test('script/segments/concepts flow reaches database-backed image generation wit
    if(route==='/api/materials')return [{id:'realistic',name:'Realistic'}];
    if(route==='/api/models')return {image_models:{}};
    if(route==='/api/desktop/jobs')return {jobs:[],paused:false};
-   if(route===base){if(method==='PUT')data.document={id:'doc1',...body};return structuredClone(data);}
+   if(route===base){if(method==='PUT')data.document={id:'doc1',prompt_template:'Create one visual prompt.',...body};return structuredClone(data);}
    if(route===base+'/segments'){
     data.segments=JSON.parse(body.content).map((s,i)=>({...s,id:'s'+(i+1),ordinal:i+1,concepts:[],active_concept:null,ready:false,media_jobs:[]}));return structuredClone(data);
    }

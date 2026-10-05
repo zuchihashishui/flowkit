@@ -3,7 +3,7 @@ const {JSDOM}=require('jsdom');
 test('SRT UI selects JSON, preserves long prompt, sends Work options, previews and exports',async()=>{
  const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'../ui/index.html'),'utf8'),{url:'https://studio.test',runScripts:'outside-only'}),w=dom.window,d=w.document,$=id=>d.getElementById(id),calls=[];
  const sources=[];w.setInterval=()=>{};
- w.studio={api:async(method,url,body)=>{calls.push({method,url,body});
+ w.studio={api:async(method,url,body)=>{calls.push({method,url,body});if(url==='/api/srt/prepare')return {token:'11111111-1111-1111-1111-111111111111',tabId:100};
   if(url==='/api/whisperx/status')return {jobs:[{id:'wx',title:'Narration',result_available:true}]};
   if(url==='/api/srt/analyze')return {status:'READY',stage:'source',issues:[],duration_ms:10000};
   if(url==='/api/chatgpt/status')return {extensionConnected:true,enabled:true,capabilities:['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1'],workers:[1,2,3].map(i=>({id:"text-"+i,state:"RUNNING",progress:{phase:"TEXT_ONLY_PHASE"}})),availableSlots:0,availableSrtSlots:1};
@@ -18,7 +18,7 @@ test('SRT UI selects JSON, preserves long prompt, sends Work options, previews a
  $('srt-prompt').value='長い指示'.repeat(1000);$('srt-model').value='GPT-6 Astra :: High';
  await $('srt-form').onsubmit({preventDefault(){}});
  const submitted=calls.find(c=>c.url==='/api/srt/jobs');assert.equal(submitted.body.source_id,'file');assert.equal(submitted.body.timeout,1800);assert.equal(submitted.body.prompt,'長い指示'.repeat(1000));
- assert.match($('srt-message').textContent,/open and bind a new ChatGPT tab/);
+ assert.match($('srt-message').textContent,/selected Work tab/);
  assert.equal($('srt-source').value,'file');assert.equal($('srt-jobs').querySelector('script'),null);
  await $('srt-jobs').querySelectorAll('button')[1].onclick();assert.match($('srt-preview').textContent,/日本語/);
  await [...$('srt-jobs').querySelectorAll('button')].find(b=>b.textContent==='Save SRT as…').onclick();assert.equal(calls.at(-1).save,'done');assert.match($('srt-message').textContent,/test.srt/);
@@ -32,9 +32,9 @@ test('JSON template is opt-in for a saved custom prompt, persists and explains t
  w.eval(fs.readFileSync(path.join(__dirname,'../ui/srt.js'),'utf8'));
  assert.equal($('srt-prompt').value,'My existing audio instructions\n\nKeep this draft');
  $('srt-use-template').onclick();
- assert.match($('srt-prompt').value,/Only JSON is attached, not audio/);
- assert.match($('srt-prompt').value,/without duplicating the transcript/);
- assert.match($('srt-prompt').value,/full audio tail cannot be verified/);
+ assert.match($('srt-prompt').value,/attached transcript JSON/);
+ assert.match($('srt-prompt').value,/do not duplicate parallel word lists/);
+ assert.match($('srt-prompt').value,/duration is unavailable/);
  assert.match($('srt-prompt').value,/HH:MM:SS,mmm --> HH:MM:SS,mmm/);
  assert.equal(w.localStorage.getItem('srt-prompt'),$('srt-prompt').value);
  dom.window.close();
@@ -45,6 +45,7 @@ function sourceUI(responses={}){
  w.setInterval=()=>{};
  w.studio={api:async(method,url)=>{
   if(responses[url])return responses[url]();
+  if(url==='/api/srt/prepare')return {token:'11111111-1111-1111-1111-111111111111',tabId:100};
   if(url==='/api/srt/status')return {sources:[],jobs:[]};
   if(url==='/api/whisperx/status')return {jobs:[]};
   return {extensionConnected:false};
@@ -118,14 +119,14 @@ test('queued SRT explains why it is waiting, exposes recovery links and resumes 
  let job={id:'waiting',title:'Narration.json',state:'QUEUED',model:'GPT-6 Astra',queue_position:1};
  const {dom,w,$}=sourceUI({'/api/srt/status':()=>({sources:[],jobs:[{...job,wait_reason:queue}],queue})});
  w.studio.chatgptAction=async action=>calls.push(action);
- w.document.querySelector('[data-page="chatgpt"]').addEventListener('click',()=>calls.push('workers'));
+ w.document.querySelector('[data-page="settings"]').addEventListener('click',()=>calls.push('workers'));
  try{
   await $('srt-refresh').onclick();
   assert.match($('srt-queue-status').textContent,/Reload extensions\/chatgpt/);
   assert.match($('srt-jobs').querySelector('.srt-wait-reason').textContent,/Queue position 1.*JSON attachments/);
   assert.match($('srt-queue-details').textContent,/EXTENSION_UPDATE_REQUIRED/);
   await $('srt-open-extension').onclick();await $('srt-open-chatgpt').onclick();$('srt-workers').onclick();
-  assert.deepEqual(calls,['extension','open','workers']);
+  assert.deepEqual(calls,['extension','workers']);
   queue={ready:false,code:'SRT_BUSY',message:'Another SRT job is running.'};job={...job,state:'RUNNING'};
   await $('srt-queue-refresh').onclick();
   assert.match($('srt-jobs').textContent,/RUNNING/);
@@ -134,7 +135,7 @@ test('queued SRT explains why it is waiting, exposes recovery links and resumes 
  }finally{dom.window.close();}
 });
 
-test('source errors block submission and a duration override is sent only for the selected source',async()=>{
+test('transcript checks are optional and do not block sending the original JSON',async()=>{
  let checked=[],submitted=0,status='BLOCKED';
  const {dom,w,$}=sourceUI();
  const base=w.studio.api;
@@ -146,10 +147,11 @@ test('source errors block submission and a duration override is sent only for th
  try{
   await $('srt-choose').onclick();$('srt-duration').value='50.123';
   await $('srt-form').onsubmit({preventDefault(){}});
-  assert.equal(submitted,0);assert.equal(checked[0].duration_seconds,50.123);
+  assert.equal(submitted,1);assert.equal(checked.length,0);
+  await $('srt-check').onclick();assert.equal(checked[0].duration_seconds,50.123);
   assert.match($('srt-quality-issues').textContent,/Source data is missing/);
-  assert.match($('srt-message').textContent,/checks failed/);
-  status='READY';await $('srt-form').onsubmit({preventDefault(){}});assert.equal(submitted,1);
+
+  status='READY';await $('srt-form').onsubmit({preventDefault(){}});assert.equal(submitted,2);
   $('srt-source').dispatchEvent(new w.Event('change'));
   assert.equal($('srt-duration').value,'');assert.equal($('srt-quality').hidden,true);
  }finally{dom.window.close();}
@@ -181,15 +183,31 @@ test('quality exceptions are visible and must be accepted before scene import or
  }finally{dom.window.close();}
 });
 
-test('late transcript checks cannot submit a source after its duration or project changes',async()=>{
+test('source changes while preparing a tab cannot submit a stale source',async()=>{
  const pending=deferred();let submitted=0;
- const {dom,w,$}=sourceUI({'/api/srt/analyze':()=>pending.promise,'/api/srt/jobs':()=>{submitted++;return {id:'bad'};}});
+ const {dom,w,$}=sourceUI({'/api/srt/prepare':()=>pending.promise,'/api/srt/jobs':()=>{submitted++;return {id:'bad'};}});
  try{
   await $('srt-choose').onclick();
   const task=$('srt-form').onsubmit({preventDefault(){}});await tick();
   $('srt-duration').value='42';$('srt-duration').dispatchEvent(new w.Event('input'));
-  pending.resolve({status:'READY',stage:'source',issues:[]});await task;
+  pending.resolve({token:'ready-token'});await task;
   assert.equal(submitted,0);assert.equal($('srt-quality').hidden,true);
   assert.match($('srt-message').textContent,/selection changed/);
+ }finally{dom.window.close();}
+});
+
+test('pending SRT opens inline stop control and never enqueues a duplicate',async()=>{
+ let stopped=0,submitted=0;
+ const {dom,w,$}=sourceUI({
+  '/api/srt/prepare':()=>({state:'running',job_id:'old-job',message:'Existing job is running'}),
+  '/api/srt/jobs/old-job/cancel':()=>{stopped++;return {state:'CANCELLED'};},
+  '/api/srt/jobs':()=>{submitted++;return {};}
+ });
+ try{
+  await $('srt-choose').onclick();
+  await $('srt-form').onsubmit({preventDefault(){}});
+  assert.equal(submitted,0);assert.equal($('srt-stop-blocking').hidden,false);
+  await $('srt-stop-blocking').onclick();
+  assert.equal(stopped,1);assert.equal($('srt-stop-blocking').hidden,true);
  }finally{dom.window.close();}
 });

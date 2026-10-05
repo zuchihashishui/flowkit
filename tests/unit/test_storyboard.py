@@ -313,3 +313,76 @@ async def test_separate_gpt_prompts_keep_image_media_and_snapshot_project_urls(d
     await s.save_concept(sid,Concept(title='Scene',description='Scene',image_prompt='Changed image',video_prompt='New video'))
     data=await s.read_document(document)
     assert not s.media_is_current(data['video'],data['document'],data['segments'][0],original)
+
+
+@pytest.mark.asyncio
+async def test_text_prompt_import_200_cues_and_frozen_session(document, monkeypatch):
+    from agent.services import chatgpt_gateway as gateway
+    source = await s.read_document(document)
+    video = await crud.create_video(project_id=source['video']['project_id'], title='200 SRT rows')
+    def stamp(ms):
+        return f'{ms//3600000:02}:{ms//60000%60:02}:{ms//1000%60:02},{ms%1000:03}'
+    content = '\ufeff'+'\r\n\r\n'.join(f'{i+1}\r\n{stamp(i*4000)} --> {stamp((i+1)*4000)}\r\n日本語 {i+1}\r\nSecond line.' for i in range(200))
+    imported = await s.import_prompt_input(video['id'], s.PromptInputBody(srt_content=content, srt_name='200.srt', prompt_template='Create one image prompt.\nKeep the style.', prompt_name='instructions.txt'))
+    assert len(imported['segments']) == 200
+    assert imported['segments'][199]['text'] == '日本語 200\nSecond line.'
+    assert imported['segments'][199]['end_ms'] == 800000
+    monkeypatch.setattr(gateway, 'status', AsyncMock(return_value={'available':True,'extensionConnected':True}))
+    ensure = AsyncMock(); monkeypatch.setattr(gateway, 'ensure_project_workers', ensure)
+    ids = [row['id'] for row in imported['segments']]
+    result = await s.generate_concepts(video['id'], s.GenerateBody(segment_ids=list(reversed(ids)), provider='chatgpt-web', prompt_kind='image'))
+    jobs = await s.query('SELECT * FROM concept_job ORDER BY created')
+    assert len(result['ids']) == len(jobs) == 200
+    ensure.assert_awaited_once()
+    assert [job['segment_id'] for job in jobs] == ids
+    payloads = [json.loads(job['payload']) for job in jobs]
+    assert len({p['text_session_id'] for p in payloads}) == 1
+    assert all(p['prompt_template'] == imported['document']['prompt_template'] for p in payloads)
+    assert payloads[199]['text'] == imported['segments'][199]['text']
+    # Completing in a different order must still store each result on its own row.
+    async def write(payload):
+        return Concept(title='Image', description='Scene', image_prompt='Result: '+payload['text'])
+    monkeypatch.setattr(s, 'write_concept', write)
+    for start in range(0,200,3):
+        await asyncio.gather(*(s.process_concept(job) for job in reversed(jobs[start:start+3])))
+    finished = await s.read_document(video['id'])
+    assert all(row['job']['state']=='COMPLETED' and row['active_concept']['image_prompt']=='Result: '+row['text'] for row in finished['segments'])
+    assert not (await s.generate_concepts(video['id'], s.GenerateBody(segment_ids=ids, provider='chatgpt-web', prompt_kind='image')))['ids']
+    # Legacy callers cannot erase the saved TXT. Configuration survives restart.
+    await s.save_document(video['id'], s.DocumentBody())
+    await schema.close_db(); await schema.init_db()
+    restored = await s.read_document(video['id'])
+    assert restored['document']['prompt_template'] == imported['document']['prompt_template']
+    assert restored['document']['prompt_name'] == 'instructions.txt'
+    assert restored['document']['srt_name'] == '200.srt'
+    with pytest.raises(HTTPException) as duplicate:
+        await s.import_prompt_input(video['id'], s.PromptInputBody(srt_content=content, srt_name='other.srt', prompt_template='Changed'))
+    assert duplicate.value.status_code == 409
+    assert len((await s.read_document(video['id']))['segments']) == 200
+
+
+@pytest.mark.asyncio
+async def test_invalid_prompt_inputs_leave_no_partial_document(document):
+    source = await s.read_document(document)
+    video = await crud.create_video(project_id=source['video']['project_id'], title='Invalid input')
+    for content, template in [('bad timestamps','instructions'),('1\n00:00:00,000 --> 00:00:04,000\nHello','   ')]:
+        with pytest.raises(HTTPException):
+            await s.import_prompt_input(video['id'], s.PromptInputBody(srt_content=content, srt_name='input.srt', prompt_template=template))
+        assert (await s.read_document(video['id']))['document'] is None
+
+
+@pytest.mark.asyncio
+async def test_retry_failed_regeneration_is_target_specific_and_keeps_saved_result(document, monkeypatch):
+    data=await s.read_document(document);sid=data['segments'][0]['id']
+    await s.save_concept(sid, CONCEPT)
+    queued=await s.generate_concepts(document,s.GenerateBody(segment_ids=[sid],provider='codex',prompt_kind='image',regenerate=True))
+    monkeypatch.setattr(s,'write_concept',AsyncMock(side_effect=ValueError('Prompt generation failed')))
+    await s.process_concept(await s.one('SELECT * FROM concept_job WHERE id=?',(queued['ids'][0],)))
+    data=await s.read_document(document);row=data['segments'][0]
+    assert row['active_concept']['image_prompt']==CONCEPT.image_prompt
+    assert row['prompt_jobs']['image']['state']=='FAILED' and row['prompt_jobs']['video'] is None
+    other=await s.retry_failed(document,s.RetryBody(segment_ids=[sid],provider='codex',prompt_kind='video',kind='concept',reviewed=True))
+    assert other['ids']==[]
+    retry=await s.retry_failed(document,s.RetryBody(segment_ids=[sid],provider='codex',prompt_kind='image',kind='concept',reviewed=True))
+    assert len(retry['ids'])==1
+    assert (await s.read_document(document))['segments'][0]['active_concept']['image_prompt']==CONCEPT.image_prompt

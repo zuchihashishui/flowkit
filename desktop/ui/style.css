@@ -30,3 +30,10 @@ aside{position:sticky;top:0;height:100vh;overflow-y:auto}#scenes{max-height:560p
 .project-context{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.project-context strong{color:var(--accent)}.project-picker{max-width:100%;width:100%}#project-scope-note{margin-bottom:12px}#project-list .item[data-active="true"]{border-left:3px solid var(--accent);padding-left:12px}
 
 nav .nav-secondary{margin-top:12px;border-top:1px solid var(--line);border-radius:0 0 8px 8px;padding-top:18px}
+
+/* Text to Prompt: cue-level progress and bounded table cells. */
+.sb-summary{display:flex;flex-wrap:wrap;gap:10px}.sb-summary span{padding:8px 12px;border:1px solid var(--border,#394050);border-radius:8px}
+.sb-filters{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:16px 0}.sb-filters label{margin:0;min-width:180px}.sb-filters input{min-width:240px}
+.sb-badge{display:inline-block;padding:4px 9px;border-radius:6px;font-weight:600;background:#333b49;color:#e3e9f2;white-space:nowrap}
+.sb-badge[data-state="completed"]{background:#164b38;color:#adf0cc}.sb-badge[data-state="error"]{background:#632d35;color:#ffd0d6}.sb-badge[data-state="running"]{background:#214779;color:#cce2ff}.sb-badge[data-state="queued"]{background:#524726;color:#ffe6a1}
+.sb-table td p{max-height:150px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;margin:0}.sb-table td small{display:block;max-width:270px;white-space:pre-wrap;overflow-wrap:anywhere;margin-top:8px}.sb-table th{position:sticky;top:0;z-index:1;background:var(--panel,#1b2130)}

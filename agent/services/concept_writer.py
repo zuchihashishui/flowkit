@@ -54,8 +54,14 @@ async def write_concept(payload):
     if payload['provider']=='chatgpt-web' and payload.get('prompt_kind') in {'image','video'}:
         from agent.services.chatgpt_gateway import complete
         url=payload['project_settings'][payload['prompt_kind']+'_prompt_url']
+        session = payload.get('text_session_id')
+        if session:
+            # TXT supplies the instructions. These workers use ordinary Chat
+            # with Temporary ON, independently of the legacy Custom GPT URLs.
+            url=payload['project_settings'].get('chatgpt_url', 'https://chatgpt.com/')
         return await complete(payload['text'], 'auto', validate=lambda raw:parse_gpt_prompt(raw,payload),
-                              page_url=url,composer_mode='chat',temporary='/g/' not in url)
+                              page_url=url,composer_mode='chat',temporary=True if session else '/g/' not in url,
+                              text_session_id=session, prompt_template=payload.get('prompt_template'))
     prompt = make_prompt(payload)
     provider = payload['provider']
     options = {'model': payload.get('model')}

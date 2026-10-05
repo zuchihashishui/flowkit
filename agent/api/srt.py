@@ -11,6 +11,7 @@ router = APIRouter(prefix='/srt', tags=['srt'])
 
 class Job(Scoped):
     source_id: UUID
+    prepared_tab_token: UUID | None = None
     prompt: str | None = Field(default=None, min_length=1, max_length=100000)
     model: str = Field(default='GPT-6 Astra', min_length=1, max_length=100)
     timeout: int = Field(default=1800, ge=60, le=1800)
@@ -42,15 +43,20 @@ async def enqueue(body: Job):
         ctx = await inputs(body, [scope.ref(kind, body.source_id)])
         from agent.services.project_settings import snapshot
         settings=await snapshot(ctx)
+        settings['srt_output']='download-file'
+        if body.prepared_tab_token:settings['srt_prepared_token']=str(body.prepared_tab_token)
         prompt=body.prompt if body.prompt is not None else settings.get('production',{}).get('srt',{}).get('instructions','')
         if not prompt.strip() or not body.model.strip():raise ValueError('Enter a prompt and model name, or save SRT instructions in Project Settings.')
-        return service.enqueue(str(body.source_id), prompt, body.model.strip(), body.timeout, ctx, duration_seconds=body.duration_seconds, project_settings=settings)
+        return service.enqueue(str(body.source_id), prompt, body.model.strip(), body.timeout, ctx, method="file-srt", duration_seconds=body.duration_seconds, project_settings=settings)
     except (ValueError, KeyError, FileNotFoundError) as e:
         raise HTTPException(409, str(e)) from e
 
 @router.post('/jobs/{jid}/cancel')
 async def cancel(jid: UUID):
-    return service.cancel(str(jid))
+    try:
+        return await service.stop(str(jid))
+    except ValueError as error:
+        raise HTTPException(409,str(error)) from error
 
 @router.get('/jobs/{jid}/result')
 async def result(jid: UUID):
@@ -101,4 +107,40 @@ async def approve(jid: UUID, body: Approval):
     try:
         return service.approve_quality(str(jid))
     except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+
+class PrepareTab(Scoped):
+    token: UUID | None = None
+
+@router.post('/prepare')
+async def prepare_tab(body: PrepareTab):
+    try:
+        ctx = await context(body.project_id, body.video_id)
+        from agent.services.project_settings import snapshot
+        from agent.services import chatgpt_gateway
+        if not service.active_id:
+            with service.db() as db:
+                db.execute("UPDATE srt_jobs SET state='NEEDS_REVIEW',error='No active backend task. Previous tab and files retained.' WHERE state='RUNNING'")
+        pending=next((j for j in reversed(service.jobs()) if j['state'] in ('QUEUED','RUNNING','CANCELLING')),None)
+        if service.active_id or service.preparing:
+            return {'state':'running','job_id':service.active_id or (pending['id'] if pending else ''),
+                    'message':'An SRT job is running or its tab is being prepared. Use Stop job below to cancel the existing job.'}
+        if pending:
+            settings=scope.load_settings(service,'srt',pending['id'])
+            service.preparing=True
+            try:
+                ready=await chatgpt_gateway.prepare_srt(settings.get('chatgpt_url','https://chatgpt.com/'),settings.get('srt_prepared_token'))
+                if not ready.get('token'):raise ValueError('The gateway did not prepare the queued SRT tab.')
+                with service.db() as db:
+                    row=db.execute('SELECT state FROM srt_jobs WHERE id=?',(pending['id'],)).fetchone()
+                    if row['state']!='QUEUED':
+                        return {'state':'queued','job_id':pending['id'],'message':'The job state changed while its tab was being prepared. Refresh SRT jobs below.'}
+                    settings['srt_prepared_token']=ready['token']
+                    scope.save_settings(db,'srt',pending['id'],settings)
+                return {'state':'queued','job_id':pending['id'],'message':'The existing queued SRT job has a ready Work tab and will continue automatically. No duplicate job was created.'}
+            finally:
+                service.preparing=False
+        settings = await snapshot(ctx)
+        return await chatgpt_gateway.prepare_srt(settings.get('chatgpt_url','https://chatgpt.com/'), str(body.token) if body.token else None)
+    except (ValueError, OSError) as error:
         raise HTTPException(409, str(error)) from error

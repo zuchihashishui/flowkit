@@ -206,7 +206,7 @@ test('cleanup waits for save ACK, blocks new text reservations and preserves clo
 });
 
 test('project GPT routing verifies capability, ensures workers and forwards one text message',async()=>{
- const s=await setup(undefined,['project-urls-v1']);const received=[];
+ const s=await setup(undefined,['project-urls-v1','temporary-text-session-v1']);const received=[];
  s.ws.on('message',raw=>{const m=JSON.parse(raw);received.push(m);
   if(m.type==='chat')s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:true,content:'A visual prompt'}));
   else if(m.controlId)s.ws.send(JSON.stringify({type:'controlResult',controlId:m.controlId,ok:true}));
@@ -223,4 +223,94 @@ test('project GPT routing verifies capability, ensures workers and forwards one 
   assert.equal(received.filter(m=>m.type==='chat').length,1);
  }finally{await s.close();}
  const old=await setup();try{assert.equal((await old.post('/workers/ensure',{})).status,409);}finally{await old.close();}
+});
+
+test('SRT preparation relays control and the prepared token reaches its dedicated request',async()=>{
+ const s=await setup([], [...srtCapabilities,'srt-prepare-v1']);
+ const token='11111111-1111-1111-1111-111111111111',messages=[];
+ s.ws.on('message',raw=>{
+  const m=JSON.parse(raw);messages.push(m);
+  if(m.type==='prepareSrt')s.ws.send(JSON.stringify({type:'controlResult',controlId:m.controlId,ok:true,data:{token:m.token,tabId:123,windowId:456,composerMode:'work'}}));
+  if(m.type==='chat')s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:true,content:'boundaries'}));
+ });
+ try{
+  const ready=await s.post('/srt/prepare',{token,pageUrl:'https://chatgpt.com/'});
+  const readyBody=await ready.json();assert.equal(ready.status,200,JSON.stringify(readyBody));assert.equal(readyBody.tabId,123);
+  assert.equal(messages.filter(m=>m.type==='chat').length,0);
+  assert.equal((await s.post('/v1/chat/completions',{...srtPayload,preparedTabToken:token})).status,200);
+  assert.equal(messages.find(m=>m.type==='chat').preparedTabToken,token);
+  assert.equal((await s.post('/srt/prepare',{token,pageUrl:'https://chatgpt.com/'})).status,409);
+ }finally{await s.close();}
+});
+
+test('new SRT preparation releases a failed reservation after preparation succeeds',async()=>{
+ const s=await setup([], [...srtCapabilities,'srt-prepare-v1']);
+ let failPrepare=true;
+ s.ws.on('message',raw=>{
+  const m=JSON.parse(raw);
+  if(m.type==='chat')s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:false,error:'Old request failed'}));
+  if(m.type==='prepareSrt')s.ws.send(JSON.stringify({type:'controlResult',controlId:m.controlId,ok:!failPrepare,error:'Page loading',data:{token:m.token,tabId:123}}));
+ });
+ try{
+  assert.equal((await s.post('/v1/chat/completions',srtPayload)).status,502);
+  const body={token:'11111111-1111-1111-1111-111111111111',pageUrl:'https://chatgpt.com/'};
+  assert.equal((await s.post('/srt/prepare',body)).status,409);
+  assert.equal((await s.health()).srtWorker.state,'NEEDS_REVIEW');
+  failPrepare=false;
+  assert.equal((await s.post('/srt/prepare',body)).status,200);
+  assert.equal((await s.health()).availableSrtSlots,1);
+ }finally{await s.close();}
+});
+
+test('file SRT transport forwards download metadata and holds worker until backend save acknowledgment',async()=>{
+ const s=await setup([], [...srtCapabilities,'srt-download-v1']);
+ const nativeDownload={path:'C:/Downloads/flowkit-chatgpt/11111111-1111-1111-1111-111111111111/subtitles.srt',token:'11111111-1111-1111-1111-111111111111'};
+ s.ws.on('message',raw=>{
+  const m=JSON.parse(raw);
+  if(m.type==='chat'){assert.equal(m.downloadSrt,true);s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:true,content:'247 scenes. Audio tail unverified.',nativeDownload}));}
+  if(m.type==='commit')s.ws.send(JSON.stringify({type:'controlResult',controlId:m.controlId,ok:true}));
+ });
+ try{
+  const response=await s.post('/v1/chat/completions',{...srtPayload,downloadSrt:true});
+  assert.equal(response.status,200);const body=await response.json();
+  assert.deepEqual(body.nativeDownload,nativeDownload);
+  assert.equal((await s.health()).srtWorker.state,'AWAITING_SAVE');
+  assert.equal((await s.post('/commit',{request_id:body.id,ok:true})).status,200);
+ }finally{await s.close();}
+ const old=await setup([],srtCapabilities);
+ try{const r=await old.post('/v1/chat/completions',{...srtPayload,downloadSrt:true});assert.equal(r.status,400);assert.equal((await r.json()).not_submitted,true);}
+ finally{await old.close();}
+});
+
+test('cancel SRT targets its job ID, finishes active HTTP request and releases only its reservation',async()=>{
+ const s=await setup([], [...srtCapabilities,'srt-cancel-v1']);
+ const job='11111111-1111-1111-1111-111111111111',messages=[];
+ s.ws.on('message',raw=>{
+  const m=JSON.parse(raw);messages.push(m);
+  if(m.type==='cancelSrt')s.ws.send(JSON.stringify({type:'controlResult',controlId:m.controlId,ok:true}));
+ });
+ try{
+  const pending=s.post('/v1/chat/completions',{...srtPayload,srtJobId:job});
+  await waitFor(()=>messages.some(m=>m.type==='chat'));
+  const wrong=await s.post('/srt/cancel',{jobId:'22222222-2222-2222-2222-222222222222'});
+  assert.equal((await wrong.json()).stopped,false);assert.equal(messages.filter(m=>m.type==='cancelSrt').length,0);
+  const stopped=await s.post('/srt/cancel',{jobId:job});assert.equal(stopped.status,200);
+  assert.equal((await pending).status,502);
+  assert.equal(messages.find(m=>m.type==='cancelSrt').jobId,job);
+  assert.equal((await s.health()).activeRequests,0);
+  assert.equal((await s.health()).availableSrtSlots,1);
+ }finally{await s.close();}
+});
+
+test('TXT session metadata is validated and forwarded separately from SRT text',async()=>{
+ const s=await setup(undefined,['project-urls-v1','temporary-text-session-v1']),messages=[];
+ s.ws.on('message',raw=>{const m=JSON.parse(raw);if(m.type==='chat'){messages.push(m);s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:true,content:'Scene prompt'}));}else if(m.controlId)s.ws.send(JSON.stringify({type:'controlResult',controlId:m.controlId,ok:true}));});
+ const payload={messages:[{role:'user',content:'日本語のSRT行'}],pageUrl:'https://chatgpt.com/',temporary:true,composerMode:'chat',textSessionId:'11111111-1111-1111-1111-111111111111',promptTemplate:'My image instructions'};
+ try{
+  for(const invalid of [{temporary:false},{pageUrl:'https://chatgpt.com/g/g-custom'},{promptTemplate:''},{textSessionId:'bad'},{composerMode:'work'}])assert.equal((await s.post('/v1/chat/completions',{...payload,...invalid})).status,400);
+  assert.equal(messages.length,0);
+  const result=await s.post('/v1/chat/completions',payload);assert.equal(result.status,200);
+  assert.equal(messages[0].promptTemplate,payload.promptTemplate);assert.equal(messages[0].textSessionId,payload.textSessionId);assert.deepEqual(messages[0].messages,payload.messages);
+ }finally{await s.close();}
+ const old=await setup(undefined,['project-urls-v1']);try{const r=await old.post('/v1/chat/completions',payload);assert.equal(r.status,400);assert.equal((await r.json()).not_submitted,true);}finally{await old.close();}
 });

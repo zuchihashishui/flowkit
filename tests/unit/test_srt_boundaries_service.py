@@ -77,7 +77,7 @@ async def test_source_boundaries_save_before_ack_and_quality_gates_next_stage(tm
 
 
 @pytest.mark.asyncio
-async def test_preflight_and_quality_api_reject_bad_source_before_queue(tmp_path,monkeypatch):
+async def test_optional_analysis_reports_source_issues_but_file_download_job_can_queue(tmp_path,monkeypatch):
     from fastapi import FastAPI
     from agent.api import srt
     service=SRTService(tmp_path/'srt.db',tmp_path/'output');monkeypatch.setattr(srt,'service',service)
@@ -87,7 +87,8 @@ async def test_preflight_and_quality_api_reject_bad_source_before_queue(tmp_path
         response=await client.post('/srt/analyze',json={'source_id':source['id']})
         assert response.status_code==200 and response.json()['status']=='BLOCKED'
         response=await client.post('/srt/jobs',json={'source_id':source['id'],'prompt':'Make scenes'})
-        assert response.status_code==409 and not service.jobs()
+        assert response.status_code==200 and len(service.jobs())==1
+        assert not (service.output/response.json()['id']/'source-plan.json').exists()
         assert (await client.get(f'/srt/jobs/{uuid4()}/quality')).status_code==404
         valid=service.import_bytes(transcript(),'valid.json')
         response=await client.post('/srt/analyze',json={'source_id':valid['id'],'duration_seconds':2})

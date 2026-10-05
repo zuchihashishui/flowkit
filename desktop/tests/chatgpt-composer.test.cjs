@@ -56,3 +56,18 @@ test('custom GPT sends plain scene text without requiring Chat/Work or model con
  assert.equal(result.ok,true,result.error);assert.equal(sent,1);assert.equal(d.querySelector('textarea').value,text);
  dom.window.close();
 });
+
+for(const customGPT of [false,true])for(const mismatch of [false,true])test(`continued conversation validates its identity and returns only the new answer: GPT=${customGPT}, moved=${mismatch}`,async()=>{
+ const pageUrl=customGPT?'https://chatgpt.com/g/g-project-image':'https://chatgpt.com/';
+ const conversationUrl=pageUrl.replace(/\/$/,'')+'/c/saved';
+ const dom=new JSDOM((customGPT?'':group('chat'))+'<div data-message-author-role="assistant" data-local-conversation-final-assistant="true">Old answer</div><textarea id="prompt-textarea"></textarea><button type="submit" aria-label="Send">Send</button>',{url:mismatch?'https://chatgpt.com/c/other':conversationUrl,runScripts:'outside-only'});
+ const w=dom.window,d=w.document;let listener,sent=0;
+ Object.defineProperty(w.HTMLElement.prototype,'offsetParent',{get(){return d.body;}});
+ w.chrome={runtime:{onMessage:{addListener:f=>listener=f}}};w.setTimeout=fn=>setImmediate(fn);
+ d.execCommand=(cmd,_,value)=>{if(cmd==='insertText')d.querySelector('textarea').value=value;};
+ d.querySelector('[aria-label="Send"]').onclick=()=>{sent++;d.body.insertAdjacentHTML('beforeend','<div data-message-author-role="assistant" data-local-conversation-final-assistant="true">New prompt answer</div>');};
+ w.eval(source);
+ const result=await new Promise(resolve=>listener({type:'chat',userMessage:'Next SRT row',newConversation:false,continueConversation:true,conversationUrl,timeout:10000,temporary:false,composerMode:'chat',customGPT,pageUrl,model:'auto'},{},resolve));
+ assert.equal(result.ok,!mismatch,result.error);assert.equal(sent,mismatch?0:1);if(!mismatch)assert.equal(result.content,'New prompt answer');
+ dom.window.close();
+});

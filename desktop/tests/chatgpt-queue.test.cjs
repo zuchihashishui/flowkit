@@ -1,6 +1,6 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const path=require('node:path');const {JSDOM}=require('jsdom');
 test('Desktop batch UI submits 200 prompts, shows worker states and safely renders results',async()=>{
- const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'../ui/index.html'),'utf8'),{runScripts:'outside-only'});
+ const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'fixtures/chatgpt-retired-ui.html'),'utf8'),{runScripts:'outside-only'});
  const w=dom.window,$=id=>w.document.getElementById(id),calls=[];
  const settings={workers:3,timeout_seconds:180,temporary:false,paused:false};
  const jobs=[{id:'a',batch_id:'batch-one',ordinal:1,prompt:'<script>bad</script>',state:'COMPLETED',answer:'A\nB'}];
@@ -26,7 +26,7 @@ test('Desktop batch UI submits 200 prompts, shows worker states and safely rende
 });
 
 test('failed automatic preflight preserves batch text and never enqueues prompts',async()=>{
- const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'../ui/index.html'),'utf8'),{runScripts:'outside-only'}),w=dom.window,$=id=>w.document.getElementById(id),calls=[];
+ const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'fixtures/chatgpt-retired-ui.html'),'utf8'),{runScripts:'outside-only'}),w=dom.window,$=id=>w.document.getElementById(id),calls=[];
  w.setInterval=()=>{};w.studio={api:async(method,route,body)=>{calls.push(route);return {passed:false,reports:[{error:'Input missing'}]};}};
  for(const file of ['chatgpt-model.js','chatgpt-queue.js'])w.eval(fs.readFileSync(path.join(__dirname,'../ui',file),'utf8'));
  $('chat-batch').value='Keep this prompt';await $('chat-enqueue').onclick();assert.deepEqual(calls,['/api/chatgpt/preflight']);assert.equal($('chat-batch').value,'Keep this prompt');assert.match($('chat-preflight-result').textContent,/Input missing/);dom.window.close();
