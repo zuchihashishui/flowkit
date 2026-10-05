@@ -1,3 +1,7 @@
+## Studio v0.7.66 / ChatGPT Bridge 1.11.3
+
+Text to Prompt attaches the saved instructions as a UTF-8 TXT file on the first turn of each Temporary Chat; only the SRT sentence is typed. Later turns send only the next sentence. Temporary response completion now recognizes the supplied sibling toolbar layout without using another turn or a code-block Copy button as completion evidence. See [release notes](docs/releases/0.7.66.md).
+
 ## Studio v0.7.65 / ChatGPT Bridge 1.11.2
 
 Text to Prompt prepares its three Chat / Temporary tabs directly, like JSON → SRT. Historical review records no longer block Start selected rows in the generic preflight dialog. Inactive failed bindings get replacement tabs; their old tabs and audit records remain available. Running requests, pending saves, and account rate limits remain protected. Reload the extension after updating. See [release notes](docs/releases/0.7.65.md).

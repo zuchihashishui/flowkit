@@ -283,8 +283,21 @@
   function hasVisibleState(el) {
     return !el.closest('[hidden], [aria-hidden="true"]') && getComputedStyle(el).display!=='none' && getComputedStyle(el).visibility!=='hidden';
   }
+  function responseScope(latest) {
+    const scope=latest?.closest('[data-chatgpt-search-unit-key$=":assistant"], [data-content-search-unit-key$=":assistant"], [data-turn-key], article[data-testid^="conversation-turn"], [data-testid^="conversation-turn-"], [data-message-author-role="assistant"]');
+    if(!scope?.matches('[data-chatgpt-search-unit-key$=":assistant"], [data-content-search-unit-key$=":assistant"]'))return scope;
+    // The supplied Temporary layout puts turn-action-controls outside the
+    // search unit. Ascend only within this answer, never into another turn.
+    for(let parent=scope.parentElement,depth=0;parent&&depth<4;parent=parent.parentElement,depth++){
+      if(parent.matches('body, main, html'))break;
+      const keys=new Set([...parent.querySelectorAll('[data-markdown-text-style="assistant-message"], [data-message-author-role="assistant"]')].map(messageKey));
+      if(keys.size!==1||!keys.has(messageKey(latest)))break;
+      if(parent.querySelector('.turn-action-controls button[aria-label="Copy"], .turn-action-controls button[aria-label="Rate response"], .turn-action-controls button[aria-label="Regenerate response"], .turn-action-controls button[aria-label="Copy response"]'))return parent;
+    }
+    return scope;
+  }
   function generationPhase(latest) {
-    const scope=latest?.closest('[data-turn-key], article[data-testid^="conversation-turn"], [data-message-author-role="assistant"]') || document;
+    const scope=responseScope(latest) || document;
     const status=[...scope.querySelectorAll('[role="status"], [data-testid="thinking-indicator"]')].filter(hasVisibleState).map(el=>el.textContent||'').join(' ');
     if(/\b(thinking|reasoning)\b/i.test(status))return 'THINKING';
     if(/\b(searching|running|working|using tools)\b/i.test(status))return 'USING_TOOLS';
@@ -294,8 +307,10 @@
   }
   function completionEvidence(latest) {
     if(latest.closest('[data-local-conversation-final-assistant="true"]'))return 'final-assistant-marker';
-    const scope=latest.closest('article[data-testid^="conversation-turn"], [data-testid^="conversation-turn-"], [data-message-author-role="assistant"]');
-    if(scope && [...scope.querySelectorAll('[data-testid="copy-turn-action-button"], button[aria-label="Copy response"], button[aria-label="Good response"], button[aria-label="Bad response"]')].some(hasVisibleState))return 'response-actions';
+    const scope=responseScope(latest);
+    // Temporary Chat places its toolbar beside the markdown root inside an
+    // assistant search unit. Never mistake a code-block Copy for completion.
+    if(scope && [...scope.querySelectorAll('[data-testid="copy-turn-action-button"], button[aria-label="Copy response"], button[aria-label="Good response"], button[aria-label="Bad response"], button[aria-label="Copy"], button[aria-label="Rate response"], button[aria-label="Regenerate response"]')].some(el=>!el.closest('pre, code, [data-markdown-text-style="assistant-message"]')&&hasVisibleState(el)))return 'response-actions';
     return '';
   }
   async function discoverModels() {
@@ -435,15 +450,22 @@
     return !busy && !failed;
   }
 
-  async function attachJSON(attachment) {
+  async function attachFile(attachment, textPrompt=false) {
+    let file;
+    if(textPrompt){
+      if(attachment?.name!=='prompt-instructions.txt'||typeof attachment.text!=='string'||!attachment.text.trim()||attachment.text.length>100000)throw Error('Invalid prompt TXT attachment. No prompt was sent.');
+      file=new File([attachment.text],attachment.name,{type:'text/plain'});
+    }else{
     if (!attachment || !/^transcript-[a-f0-9-]{36}\.json$/.test(attachment.name) ||
         typeof attachment.base64 !== 'string' || attachment.base64.length > 22369624) throw Error('Invalid JSON attachment. No prompt was sent.');
     const bytes = Uint8Array.from(atob(attachment.base64), ch => ch.charCodeAt(0));
     JSON.parse(new TextDecoder().decode(bytes).replace(/^\uFEFF/, ''));
-    const file = new File([bytes], attachment.name, {type:'application/json'});
+    file = new File([bytes], attachment.name, {type:'application/json'});
+    }
+    const extension=textPrompt?'.txt':'.json',mime=textPrompt?'text/plain':'application/json',label=textPrompt?'TXT':'JSON';
     const fileInput = () => [...document.querySelectorAll('input[type="file"]')].find(el => {
       const accept = (el.getAttribute('accept') || '').toLowerCase();
-      return !el.disabled && (!accept || accept.includes('.json') || accept.includes('application/json') || accept.includes('*/*'));
+      return !el.disabled && (!accept || accept.includes(extension) || accept.includes(mime) || accept.includes('*/*'));
     });
     let input = fileInput();
     if (!input) {
@@ -452,7 +474,7 @@
       if (add) add.click();
       for (let i=0;i<20 && !input;i++) {await sleep(250);input=fileInput();}
     }
-    if (!input) throw Error('JSON file input was not found. No prompt was sent. Open the attachment menu and check the page.');
+    if (!input) throw Error(label+' file input was not found. No prompt was sent. Open the attachment menu and check the page.');
     const transfer = new DataTransfer();transfer.items.add(file);input.files = transfer.files;
     input.dispatchEvent(new Event('change', {bubbles:true}));
     let stable = 0;
@@ -464,7 +486,7 @@
         if(++stable>=2)return;
       }else stable=0;
     }
-    throw Error('JSON attachment did not become ready within 120 seconds. No prompt was sent. Check the upload in the worker tab.');
+    throw Error(label+' attachment did not become ready within 120 seconds. No prompt was sent. Check the upload in the worker tab.');
   }
 
   async function clickSend(text, attachmentName) {
@@ -558,6 +580,8 @@
       if (isStreaming()) throw new Error("ChatGPT is already generating. Wait before submitting.");
       if(msg.textSessionId&&(msg.temporary!==true||msg.composerMode!=='chat'||msg.customGPT||msg.attachment))throw Error('Text to Prompt requires Chat / Temporary ON. No text was sent.');
 
+      if(msg.promptAttachment&&(!msg.textSessionId||msg.continueConversation||msg.attachment))throw Error('Prompt TXT is allowed only on the first Text to Prompt turn. No prompt was sent.');
+
       // Start new conversation if requested
       if (msg.newConversation !== false) {
         await startNewChat();
@@ -591,14 +615,15 @@
       const failure=pageFailure();if(failure)throw failure;
       progress('TYPING');
       await typeMessage(msg.userMessage);
-      if (msg.attachment) {progress('ATTACHING_FILE');await attachJSON(msg.attachment);}
+      if (msg.attachment) {progress('ATTACHING_FILE');await attachFile(msg.attachment);}
+      if (msg.promptAttachment) {progress('ATTACHING_FILE');await attachFile(msg.promptAttachment,true);}
       if (msg.temporary && !temporaryEnabled()) throw new Error("Temporary Chat is no longer confirmed. No prompt was sent.");
       if (msg.temporary === false && temporaryEnabled()) throw new Error('Temporary Chat became active during setup. No prompt was sent.');
       if(continuing&&msg.textSessionId&&currentTextSessionProof()?.proof!==msg.textSessionProof)throw Error('Temporary conversation changed before sending. No text was sent.');
       if(!customGPT)checkComposerStillSelected(composerMode);
       checkModelSelection(selectedModel);
       progress('SENDING');
-      await clickSend(msg.userMessage, msg.attachment?.name);
+      await clickSend(msg.userMessage, msg.attachment?.name||msg.promptAttachment?.name);
 
       const response = await waitForNewResponse(beforeMessages, msg.timeout, !!msg.attachment, msg.downloadSrt===true);
       if(response?.hasSrtFile){

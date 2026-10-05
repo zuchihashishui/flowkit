@@ -249,15 +249,15 @@ test('200 SRT rows reuse three Temporary conversations and send TXT only once in
   for(let offset=size-1;offset>=0;offset--){const m=b.messages[start+offset];await finish(m.requestId,m.id);}
  }
  assert.equal(b.messages.length,200);assert.equal(b.created.length,3);assert.equal(b.updated.length,3,'No navigation after the first row per tab');
- const seen=new Set();for(const m of b.messages){const first=!seen.has(m.id);seen.add(m.id);assert.equal(m.userMessage,(first?options.promptTemplate+'\n\n':'')+'Prompt '+m.requestId);assert.equal(m.continueConversation,!first);assert.equal(m.temporary,true);assert.equal(m.composerMode,'chat');}
+ const seen=new Set();for(const m of b.messages){const first=!seen.has(m.id);seen.add(m.id);assert.equal(m.userMessage,'Prompt '+m.requestId);assert.equal(m.promptAttachment?.text,first?options.promptTemplate:undefined);assert.equal(m.promptAttachment?.name,first?'prompt-instructions.txt':undefined);assert.equal(m.continueConversation,!first);assert.equal(m.temporary,true);assert.equal(m.composerMode,'chat');}
  assert.equal(seen.size,3);assert.ok(b.saved.workers.every(w=>w.state==='IDLE'));
  // Reloading may keep the SAME URL while erasing Temporary conversation memory.
  const first=b.saved.workers[0];b.proofs.delete(first.tabId);
  await b.request('navigated',first.id,options);await until(()=>b.messages.length===201);
- assert.equal(b.messages.at(-1).continueConversation,false);assert.ok(b.messages.at(-1).userMessage.startsWith(options.promptTemplate));await finish('navigated',first.tabId);
+ assert.equal(b.messages.at(-1).continueConversation,false);assert.equal(b.messages.at(-1).promptAttachment.text,options.promptTemplate);await finish('navigated',first.tabId);
  // A different run or prompt always starts with the new instructions.
  await b.request('next-batch',first.id,{...options,textSessionId:'22222222-2222-2222-2222-222222222222',promptTemplate:'New video instructions'});await until(()=>b.messages.length===202);
- assert.equal(b.messages.at(-1).userMessage,'New video instructions\n\nPrompt next-batch');await finish('next-batch',first.tabId);
+ assert.equal(b.messages.at(-1).userMessage,'Prompt next-batch');assert.equal(b.messages.at(-1).promptAttachment.text,'New video instructions');await finish('next-batch',first.tabId);
 });
 
 test('three Temporary Chat sessions and the single regular Work/SRT tab stay isolated',async()=>{
@@ -266,7 +266,7 @@ test('three Temporary Chat sessions and the single regular Work/SRT tab stay iso
  for(let i=1;i<=3;i++)await b.request('temporary-'+i,'worker-'+i,options);
  await b.request('srt','srt-worker');await until(()=>b.messages.length===4);
  const text=b.messages.filter(m=>m.textSessionId),srt=b.messages.find(m=>m.requestId==='srt');
- assert.equal(text.length,3);assert.ok(text.every(m=>m.composerMode==='chat'&&m.temporary===true&&!m.attachment));
+ assert.equal(text.length,3);assert.ok(text.every(m=>m.composerMode==='chat'&&m.temporary===true&&!m.attachment&&m.promptAttachment?.text==='Image instructions'));
  assert.equal(srt.composerMode,'work');assert.equal(srt.temporary,false);assert.ok(srt.attachment);assert.ok(!text.some(m=>m.id===srt.id));
  for(const m of text){const tab=b.tabs.get(m.id);tab.url='https://chatgpt.com/?temporary-chat=true';const proof={id:options.textSessionId,proof:m.requestId,url:tab.url};b.proofs.set(m.id,proof);b.pending.get(m.requestId)({ok:true,content:'Image prompt',conversation_url:tab.url,textSessionProof:proof});}
  await until(()=>b.saved.workers.filter(w=>w.kind==='text').every(w=>w.state==='AWAITING_SAVE'));

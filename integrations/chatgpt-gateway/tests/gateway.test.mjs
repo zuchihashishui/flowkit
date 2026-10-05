@@ -206,7 +206,7 @@ test('cleanup waits for save ACK, blocks new text reservations and preserves clo
 });
 
 test('project GPT routing verifies capability, ensures workers and forwards one text message',async()=>{
- const s=await setup(undefined,['project-urls-v1','temporary-text-session-v1','text-worker-recovery-v1']);const received=[];
+ const s=await setup(undefined,['project-urls-v1','temporary-text-session-v1','txt-prompt-attachment-v1','text-worker-recovery-v1']);const received=[];
  s.ws.on('message',raw=>{const m=JSON.parse(raw);received.push(m);
   if(m.type==='chat')s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:true,content:'A visual prompt'}));
   else if(m.controlId)s.ws.send(JSON.stringify({type:'controlResult',controlId:m.controlId,ok:true}));
@@ -303,7 +303,7 @@ test('cancel SRT targets its job ID, finishes active HTTP request and releases o
 });
 
 test('TXT session metadata is validated and forwarded separately from SRT text',async()=>{
- const s=await setup(undefined,['project-urls-v1','temporary-text-session-v1']),messages=[];
+ const s=await setup(undefined,['project-urls-v1','temporary-text-session-v1','txt-prompt-attachment-v1']),messages=[];
  s.ws.on('message',raw=>{const m=JSON.parse(raw);if(m.type==='chat'){messages.push(m);s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:true,content:'Scene prompt'}));}else if(m.controlId)s.ws.send(JSON.stringify({type:'controlResult',controlId:m.controlId,ok:true}));});
  const payload={messages:[{role:'user',content:'日本語のSRT行'}],pageUrl:'https://chatgpt.com/',temporary:true,composerMode:'chat',textSessionId:'11111111-1111-1111-1111-111111111111',promptTemplate:'My image instructions'};
  try{
@@ -316,7 +316,7 @@ test('TXT session metadata is validated and forwarded separately from SRT text',
 });
 
 test('text preparation releases only failed reservations after recovery ACK and retains pending saves',async()=>{
- const s=await setup(undefined,['text-worker-recovery-v1']),messages=[];let failPrepare=true;
+ const s=await setup(undefined,['text-worker-recovery-v1','txt-prompt-attachment-v1']),messages=[];let failPrepare=true;
  s.ws.on('message',raw=>{const m=JSON.parse(raw);messages.push(m);
   if(m.type==='chat')s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:m.messages[0].content==='saved',content:'answer',error:'Old failure'}));
   if(m.type==='ensureTextWorkers'){
@@ -334,7 +334,7 @@ test('text preparation releases only failed reservations after recovery ACK and 
 });
 
 test('text preparation does not clear an account rate limit',async()=>{
- const s=await setup(undefined,['text-worker-recovery-v1']);let controls=0;
+ const s=await setup(undefined,['text-worker-recovery-v1','txt-prompt-attachment-v1']);let controls=0;
  s.ws.on('message',raw=>{const m=JSON.parse(raw);if(m.type==='chat')s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:false,error:'Limit',code:'RATE_LIMIT'}));else controls++;});
  try{await s.request();assert.equal((await s.post('/workers/ensure',{})).status,409);assert.equal((await s.health()).needsReview,true);assert.equal(controls,0);}finally{await s.close();}
 });

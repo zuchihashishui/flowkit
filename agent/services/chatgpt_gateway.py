@@ -170,7 +170,7 @@ async def complete(prompt, model=None, validate=None, job_id=None, *, attachment
             if job_id:
                 c.execute('UPDATE chat_queue SET audit_id=? WHERE id=?',(rid,job_id))
         audited = True
-        async with httpx.AsyncClient(trust_env=False, timeout=timeout+(480 if download_srt else 240 if attachment is not None else 90)) as client:
+        async with httpx.AsyncClient(trust_env=False, timeout=timeout+(480 if download_srt else 240 if attachment is not None or text_session_id else 90)) as client:
             response = await client.post(URL+'/v1/chat/completions',json={
                 'messages':[{'role':'user','content':prompt}], 'model':model or 'auto',
                 'timeout':timeout*1000,'workers':config['workers'],'temporary':temporary, **extra})
