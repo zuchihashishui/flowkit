@@ -16,7 +16,7 @@ test('SRT + TXT import, row filters, errors, retry and selection survive refresh
    data.segments=Array.from({length:200},(_,i)=>({id:'s'+(i+1),ordinal:i+1,start_ms:i*4000,end_ms:(i+1)*4000,text:'日本語 '+(i+1)+'\nNext line',concepts:[],active_concept:null,ready:false,media_jobs:[]}));
    return structuredClone(data);
   }
-  if(route.endsWith('/generate-concepts'))return {ids:body.segment_ids,skipped:[]};
+  if(route.endsWith('/generate-concepts'))return {ids:body.segment_ids,skipped:[],batch_count:Math.ceil(body.segment_ids.length/5)};
   if(route.endsWith('/retry-failed')){for(const id of body.segment_ids)data.segments.find(s=>s.id===id).job={state:'QUEUED'};return {ids:body.segment_ids,skipped:[],resumed:[]};}
   throw Error('Unexpected route '+route);
  };
@@ -31,11 +31,14 @@ test('SRT + TXT import, row filters, errors, retry and selection survive refresh
   const input=calls.find(c=>c.route.endsWith('/prompt-input'));assert.equal(input.body.srt_name,'scenes.srt');assert.equal(input.body.prompt_name,'prompt.txt');
   assert.equal($('sb-rows').children.length,200);assert.equal(w.storyboard.count(),200);assert.match($('sb-summary').textContent,/Not started: 200/);
   await $('sb-create-concepts').onclick();assert.equal(calls.find(c=>c.route.endsWith('/generate-concepts')).body.segment_ids.length,200);
+  assert.ok(notices.some(n=>/200 row\(s\) queued in 40 batch/.test(n)));
   data.segments[0].ready=true;data.segments[0].active_concept={id:'c1',version:1,image_prompt:'A saved image',video_prompt:''};data.segments[0].job={state:'COMPLETED'};
   data.segments[1].job={state:'FAILED',error:'Rate limit <script>unsafe()</script>'};data.segments[2].job={state:'RUNNING'};data.segments[3].job={state:'QUEUED'};
+  for(const i of [1,2,3])data.segments[i].job.text_batch_id='batch-1';
   await $('sb-refresh').onclick();assert.match($('sb-summary').textContent,/Completed: 1/);assert.match($('sb-summary').textContent,/Error \/ review: 1/);
   assert.equal($('sb-worker-rows').children.length,3);assert.match($('sb-worker-rows').textContent,/Uploading prompt TXT/);assert.match($('sb-worker-rows').textContent,/Waiting for another tab/);assert.match($('sb-worker-rows').textContent,/Upload failed/);assert.equal($('sb-worker-rows').querySelector('script'),null);
   $('sb-filter').value='error';$('sb-filter').onchange();assert.equal($('sb-rows').children.length,1);assert.equal($('sb-rows').firstChild.dataset.rowId,'s2');assert.equal($('sb-rows').querySelector('script'),null);
+  assert.match($('sb-rows').textContent,/Batch: 002, 003, 004/);
   $('sb-select-visible').click();assert.equal(w.storyboard.count(),1);await $('sb-refresh').onclick();assert.equal(w.storyboard.count(),1);
   const retry=[...$('sb-rows').querySelectorAll('button')].find(b=>b.textContent==='Retry row');await retry.onclick();
   const call=calls.find(c=>c.route.endsWith('/retry-failed'));assert.deepEqual(Array.from(call.body.segment_ids),['s2']);assert.equal(data.segments[0].active_concept.image_prompt,'A saved image');

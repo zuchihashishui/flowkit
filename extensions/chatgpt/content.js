@@ -274,7 +274,8 @@
   // Only live page memory: reload/new chat must receive the TXT again.
   let textSession = null;
   function currentTextSessionProof() {
-    if(!textSession||!temporaryEnabled()||window.location.href!==textSession.url)return null;
+    if(!textSession||temporaryEnabled()!==textSession.temporary||window.location.href!==textSession.url)return null;
+    const mode=composerButton(textSession.mode);if(mode&&mode.getAttribute('aria-pressed')!=='true')return null;
     const latest=assistantMessages().at(-1);
     if(!latest||messageKey(latest)!==textSession.lastAnswer||assistantText(latest)!==textSession.answerText)return null;
     return {id:textSession.id,proof:textSession.proof,url:textSession.url};
@@ -510,17 +511,17 @@
   }
 
   let pendingSrtLink = null;
-  function findSrtLink(message) {
+  function findSrtLink(message, zip=false) {
     const links = [...message.querySelectorAll('a[href], button[aria-label], [role="link"], [role="button"][data-file-reference="true"], [role="button"][aria-label^="Download "]')].filter(el => {
       if (!visible(el) || el.disabled || el.closest('[aria-busy="true"], [aria-disabled="true"], [data-loading="true"]')) return false;
       const label = [el.textContent, el.getAttribute('data-markdown-copy-text'), el.getAttribute('download'), el.getAttribute('title'), el.getAttribute('aria-label'), el.getAttribute('href')].join(' ');
-      return /\.srt(?:$|[\s?#"'<>])/i.test(label);
+      return (zip?/\.zip(?:$|[\s?#"'<>])/i:/\.srt(?:$|[\s?#"'<>])/i).test(label);
     });
-    if (links.length > 1 && new Set(links.map(el=>el.getAttribute('href')||el.textContent)).size > 1) throw Error('More than one SRT file was returned. Select the correct file in ChatGPT; no file was downloaded.');
+    if (links.length > 1 && new Set(links.map(el=>el.getAttribute('href')||el.textContent)).size > 1) throw Error('More than one '+(zip?'ZIP':'SRT')+' file was returned. Select the correct file in ChatGPT; no file was downloaded.');
     return links[0] || null;
   }
 
-  async function waitForNewResponse(beforeMessages, timeout = MAX_WAIT, srtOutput = false, downloadSrt = false) {
+  async function waitForNewResponse(beforeMessages, timeout = MAX_WAIT, srtOutput = false, downloadSrt = false, downloadPromptZip = false) {
     let lastText = "";
     let stableCount = 0;
     let lastKey = null;
@@ -539,8 +540,8 @@
       // Work can return an interactive file span without a final-message marker
       // or response toolbar. A ready file is evidence only for file-output jobs;
       // generation must still stop and the response must pass the stable polls.
-      const readyFile=downloadSrt && !phase ? findSrtLink(latest) : null;
-      const evidence=completionEvidence(latest) || (readyFile?.matches('[data-file-reference="true"][aria-busy="false"]') ? 'srt-file-ready' : '');
+      const readyFile=(downloadSrt||downloadPromptZip) && !phase ? findSrtLink(latest,downloadPromptZip) : null;
+      const evidence=completionEvidence(latest) || (readyFile?.matches('[data-file-reference="true"][aria-busy="false"]') ? (downloadPromptZip?'zip-file-ready':'srt-file-ready') : '');
       if(text!==lastText || key!==lastKey)lastChange=Date.now();
       progress(phase || (evidence?'VERIFYING_COMPLETION':'WAITING_COMPLETION'),{chars:text.length,lastChange,completionEvidence:evidence});
       if (phase || !text || !evidence) {
@@ -548,13 +549,13 @@
       } else if (text !== lastText || key !== lastKey) {
         stableCount = 0;
       } else if (++stableCount >= 4) {
-        if(downloadSrt) {
-          const link=findSrtLink(latest);
+        if(downloadSrt||downloadPromptZip) {
+          const link=findSrtLink(latest,downloadPromptZip);
           if(link){
-            pendingSrtLink={element:link,requestId:activeRequest};
-            return {content:text,hasSrtFile:true};
+            pendingSrtLink={element:link,requestId:activeRequest,zip:downloadPromptZip};
+            return {content:text,hasSrtFile:downloadSrt,hasPromptZip:downloadPromptZip};
           }
-          throw Error('ChatGPT finished without a downloadable .srt link. The response remains in the tab. No new prompt was sent.');
+          throw Error('ChatGPT finished without a downloadable '+(downloadPromptZip?'.zip':'.srt')+' link. The response remains in the tab. No new prompt was sent.');
         }
         if(srtOutput) {
           const blocks=[...latest.querySelectorAll('pre code')].filter(el=>!el.closest('[hidden], [aria-hidden="true"]'));
@@ -584,7 +585,8 @@
     activeRequest=msg.requestId || 'local-request';activePhase='PREPARING';submitted=false;
     try {
       if (isStreaming()) throw new Error("ChatGPT is already generating. Wait before submitting.");
-      if(msg.textSessionId&&(msg.temporary!==true||msg.composerMode!=='chat'||msg.customGPT||msg.attachment))throw Error('Text to Prompt requires Chat / Temporary ON. No text was sent.');
+      if(msg.downloadPromptZip&&(!msg.textSessionId||msg.composerMode!=='work'||msg.temporary!==false))throw Error('Prompt ZIP batches require Work / Temporary OFF.');
+      if(msg.textSessionId&&((msg.downloadPromptZip?(msg.temporary!==false||msg.composerMode!=='work'):(msg.temporary!==true||msg.composerMode!=='chat'))||msg.customGPT||msg.attachment))throw Error(msg.downloadPromptZip?'Text to Prompt ZIP requires Work / Temporary OFF. No text was sent.':'Text to Prompt requires Chat / Temporary ON. No text was sent.');
 
       if(msg.promptAttachment&&(!msg.textSessionId||msg.continueConversation||msg.attachment))throw Error('Prompt TXT is allowed only on the first Text to Prompt turn. No prompt was sent.');
 
@@ -599,7 +601,7 @@
       if(continuing&&(msg.newConversation!==false||window.location.href!==msg.conversationUrl||!assistantMessages().length))throw Error('The saved conversation is no longer available. No text was sent.');
       if(continuing&&msg.textSessionId){
         const proof=currentTextSessionProof();
-        if(proof?.id!==msg.textSessionId||proof?.proof!==msg.textSessionProof)throw Error('Temporary conversation memory changed. No text was sent.');
+        if(proof?.id!==msg.textSessionId||proof?.proof!==msg.textSessionProof)throw Error((msg.downloadPromptZip?'Work':'Temporary')+' conversation memory changed. No text was sent.');
       }else if(continuing&&msg.temporary!==false)throw Error('Temporary continuation requires verified page memory. No text was sent.');
       if(!continuing)textSession=null;
       if(customGPT){
@@ -632,7 +634,7 @@
       if (msg.attachment) {progress('ATTACHING_FILE');await attachFile(msg.attachment);}
       if (msg.temporary && !temporaryEnabled()) throw new Error("Temporary Chat is no longer confirmed. No prompt was sent.");
       if (msg.temporary === false && temporaryEnabled()) throw new Error('Temporary Chat became active during setup. No prompt was sent.');
-      if(continuing&&msg.textSessionId&&currentTextSessionProof()?.proof!==msg.textSessionProof)throw Error('Temporary conversation changed before sending. No text was sent.');
+      if(continuing&&msg.textSessionId&&currentTextSessionProof()?.proof!==msg.textSessionProof)throw Error((msg.downloadPromptZip?'Work':'Temporary')+' conversation changed before sending. No text was sent.');
       if(!customGPT)checkComposerStillSelected(composerMode);
       checkModelSelection(selectedModel);
       progress('SENDING');
@@ -641,7 +643,8 @@
       // A failed progress notification must not discard an already sent answer.
       try{await chrome.runtime.sendMessage?.({type:'requestSubmitted',requestId:msg.requestId});}catch{}
 
-      const response = await waitForNewResponse(beforeMessages, msg.timeout, !!msg.attachment, msg.downloadSrt===true);
+      const response = await waitForNewResponse(beforeMessages, msg.timeout, !!msg.attachment, msg.downloadSrt===true, msg.downloadPromptZip===true);
+      let nativeDownload;
       if(response?.hasSrtFile){
         progress('DOWNLOADING_SRT');
         const saved=await chrome.runtime.sendMessage({type:'downloadSrt',requestId:msg.requestId});
@@ -649,14 +652,21 @@
         return {ok:true,content:response.content,nativeDownload:saved.nativeDownload,conversation_url:window.location.href};
       }
 
+      if(response?.hasPromptZip){
+        progress('DOWNLOADING_ZIP');
+        const saved=await chrome.runtime.sendMessage({type:'downloadPromptZip',requestId:msg.requestId});
+        if(!saved?.ok)throw Error(saved?.error||'ZIP download failed. The file remains in the Work tab.');
+        nativeDownload=saved.nativeDownload;
+      }
+
       if(msg.textSessionId){
         // Completion was verified above. Failure to reuse the conversation
         // must not discard this answer; the next turn can reattach the TXT.
         textSession=null;
         const latest=assistantMessages().filter(el=>!beforeMessages.has(messageKey(el))).at(-1);
-        if(latest&&temporaryEnabled())textSession={id:msg.textSessionId,proof:msg.requestId,url:window.location.href,lastAnswer:messageKey(latest),answerText:assistantText(latest)};
+        if(latest&&temporaryEnabled()===(msg.temporary===true))textSession={id:msg.textSessionId,proof:msg.requestId,url:window.location.href,lastAnswer:messageKey(latest),answerText:assistantText(latest),temporary:msg.temporary===true,mode:composerMode};
       }
-      return { ok: true, content: response, conversation_url: window.location.href, textSessionProof:currentTextSessionProof() };
+      return { ok: true, content: response?.hasPromptZip?response.content:response, nativeDownload, conversation_url: window.location.href, textSessionProof:currentTextSessionProof() };
     } catch (err) {
       return { ok: false, error: err.message, code: err.code,phase:activePhase,submitted,partialResponse:err.partialResponse };
     } finally { activeRequest=null; }
@@ -671,10 +681,10 @@
       if(stop)stop.click();
       sendResponse({ok:true});return;
     }
-    if(msg.type==='clickSrtDownload'){
+    if(msg.type==='clickSrtDownload'||msg.type==='clickPromptZipDownload'){
       const pending=pendingSrtLink;
-      if(!pending||pending.requestId!==msg.requestId||activeRequest!==msg.requestId||!pending.element.isConnected){
-        sendResponse({ok:false,error:'The completed SRT file link is no longer available.'});return;
+      if(!pending||!!pending.zip!==(msg.type==='clickPromptZipDownload')||pending.requestId!==msg.requestId||activeRequest!==msg.requestId||!pending.element.isConnected){
+        sendResponse({ok:false,error:'The completed output file link is no longer available.'});return;
       }
       pendingSrtLink=null;
       pending.element.click();sendResponse({ok:true});return;
@@ -694,7 +704,7 @@
       sendResponse({ok:true, streaming:isStreaming(), temporary:temporaryEnabled()}); return;
     }
     if (msg.type === "ping") {
-      sendResponse({ ok: true, submissionAck:true, inputReady:!!findInput(), url: window.location.href, textSessionProof:currentTextSessionProof() });
+      sendResponse({ ok: true, submissionAck:true, promptZip:true, inputReady:!!findInput(), url: window.location.href, textSessionProof:currentTextSessionProof() });
       return;
     }
 

@@ -1,3 +1,7 @@
+## Studio v0.7.70 / ChatGPT Bridge 1.12.0
+
+Text to Prompt now uses **one Work tab, Temporary OFF**. Each message sends up to five original numbered SRT rows. The first message attaches the prompt TXT; later groups reuse the same conversation. Studio downloads each returned ZIP, validates its numbered UTF-8 TXT files and saves every row before allowing the next group. ZIP and TXT copies are retained under `output/text_prompts/<download-id>/`. See [release notes](docs/releases/0.7.70.md).
+
 ## Studio v0.7.69
 
 Opening the SRT menu or selecting a transcript for SRT now only refreshes saved data. ChatGPT opens when you click Create SRT or explicitly choose Open / select SRT window. ChatGPT Bridge remains 1.11.5. See [release notes](docs/releases/0.7.69.md).

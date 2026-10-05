@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 from agent.db.schema import get_db, _db_lock
 from agent.config import OUTPUT_DIR
-from agent.services.concept_writer import Concept, write_concept
+from agent.services.concept_writer import Concept, write_concept, write_concept_batch, TEXT_BATCH_SIZE
 
 router = APIRouter(prefix='/storyboard', tags=['storyboard'])
 AUDIO_DIR = OUTPUT_DIR / 'script_audio'
@@ -219,7 +219,9 @@ async def read_document(video_id: str):
     concepts = await query('SELECT c.* FROM scene_concept c JOIN script_segment s ON s.id=c.segment_id WHERE s.document_id=? ORDER BY c.version DESC', (doc['id'],))
     jobs = await query('SELECT j.id,j.segment_id,j.state,j.error,j.created,j.payload FROM concept_job j JOIN script_segment s ON s.id=j.segment_id WHERE s.document_id=? ORDER BY j.created DESC', (doc['id'],))
     for job in jobs:
-        job['prompt_kind'] = json.loads(job.pop('payload')).get('prompt_kind', 'both')
+        payload = json.loads(job.pop('payload'))
+        job['prompt_kind'] = payload.get('prompt_kind', 'both')
+        job['text_batch_id'] = payload.get('text_batch_id')
     from agent.api.desktop import rows
     media = rows()
     warnings = []
@@ -349,7 +351,7 @@ async def generate_concepts(video_id: str, body: GenerateBody):
             await ensure_project_workers()
         except ValueError as error:
             raise HTTPException(503,str(error)) from error
-    ids, skipped = [], []
+    ids, skipped, batches = [], [], []
     session_id = uid()
     async with transaction() as db:
         doc = await one('SELECT * FROM script_document WHERE video_id=?', (video_id,))
@@ -368,17 +370,20 @@ async def generate_concepts(video_id: str, body: GenerateBody):
             if pending or (target_ready and not body.regenerate):
                 skipped.append(sid)
                 continue
-            payload = {**body.model_dump(exclude={'segment_ids','regenerate'}), 'text': s['text'], 'start_ms': s['start_ms'], 'end_ms': s['end_ms'], 'segment_revision': s['revision'], 'document_revision': doc['revision'], 'active_concept_id': s['active_concept_id'], 'visual_style': doc['visual_style'], 'script_context': doc['script_text'][:8000], 'previous_text': segments[i-1]['text'][:1000] if i else '', 'next_text': segments[i+1]['text'][:1000] if i+1<len(segments) else ''}
+            payload = {**body.model_dump(exclude={'segment_ids','regenerate'}), 'ordinal': s['ordinal'], 'text': s['text'], 'start_ms': s['start_ms'], 'end_ms': s['end_ms'], 'segment_revision': s['revision'], 'document_revision': doc['revision'], 'active_concept_id': s['active_concept_id'], 'visual_style': doc['visual_style'], 'script_context': doc['script_text'][:8000], 'previous_text': segments[i-1]['text'][:1000] if i else '', 'next_text': segments[i+1]['text'][:1000] if i+1<len(segments) else ''}
             if project_settings is not None:
                 payload['project_settings']=project_settings
                 payload['retained_prompt']=active[0]['video_prompt' if body.prompt_kind=='image' else 'image_prompt'] if ready else ''
                 if prompt_template.strip():
                     payload['prompt_template'] = prompt_template
                     payload['text_session_id'] = session_id
+                    if len(ids) % TEXT_BATCH_SIZE == 0:
+                        batches.append(uid())
+                    payload['text_batch_id'] = batches[-1]
             jid = uid()
             await db.execute("INSERT INTO concept_job(id,segment_id,state,payload,created) VALUES(?,?,'QUEUED',?,?)", (jid, sid, json.dumps(payload), time.time()))
             ids.append(jid)
-    return {'ids': ids, 'skipped': skipped}
+    return {'ids': ids, 'skipped': skipped, 'batch_count': len(batches), 'batch_size': TEXT_BATCH_SIZE if batches else 1}
 
 
 @router.post('/videos/{video_id}/cancel-concepts')
@@ -389,6 +394,9 @@ async def cancel_concepts(video_id: str):
 
 
 async def process_concept(job):
+    batch = json.loads(job['payload']).get('text_batch_id')
+    if batch:
+        return await process_concept_batch(batch)
     async with transaction() as db:
         if not (await db.execute("UPDATE concept_job SET state='RUNNING' WHERE id=? AND state='QUEUED'", (job['id'],))).rowcount:
             return
@@ -414,9 +422,43 @@ async def process_concept(job):
             await db.execute("UPDATE concept_job SET state=?,error=? WHERE id=?", (state, str(exc)[:1500], job['id']))
 
 
+async def process_concept_batch(batch_id):
+    # Claim the complete queued group atomically. Each row keeps its own job,
+    # revision snapshot, history and status; only the remote request is shared.
+    async with transaction() as db:
+        jobs = await query("SELECT * FROM concept_job WHERE state='QUEUED' AND json_extract(payload,'$.text_batch_id')=? ORDER BY created", (batch_id,))
+        if not jobs:
+            return
+        for job in jobs:
+            await db.execute("UPDATE concept_job SET state='RUNNING' WHERE id=?", (job['id'],))
+    payloads = [json.loads(job['payload']) for job in jobs]
+    async def save_batch(concepts):
+        if set(concepts) != {p['ordinal'] for p in payloads}:
+            raise ValueError('The batch did not return every requested row. No prompts were assigned.')
+        async with transaction() as db:
+            for job, payload in zip(jobs, payloads):
+                segment = await one('SELECT * FROM script_segment WHERE id=?', (job['segment_id'],))
+                doc = await one('SELECT * FROM script_document WHERE id=?', (segment['document_id'],))
+                fresh = segment['revision'] == payload['segment_revision'] and doc['revision'] == payload['document_revision'] and segment['active_concept_id'] == payload['active_concept_id']
+                cid = await store_concept(db, segment, doc, concepts[payload['ordinal']], payload['provider'], payload['text'], payload['segment_revision'], payload['document_revision'], fresh)
+                await db.execute('UPDATE concept_job SET state=?,concept_id=?,error=? WHERE id=?', ('COMPLETED' if fresh else 'STALE', cid, None if fresh else 'Source or selected concept changed while AI was running. Result kept in history.', job['id']))
+    try:
+        await write_concept_batch(payloads, save_result=save_batch)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        from agent.services.chatgpt_gateway import GatewayReviewRequired, GatewayBusy
+        state = 'QUEUED' if isinstance(exc, GatewayBusy) else 'NEEDS_REVIEW' if isinstance(exc, GatewayReviewRequired) else 'FAILED'
+        error = None if state == 'QUEUED' else ('Rows ' + ', '.join(f"{p['ordinal']:03d}" for p in payloads) + ': ' + str(exc))[:1500]
+        async with transaction() as db:
+            for job in jobs:
+                await db.execute('UPDATE concept_job SET state=?,error=? WHERE id=?', (state, error, job['id']))
+
+
 async def run():
     async with transaction() as db:
         await db.execute("UPDATE concept_job SET state='NEEDS_REVIEW',error='App stopped during AI generation. Check before submitting again.' WHERE state='RUNNING'")
+        await db.execute("UPDATE concept_job SET state='NEEDS_REVIEW',error='Queued by an older version. Retry selected rows to use one Work tab and ZIP batches.' WHERE state='QUEUED' AND json_extract(payload,'$.provider')='chatgpt-web' AND json_extract(payload,'$.text_session_id') IS NOT NULL AND json_extract(payload,'$.text_batch_id') IS NULL")
     tasks = {}
     try:
         while True:
@@ -429,17 +471,19 @@ async def run():
             slots = info.get('availableSlots',0)
             pending = await query("SELECT * FROM concept_job WHERE state='QUEUED' ORDER BY created LIMIT 200")
             for job in pending:
-                if len(tasks) >= 3:
+                if tasks:
                     break
-                if job['id'] in tasks:
+                payload = json.loads(job['payload'])
+                task_id = payload.get('text_batch_id') or job['id']
+                if task_id in tasks:
                     continue
-                if json.loads(job['payload']).get('provider') == 'chatgpt-web':
+                if payload.get('provider') == 'chatgpt-web':
                     if slots <= 0:
                         continue
                     slots -= 1
                 elif tasks:
                     continue
-                tasks[job['id']] = asyncio.create_task(process_concept(job))
+                tasks[task_id] = asyncio.create_task(process_concept(job))
             await asyncio.sleep(1)
     finally:
         for task in tasks.values():

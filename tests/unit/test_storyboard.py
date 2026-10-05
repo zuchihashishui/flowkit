@@ -18,6 +18,8 @@ CONCEPT = Concept(title='Paper boat', description='A paper boat illustrates the 
 
 @pytest_asyncio.fixture
 async def document(tmp_path, monkeypatch):
+    # pytest gives each test a fresh event loop; contended locks bind to it.
+    monkeypatch.setattr(s, '_db_lock', asyncio.Lock())
     monkeypatch.setattr(schema, 'DB_PATH', tmp_path/'app.db')
     monkeypatch.setattr(desktop, 'STORE', tmp_path/'jobs.db')
     monkeypatch.setattr(s, 'AUDIO_DIR', tmp_path/'audio')
@@ -316,7 +318,7 @@ async def test_separate_gpt_prompts_keep_image_media_and_snapshot_project_urls(d
 
 
 @pytest.mark.asyncio
-async def test_text_prompt_import_200_cues_and_frozen_session(document, monkeypatch):
+async def test_text_prompt_import_200_cues_and_frozen_session(document, monkeypatch, tmp_path):
     from agent.services import chatgpt_gateway as gateway
     source = await s.read_document(document)
     video = await crud.create_video(project_id=source['video']['project_id'], title='200 SRT rows')
@@ -337,14 +339,32 @@ async def test_text_prompt_import_200_cues_and_frozen_session(document, monkeypa
     assert [job['segment_id'] for job in jobs] == ids
     payloads = [json.loads(job['payload']) for job in jobs]
     assert len({p['text_session_id'] for p in payloads}) == 1
+    assert result['batch_count'] == 40
+    assert len({p['text_batch_id'] for p in payloads}) == 40
+    assert [p['ordinal'] for p in payloads] == list(range(1, 201))
     assert all(p['prompt_template'] == imported['document']['prompt_template'] for p in payloads)
     assert payloads[199]['text'] == imported['segments'][199]['text']
     # Completing in a different order must still store each result on its own row.
-    async def write(payload):
-        return Concept(title='Image', description='Scene', image_prompt='Result: '+payload['text'])
-    monkeypatch.setattr(s, 'write_concept', write)
-    for start in range(0,200,3):
-        await asyncio.gather(*(s.process_concept(job) for job in reversed(jobs[start:start+3])))
+    calls=[]
+    async def complete(message, model, validate_payload, **options):
+        calls.append((message, options))
+        rows = [int(line.split(' ',1)[0]) for line in message.split('\n\n')]
+        await asyncio.sleep(0)
+        import zipfile
+        token=s.uid();path=tmp_path/'flowkit-chatgpt'/token/'prompts.zip';path.parent.mkdir(parents=True)
+        with zipfile.ZipFile(path,'w') as archive:
+            for row in reversed(rows):archive.writestr(f'{row}.txt','Result: '+imported['segments'][row-1]['text'])
+        return await validate_payload({'nativeDownload':{'path':str(path),'token':token}})
+    from agent.services import prompt_batch
+    monkeypatch.setattr(prompt_batch,'ARCHIVE_DIR',tmp_path/'saved')
+    monkeypatch.setattr(gateway, 'complete', complete)
+    for start in range(0,200,15):
+        await asyncio.gather(*(s.process_concept(jobs[i]) for i in reversed(range(start,min(start+15,200),5))))
+    assert len(calls) == 40
+    assert all(len(message.split('\n\n')) == 5 for message,_ in calls)
+    assert any(message.startswith('001 日本語 1 Second line.\n\n002 ') for message,_ in calls)
+    assert all(options['prompt_template'].startswith(imported['document']['prompt_template']) and 'image_prompts.zip' in options['prompt_template'] for _,options in calls)
+    assert all(options['temporary'] is False and options['composer_mode']=='work' and options['download_prompt_zip'] is True for _,options in calls)
     finished = await s.read_document(video['id'])
     assert all(row['job']['state']=='COMPLETED' and row['active_concept']['image_prompt']=='Result: '+row['text'] for row in finished['segments'])
     assert not (await s.generate_concepts(video['id'], s.GenerateBody(segment_ids=ids, provider='chatgpt-web', prompt_kind='image')))['ids']
@@ -385,4 +405,95 @@ async def test_retry_failed_regeneration_is_target_specific_and_keeps_saved_resu
     assert other['ids']==[]
     retry=await s.retry_failed(document,s.RetryBody(segment_ids=[sid],provider='codex',prompt_kind='image',kind='concept',reviewed=True))
     assert len(retry['ids'])==1
+    assert (await s.read_document(document))['segments'][0]['active_concept']['image_prompt']==CONCEPT.image_prompt
+
+@pytest.mark.asyncio
+async def test_batch_scheduler_saves_zip_group_before_starting_next_group(document, monkeypatch):
+    from agent.services import chatgpt_gateway as gateway
+    source = await s.read_document(document)
+    video = await crud.create_video(project_id=source['video']['project_id'], title='13 rows')
+    rows = [dict(start_ms=i*4000, end_ms=(i+1)*4000, text=f'Row {i+1}') for i in range(13)]
+    await s.save_document(video['id'], s.DocumentBody(prompt_template='Visual instructions'))
+    await s.import_segments(video['id'], s.ImportBody(format='json', content=json.dumps(rows)))
+    data = await s.read_document(video['id'])
+    monkeypatch.setattr(gateway, 'status', AsyncMock(return_value={'available':True,'extensionConnected':True,'availableSlots':3}))
+    monkeypatch.setattr(gateway, 'ensure_project_workers', AsyncMock())
+    result = await s.generate_concepts(video['id'], s.GenerateBody(segment_ids=[r['id'] for r in data['segments']],provider='chatgpt-web',prompt_kind='image'))
+    assert result['batch_count'] == 3
+    release = asyncio.Event()
+    called = []
+    async def write(payloads, save_result):
+        called.append([p['ordinal'] for p in payloads])
+        await release.wait()
+        await save_result({p['ordinal']:Concept(title='Scene',description=p['text'],image_prompt='Result '+str(p['ordinal'])) for p in payloads})
+    monkeypatch.setattr(s, 'write_concept_batch', write)
+    runner = asyncio.create_task(s.run())
+    try:
+        for _ in range(100):
+            if len(called) == 1:break
+            await asyncio.sleep(.01)
+        await asyncio.sleep(.05)
+        assert called == [list(range(1,6))]
+        assert len(await s.query("SELECT id FROM concept_job WHERE state='RUNNING'")) == 5
+        first = data['segments'][0]
+        await s.edit_segment(first['id'],s.SegmentBody(start_ms=0,end_ms=4000,text='Changed while running'))
+        release.set()
+        for _ in range(400):
+            if not await s.query("SELECT id FROM concept_job WHERE state IN ('QUEUED','RUNNING')"):break
+            await asyncio.sleep(.01)
+        final = await s.read_document(video['id'])
+        assert final['segments'][0]['job']['state'] == 'STALE'
+        assert final['segments'][0]['active_concept_id'] is None
+        assert final['segments'][0]['concepts'][0]['image_prompt'] == 'Result 1'
+        assert all(r['job']['state']=='COMPLETED' and r['active_concept']['image_prompt']=='Result '+str(r['ordinal']) for r in final['segments'][1:])
+        assert len(called) == 3
+    finally:
+        release.set();runner.cancel()
+        with pytest.raises(asyncio.CancelledError):await runner
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['incomplete','busy','review','cancel'])
+async def test_batch_failure_and_cancel_keep_all_rows_consistent(document, monkeypatch, failure):
+    from agent.services import chatgpt_gateway as gateway
+    await s.save_document(document,s.DocumentBody(prompt_template='Instructions'))
+    data = await s.read_document(document)
+    monkeypatch.setattr(gateway,'status',AsyncMock(return_value={'available':True,'extensionConnected':True}))
+    monkeypatch.setattr(gateway,'ensure_project_workers',AsyncMock())
+    queued = await s.generate_concepts(document,s.GenerateBody(segment_ids=[r['id'] for r in data['segments']],provider='chatgpt-web',prompt_kind='image'))
+    async def incomplete(payloads,save_result):await save_result({1:CONCEPT})
+    writer = AsyncMock(side_effect=incomplete)
+    if failure=='busy':writer.side_effect=gateway.GatewayBusy('Busy')
+    if failure=='review':writer.side_effect=gateway.GatewayReviewRequired('Ambiguous response')
+    monkeypatch.setattr(s,'write_concept_batch',writer)
+    if failure=='cancel':await s.cancel_concepts(document)
+    job = await s.one('SELECT * FROM concept_job WHERE id=?',(queued['ids'][0],))
+    await asyncio.gather(s.process_concept(job),s.process_concept(job))
+    final = await s.read_document(document)
+    state = dict(incomplete='FAILED',busy='QUEUED',review='NEEDS_REVIEW',cancel='CANCELLED')[failure]
+    assert all(r['job']['state']==state and not r['concepts'] for r in final['segments'])
+    if failure not in {'busy','cancel'}:assert writer.await_count==1
+    if failure=='cancel':writer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_skips_finished_rows_and_retry_keeps_original_row_number(document, monkeypatch):
+    from agent.services import chatgpt_gateway as gateway
+    await s.save_document(document,s.DocumentBody(prompt_template='Instructions'))
+    data = await s.read_document(document)
+    await s.save_concept(data['segments'][0]['id'],CONCEPT)
+    monkeypatch.setattr(gateway,'status',AsyncMock(return_value={'available':True,'extensionConnected':True}))
+    monkeypatch.setattr(gateway,'ensure_project_workers',AsyncMock())
+    body=s.GenerateBody(segment_ids=[r['id'] for r in data['segments']],provider='chatgpt-web',prompt_kind='image')
+    queued=await s.generate_concepts(document,body)
+    assert len(queued['ids'])==queued['batch_count']==1
+    job=await s.one('SELECT * FROM concept_job WHERE id=?',(queued['ids'][0],))
+    assert json.loads(job['payload'])['ordinal']==2
+    monkeypatch.setattr(s,'write_concept_batch',AsyncMock(side_effect=ValueError('Incomplete reply')))
+    await s.process_concept(job)
+    retry=await s.retry_failed(document,s.RetryBody(segment_ids=[data['segments'][1]['id']],kind='concept',reviewed=True,provider='chatgpt-web',prompt_kind='image'))
+    retried=await s.one('SELECT * FROM concept_job WHERE id=?',(retry['ids'][0],))
+    original,payload=json.loads(job['payload']),json.loads(retried['payload'])
+    assert payload['ordinal']==2 and payload['text_batch_id']!=original['text_batch_id']
+    assert payload['text_session_id']!=original['text_session_id']
     assert (await s.read_document(document))['segments'][0]['active_concept']['image_prompt']==CONCEPT.image_prompt

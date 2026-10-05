@@ -70,6 +70,8 @@
   function selectionChanged() { render(); document.dispatchEvent(new Event('storyboard-selection')); }
   function renderRows(target, mode) {
     target.replaceChildren();
+    const batches=new Map();
+    if(mode==='editor')for(const item of data?.segments||[]){const batch=rowJob(item)?.text_batch_id;if(batch){if(!batches.has(batch))batches.set(batch,[]);batches.get(batch).push(String(item.ordinal).padStart(3,'0'));}}
     for (const s of mode==='editor'?visibleRows():data?.segments || []) {
       const tr=element('tr'); const box=element('input'); box.type='checkbox';box.checked=checked.has(s.id);box.dataset.segmentId=s.id;
       box.setAttribute('aria-label','Select segment '+s.ordinal);
@@ -81,6 +83,11 @@
       const status=element('td');
       if(mode==='editor'){const badge=element('span',labels[rowState(s)],'sb-badge');badge.dataset.state=rowState(s);status.append(badge);tr.dataset.state=rowState(s);tr.dataset.rowId=s.id;}
       else status.textContent=segmentStatus(s);
+      if(mode==='editor'&&rowJob(s)?.text_batch_id){
+        const batch=rowJob(s).text_batch_id;
+        const rows=batches.get(batch);
+        status.append(element('small','Batch: '+rows.join(', ')));
+      }
       const error=mode==='editor'?rowJob(s)?.error:s.job?.error;
       if(error)status.append(element('small',error));
       for(const j of s.media_jobs||[])status.append(element('small',j.kind+' · '+j.state+((j.current??(j.concept_id===s.active_concept_id))?'':' · older prompt')));
@@ -126,8 +133,8 @@
   function renderWorkers(status) {
     $('sb-workers').hidden=$('sb-provider').value!=='chatgpt-web';
     if($('sb-workers').hidden)return;
-    $('sb-workers-status').textContent=status.error||(!status.available?'Gateway unavailable':!status.extensionConnected?'ChatGPT extension disconnected':status.settings?.paused?'Queue paused':status.needsReview?'Account needs review':'Chat / Temporary ON · 3 tabs · input and upload take turns');
-    const phases={WAITING_SETUP:'Waiting for another tab to finish input / upload / Send',OPENING_TAB:'Opening tab',BINDING_TAB:'Binding tab',WAITING_PAGE:'Waiting for ChatGPT input',SELECTING_MODE:'Selecting Chat',ENABLING_TEMPORARY:'Enabling Temporary Chat',SELECTING_MODEL:'Checking model',TYPING:'Entering SRT sentence',ATTACHING_FILE:'Uploading prompt TXT',SENDING:'Sending',WAITING_RESPONSE:'Waiting for response',VERIFYING_COMPLETION:'Checking completed response',AWAITING_SAVE:'Saving response'};
+    $('sb-workers-status').textContent=status.error||(!status.available?'Gateway unavailable':!status.extensionConnected?'ChatGPT extension disconnected':status.settings?.paused?'Queue paused':status.needsReview?'Account needs review':'Work / Temporary OFF · 1 tab · 5 numbered rows → ZIP → next group');
+    const phases={WAITING_SETUP:'Waiting for another tab to finish input / upload / Send',OPENING_TAB:'Opening tab',BINDING_TAB:'Binding tab',WAITING_PAGE:'Waiting for ChatGPT input',SELECTING_MODE:'Selecting Work',ENABLING_TEMPORARY:'Enabling Temporary Chat',SELECTING_MODEL:'Checking model',TYPING:'Entering numbered SRT rows',ATTACHING_FILE:'Uploading prompt TXT',SENDING:'Sending batch',WAITING_RESPONSE:'Waiting for response',VERIFYING_COMPLETION:'Checking completed response',DOWNLOADING_ZIP:'Downloading ZIP',AWAITING_SAVE:'Checking ZIP and saving TXT files'};
     $('sb-worker-rows').replaceChildren(...(status.workers||[]).map(w=>{
       const row=element('tr'),phase=w.progress?.phase;
       row.append(element('td',w.id),element('td',Number.isInteger(w.tabId)?String(w.tabId):'Not open'),element('td',w.error?w.state:(phases[phase]||phase?.replaceAll('_',' ')||w.state)));
@@ -235,10 +242,10 @@
   $('sb-create-concepts').onclick=()=>run(async()=>{
     const items=selected(1000);
     if($('sb-provider').value==='chatgpt-web'&&!data.document.prompt_template?.trim())throw Error('Choose and save your prompt TXT first.');
-    if(!confirm(`Create prompts for up to ${items.length} row(s)? Three Chat / Temporary tabs process one row each at a time. The prompt TXT is sent once per tab at the start of this run.`))return;
-    notice('Preparing 3 Chat / Temporary tabs…');
+    if(!confirm(`Create prompts for up to ${items.length} row(s)? One Work tab sends up to 5 numbered rows, downloads and saves the ZIP, then sends the next group. The prompt TXT is attached only for the first group.`))return;
+    notice('Preparing one Work tab for prompt ZIP batches…');
     const result=await api('POST',path('/generate-concepts'),{segment_ids:items.map(s=>s.id),provider:$('sb-provider').value,prompt_kind:$('sb-provider').value==='chatgpt-web'?$('sb-prompt-kind').value:'both',model:$('sb-model').value.trim()||null,regenerate:$('sb-regenerate').checked});
-    await reload();notice(`${result.ids.length} concept job(s) queued; ${result.skipped.length} skipped because current or pending concepts already exist.`);
+    await reload();notice(`${result.ids.length} row(s) queued${result.batch_count?' in '+result.batch_count+' batch(es) of up to 5':''}; ${result.skipped.length} skipped because current or pending concepts already exist.`);
   });
   $('sb-cancel-concepts').onclick=()=>run(async()=>{assertCollection();if(!confirm('Cancel all queued concept jobs in this script? The active job continues.'))return;const r=await api('POST',path('/cancel-concepts'),{});await reload();notice(`${r.cancelled} queued concept job(s) cancelled.`);});
   $('sb-editor-close').onclick=()=>{if(editorDirty&&!confirm('Discard unsaved editor changes?'))return;editorDirty=false;edited=null;$('sb-editor').hidden=true;};

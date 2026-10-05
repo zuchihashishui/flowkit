@@ -16,8 +16,8 @@ async function bridge(initial=[],create,downloadMock,manualSubmission=false,opti
    update:async(id,options)=>{updated.push({id,...options});if(options.url)proofs.delete(id);Object.assign(tabs.get(id),options);return tabs.get(id);},
    onRemoved:{addListener:f=>removed=f},sendMessage:async(id,m)=>{
     if(m.type==='stopSrt')return {ok:true};
-    if(m.type==='clickSrtDownload')return downloadMock.click(m);
-    if(m.type==='prepareSrt')return {ok:true};if(m.type==='ping')return options.ping?options.ping(id,{tabs,focused}):{ok:true,submissionAck:true,inputReady:true,url:tabs.get(id)?.url,textSessionProof:proofs.get(id)};if(m.type==='probe')return {streaming:false};if(m.type==='preflight')return {ok:true,data:{passed:true}};
+    if(m.type==='clickSrtDownload'||m.type==='clickPromptZipDownload')return downloadMock.click(m);
+    if(m.type==='prepareSrt')return {ok:true};if(m.type==='ping')return options.ping?options.ping(id,{tabs,focused}):{ok:true,submissionAck:true,promptZip:true,inputReady:true,url:tabs.get(id)?.url,textSessionProof:proofs.get(id)};if(m.type==='probe')return {streaming:false};if(m.type==='preflight')return {ok:true,data:{passed:true}};
     messages.push({id,...m});if(!manualSubmission)setImmediate(()=>listener({type:'requestSubmitted',requestId:m.requestId},{id:'ext',frameId:0,tab:{id}},()=>{}));return new Promise(resolve=>pending.set(m.requestId,resolve));}},
   runtime:{id:'ext',onMessage:{addListener:f=>listener=f},onStartup:{addListener(){}},onInstalled:{addListener(){}}},alarms:{create(){},onAlarm:{addListener(){}}}};
  chrome.downloads=downloadMock?.api;
@@ -348,4 +348,34 @@ test('a tab without a ready composer reports WAITING_PAGE failure without submit
  for(let i=0;i<90&&!b.replies.some(m=>m.type==='response');i++)await tick();
  const reply=b.replies.find(m=>m.type==='response');
  assert.equal(reply?.ok,false);assert.equal(reply.phase,'WAITING_PAGE');assert.match(reply.error,/composer did not become ready/);assert.equal(b.messages.length,0);
+});
+
+test('200 rows use one Work tab, 40 ZIP downloads and only one TXT attachment',async()=>{
+ let listener,suggested,downloads=0;
+ const mock={api:{onDeterminingFilename:{addListener:f=>listener=f,removeListener(){}},search:async()=>[{state:'complete',exists:true,filename:'/Downloads/'+suggested.filename}]},click:async m=>{
+  assert.equal(m.type,'clickPromptZipDownload');downloads++;
+  listener({id:downloads,startTime:new Date().toISOString(),referrer:'https://chatgpt.com/c/work-batch',filename:'image_prompts.zip'},s=>suggested=s);return {ok:true};
+ }};
+ const b=await bridge([],null,mock);await b.send({type:'ensureTextWorkers',workerCount:1,controlId:'one'});
+ assert.equal(b.created.length,1);assert.equal(b.saved.workers.length,1);
+ const options={freshTab:false,attachment:undefined,composerMode:'work',temporary:false,model:'auto',pageUrl:'https://chatgpt.com/',textSessionId:'11111111-1111-1111-1111-111111111111',promptTemplate:'Numbered TXT files in one ZIP',downloadPromptZip:true};
+ for(let group=0;group<40;group++){
+  const requestId='zip-'+group,text=Array.from({length:5},(_,i)=>String(group*5+i+1).padStart(3,'0')+' 日本語').join('\n\n');
+  await b.request(requestId,'worker-1',{...options,messages:[{role:'user',content:text}]});await until(()=>b.messages.length===group+1);
+  const message=b.messages.at(-1);assert.equal(message.userMessage,text);assert.equal(message.composerMode,'work');assert.equal(message.temporary,false);assert.equal(message.downloadPromptZip,true);assert.equal(!!message.promptAttachment,group===0);
+  const tab=b.tabs.get(message.id);tab.url='https://chatgpt.com/c/work-batch';
+  const file=await b.page({type:'downloadPromptZip',requestId},message.id);assert.equal(file.ok,true,file.error);assert.match(file.nativeDownload.path,/\/prompts.zip$/);
+  const proof={id:options.textSessionId,proof:requestId,url:tab.url};b.proofs.set(message.id,proof);
+  b.pending.get(requestId)({ok:true,content:'image_prompts.zip',nativeDownload:file.nativeDownload,conversation_url:tab.url,textSessionProof:proof});
+  await until(()=>b.saved.workers[0].state==='AWAITING_SAVE');
+  await b.request('too-early','worker-1',options);assert.equal(b.replies.at(-1).not_submitted,true);
+  await b.send({type:'commit',requestId,controlId:'saved-'+group,ok:true});
+ }
+ assert.equal(downloads,40);assert.equal(b.created.length,1);assert.equal(b.messages.length,40);assert.equal(b.updated.filter(x=>x.url).length,1);
+});
+
+test('switching the text pool to one Work worker closes only idle owned extra tabs',async()=>{
+ const b=await bridge([1,2,3].map(i=>({id:'worker-'+i,tabId:i,state:'IDLE',owned:true})));
+ await b.send({type:'ensureTextWorkers',workerCount:1,controlId:'one'});
+ assert.equal(b.replies.at(-1).ok,true);assert.equal(b.saved.workers.length,1);assert.equal(b.saved.workers[0].tabId,1);assert.ok(!b.tabs.has(2)&&!b.tabs.has(3));assert.equal(b.created.length,0);
 });

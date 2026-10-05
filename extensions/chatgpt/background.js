@@ -16,7 +16,7 @@ const record=message=>{events.unshift({time:new Date().toISOString(),message});e
 const transmit=m=>{if(ws?.readyState===1)ws.send(JSON.stringify(m));};
 let inspecting=false,lastInspection=null,modelCatalog=null;
 function inspectMessage(tabId,message){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Tab inspection timed out; refresh the tab')),5000);chrome.tabs.sendMessage(tabId,message).then(r=>{clearTimeout(timer);resolve(r);},e=>{clearTimeout(timer);reject(e);});});}
-const phases=new Set(['WAITING_SETUP','OPENING_TAB','SELECTING_MODE','ENABLING_TEMPORARY','DISABLING_TEMPORARY','SELECTING_MODEL','TYPING','ATTACHING_FILE','SENDING','WAITING_RESPONSE','GENERATING','WORKING','THINKING','USING_TOOLS','VERIFYING_COMPLETION','WAITING_COMPLETION','DOWNLOADING_SRT']);
+const phases=new Set(['WAITING_SETUP','OPENING_TAB','SELECTING_MODE','ENABLING_TEMPORARY','DISABLING_TEMPORARY','SELECTING_MODEL','TYPING','ATTACHING_FILE','SENDING','WAITING_RESPONSE','GENERATING','WORKING','THINKING','USING_TOOLS','VERIFYING_COMPLETION','WAITING_COMPLETION','DOWNLOADING_SRT','DOWNLOADING_ZIP']);
 async function inspectTabs(kind,options={}) {
  if(inspecting||configuring||textExecuting()||textWorkers().some(w=>w.state!=='IDLE'))throw Error('Pause the text queue and finish or review text worker jobs before checking tabs.');
  const limit=Math.max(1,Math.min(3,Number(options.workers)||3));
@@ -43,7 +43,7 @@ async function inspectTabs(kind,options={}) {
   return lastInspection;
  }finally{inspecting=false;announce();}
 }
-function announce(){transmit({type:'pool',protocol:2,capabilities:['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1','srt-prepare-v1','srt-download-v1','srt-cancel-v1','temporary-text-session-v1','text-worker-recovery-v1','txt-prompt-attachment-v1','serialized-submission-v1'],enabled,workers:textWorkers(),srtWorker:srtWorker(),inspecting:inspecting||configuring});}
+function announce(){transmit({type:'pool',protocol:2,capabilities:['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1','srt-prepare-v1','srt-download-v1','srt-cancel-v1','temporary-text-session-v1','text-worker-recovery-v1','txt-prompt-attachment-v1','serialized-submission-v1','work-prompt-zip-v1'],enabled,workers:textWorkers(),srtWorker:srtWorker(),inspecting:inspecting||configuring});}
 async function persist(){await chrome.storage.local.set({workers,enabled,composerMode,modelPreference});announce();}
 async function initialize(){const saved=await chrome.storage.local.get(['workers','enabled','tabId','composerMode','modelPreference']);enabled=saved.enabled!==false;composerMode=saved.composerMode==='work'?'work':'chat';modelPreference=typeof saved.modelPreference==='string'&&saved.modelPreference.length<=100?saved.modelPreference:'auto';
  const previous=saved.workers || (saved.tabId?[{id:'worker-1',tabId:saved.tabId,state:'IDLE'}]:[]);
@@ -139,7 +139,13 @@ function connect(){if(!initialized || (ws&&ws.readyState<2))return;
     if(!enabled)throw Error('Turn on the ChatGPT extension before creating prompts.');
     configuring=true;announce();
     try{
-     while(textWorkers().length<3){
+     const limit=m.workerCount===1?1:3;
+     if(limit===1){
+      const extras=textWorkers().slice(1);
+      if(extras.some(w=>executing.has(w.id)||!['IDLE','NEEDS_REVIEW'].includes(w.state)))throw Error('Finish active text requests before switching to one Work tab.');
+      for(const old of extras){if(old.state==='IDLE')await tryCloseSavedWorker(old);workers=workers.filter(w=>w!==old);}
+     }
+     while(textWorkers().length<limit){
       const id=[1,2,3].map(n=>'worker-'+n).find(id=>!workers.some(w=>w.id===id));
       workers.push({id,kind:'text',tabId:null,state:'IDLE',owned:true});
      }
@@ -199,14 +205,15 @@ async function run(m,peer){let w=workers.find(w=>w.id===m.workerId);
  try{const u=new URL(pageUrl);if(u.origin!=='https://chatgpt.com'||u.username||u.password||u.hash||!(u.pathname==='/'||/^\/g\/g-[A-Za-z0-9_-]+\/?$/.test(u.pathname)))throw Error();customGPT=u.pathname.startsWith('/g/');if(customGPT&&(m.temporary!==false||m.attachment))throw Error();}
  catch{reply({ok:false,error:'Invalid project ChatGPT URL/options',not_submitted:true});return;}
  const fresh=m.freshTab===true;
- const session=m.textSessionId;
- if(session!==undefined&&(typeof session!=='string'||!session||typeof m.promptTemplate!=='string'||!m.promptTemplate.trim()||m.promptTemplate.length>100000||fresh||m.attachment||customGPT||m.temporary!==true||m.composerMode!=='chat')){reply({ok:false,error:'Text to Prompt requires Chat / Temporary ON',not_submitted:true});return;}
+ const session=m.textSessionId,workZip=m.downloadPromptZip===true;
+ if(workZip&&(!session||textWorkers().length!==1)){reply({ok:false,error:'Prepare one Work worker for ZIP batches.',not_submitted:true});return;}
+ if(session!==undefined&&(typeof session!=='string'||!session||typeof m.promptTemplate!=='string'||!m.promptTemplate.trim()||m.promptTemplate.length>100000||fresh||m.attachment||customGPT||(workZip?(m.temporary!==false||m.composerMode!=='work'):(m.temporary!==true||m.composerMode!=='chat')))){reply({ok:false,error:workZip?'Text to Prompt ZIP requires Work / Temporary OFF':'Legacy text sessions require Chat / Temporary ON',not_submitted:true});return;}
  if(fresh&&(!m.attachment||m.composerMode!=='work'||m.temporary!==false)){reply({ok:false,error:'Invalid fresh SRT tab request',not_submitted:true});return;}
  if((fresh&&m.workerId!==SRT_WORKER_ID)||(!fresh&&w?.kind==='srt')){reply({ok:false,error:'SRT and text workers are separate',not_submitted:true});return;}
  if(inspecting||configuring||!enabled||(w&&w.state!=='IDLE')||(!w&&!fresh)){reply({ok:false,error:'Worker is unavailable',not_submitted:true});return;}
  if(!w){w={id:SRT_WORKER_ID,kind:'srt',tabId:null,state:'IDLE'};workers.push(w);}
  const jobComposerMode=m.composerMode??composerMode,jobModel=m.model==='extension'?modelPreference:m.model;
- w.requestOptions={composerMode:jobComposerMode,temporary:m.temporary===true,model:jobModel||'auto',hasAttachment:!!m.attachment,freshTab:fresh,pageUrl};
+ w.requestOptions={composerMode:jobComposerMode,temporary:m.temporary===true,model:jobModel||'auto',hasAttachment:!!m.attachment||!!session,downloadPromptZip:workZip,freshTab:fresh,pageUrl};
  const prepared=fresh&&m.preparedTabToken&&m.preparedTabToken===w.preparedToken&&w.preparedUrl===new URL(pageUrl).href;
  if(m.preparedTabToken&&!prepared){reply({ok:false,error:'Prepared SRT tab changed. Open SRT again before retrying.',not_submitted:true});return;}
  w.preparedToken=null;
@@ -259,9 +266,10 @@ async function run(m,peer){let w=workers.find(w=>w.id===m.workerId);
   if(!ready)throw Error('ChatGPT composer did not become ready within 30 seconds. Check sign-in, page loading and the Flowkit extension in this tab. No prompt was sent.');
   if(w.state!=='RUNNING')throw Error('Worker interrupted before submission');
   if(session&&ready.submissionAck!==true)throw Error('Refresh the ChatGPT tab to load Bridge 1.11.5 before retrying.');
+  if(workZip&&ready.promptZip!==true)throw Error('Refresh the Work tab to load Bridge 1.12.0 for ZIP downloads before retrying.');
   const userMessage=m.messages[0].content;
   const promptAttachment=session&&!continuing?{name:'prompt-instructions.txt',text:m.promptTemplate}:undefined;
-  const result=await chrome.tabs.sendMessage(w.tabId,{type:'chat',requestId:m.requestId,userMessage,promptAttachment,attachment:m.attachment,model:jobModel,timeout:m.timeout,newConversation:false,selectModel:!continuing,temporary:m.temporary,composerMode:jobComposerMode,customGPT,pageUrl,continueConversation:continuing,conversationUrl,textSessionId:session,textSessionProof:continuing?w.textSession.proof:null,downloadSrt:m.downloadSrt===true});
+  const result=await chrome.tabs.sendMessage(w.tabId,{type:'chat',requestId:m.requestId,userMessage,promptAttachment,attachment:m.attachment,model:jobModel,timeout:m.timeout,newConversation:false,selectModel:!continuing,temporary:m.temporary,composerMode:jobComposerMode,customGPT,pageUrl,continueConversation:continuing,conversationUrl,textSessionId:session,textSessionProof:continuing?w.textSession.proof:null,downloadSrt:m.downloadSrt===true,downloadPromptZip:workZip});
   if(!result?.ok){const e=Error(result?.error||'No response from tab');e.code=result?.code;e.phase=result?.phase;e.submitted=result?.submitted;e.partialResponse=result?.partialResponse;throw e;}
   if(w.state!=='RUNNING')throw Error('Late response: worker already requires review');
   if(session){
@@ -280,38 +288,43 @@ async function run(m,peer){let w=workers.find(w=>w.id===m.workerId);
  }
  finally{releaseSetup();if(workers.includes(w)&&w.requestId===m.requestId)executing.delete(w.id);}
 }
-let downloadingSrt=false;
-async function downloadSrtFile(worker){
- if(downloadingSrt)throw Error('SRT download already in progress.');
+let downloadingSrt=false,downloadTail=Promise.resolve();
+async function downloadSrtFile(worker,kind='srt'){
+ const previous=downloadTail;let unlock;downloadTail=new Promise(resolve=>unlock=resolve);await previous;
+ try{return await downloadWorkerFile(worker,kind);}finally{unlock();}
+}
+async function downloadWorkerFile(worker,kind){
+ const zip=kind==='zip',label=zip?'ZIP':'SRT';
+ if(downloadingSrt)throw Error(label+' download already in progress.');
  if(!chrome.downloads?.onDeterminingFilename)throw Error('Reload ChatGPT Bridge and allow the Downloads permission.');
  downloadingSrt=true;
- const token=crypto.randomUUID(),relative='flowkit-chatgpt/'+token+'/subtitles.srt',started=Date.now();
+ const token=crypto.randomUUID(),relative='flowkit-chatgpt/'+token+(zip?'/prompts.zip':'/subtitles.srt'),started=Date.now();
  let tab;try{tab=await chrome.tabs.get(worker.tabId);}catch(error){downloadingSrt=false;throw error;}
  let downloadId=null,conflict=false;
  const listener=(item,suggest)=>{
   let fromTab=false;try{const ref=new URL(item.referrer),page=new URL(tab.url);fromTab=ref.origin===page.origin&&(ref.pathname==='/'||ref.href===page.href);}catch{}
-  if(!fromTab||Date.parse(item.startTime)<started-1000||!Number.isFinite(Date.parse(item.startTime))||! /\.srt$/i.test(item.filename||'')){suggest();return;}
+  if(!fromTab||Date.parse(item.startTime)<started-1000||!Number.isFinite(Date.parse(item.startTime))||!(zip?/\.zip$/i:/\.srt$/i).test(item.filename||'')){suggest();return;}
   if(downloadId!==null){conflict=true;suggest();return;}
   downloadId=item.id;suggest({filename:relative,conflictAction:'uniquify'});
  };
  try{
   chrome.downloads.onDeterminingFilename.addListener(listener);
-  const clicked=await chrome.tabs.sendMessage(worker.tabId,{type:'clickSrtDownload',requestId:worker.requestId},{frameId:0});
-  if(!clicked?.ok)throw Error(clicked?.error||'Could not click the SRT file link.');
+  const clicked=await chrome.tabs.sendMessage(worker.tabId,{type:zip?'clickPromptZipDownload':'clickSrtDownload',requestId:worker.requestId},{frameId:0});
+  if(!clicked?.ok)throw Error(clicked?.error||'Could not click the '+label+' file link.');
   while(Date.now()-started<120000){
-   if(worker.state==='CANCELLED')throw Error('SRT job stopped. Any downloaded file is retained.');
-   if(conflict)throw Error('Multiple SRT downloads started. Files are retained in Chrome Downloads.');
+   if(worker.state==='CANCELLED')throw Error(label+' job stopped. Any downloaded file is retained.');
+   if(conflict)throw Error('Multiple '+label+' downloads started. Files are retained in Chrome Downloads.');
    if(downloadId!==null){
     const [item]=await chrome.downloads.search({id:downloadId});
-    if(!item||item.state==='interrupted')throw Error('SRT download interrupted. Download the existing file from the ChatGPT tab.');
+    if(!item||item.state==='interrupted')throw Error(label+' download interrupted. Download the existing file from the ChatGPT tab.');
     if(item.state==='complete'){
-     if(item.exists===false||!item.filename.replaceAll('\\','/').endsWith('/'+relative))throw Error('SRT download location changed. Check Chrome Downloads.');
+     if(item.exists===false||!item.filename.replaceAll('\\','/').endsWith('/'+relative))throw Error(label+' download location changed. Check Chrome Downloads.');
      return {path:item.filename,token};
     }
    }
    await new Promise(resolve=>setTimeout(resolve,250));
   }
-  throw Error('SRT download did not finish within 120 seconds. Check Chrome Downloads; the ChatGPT tab is retained.');
+  throw Error(label+' download did not finish within 120 seconds. Check Chrome Downloads; the ChatGPT tab is retained.');
  }finally{chrome.downloads.onDeterminingFilename.removeListener(listener);downloadingSrt=false;}
 }
 chrome.runtime.onMessage.addListener((m,sender,reply)=>{
@@ -322,8 +335,13 @@ chrome.runtime.onMessage.addListener((m,sender,reply)=>{
  }
  if(m.type==='jobProgress'&&sender.id===chrome.runtime.id&&sender.tab&&(sender.frameId===undefined||sender.frameId===0)){
   const w=workers.find(w=>w.tabId===sender.tab.id&&w.requestId===m.requestId&&w.state==='RUNNING');
-  if(w&&phases.has(m.phase)){w.progress={phase:m.phase,updated:Date.now(),chars:Math.max(0,Math.min(2000000,Number(m.chars)||0)),lastChange:Number(m.lastChange)||null,completionEvidence:['final-assistant-marker','response-actions','srt-file-ready'].includes(m.completionEvidence)?m.completionEvidence:''};announce();}
+  if(w&&phases.has(m.phase)){w.progress={phase:m.phase,updated:Date.now(),chars:Math.max(0,Math.min(2000000,Number(m.chars)||0)),lastChange:Number(m.lastChange)||null,completionEvidence:['final-assistant-marker','response-actions','srt-file-ready','zip-file-ready'].includes(m.completionEvidence)?m.completionEvidence:''};announce();}
   reply({ok:!!w});return false;
+ }
+ if(m.type==='downloadPromptZip'&&sender.id===chrome.runtime.id&&sender.tab&&(sender.frameId===undefined||sender.frameId===0)){
+  const w=textWorkers().find(w=>w.state==='RUNNING'&&w.tabId===sender.tab.id&&w.requestId===m.requestId&&w.requestOptions?.downloadPromptZip);
+  if(!w){reply({ok:false,error:'ZIP download does not belong to the active Work batch.'});return false;}
+  downloadSrtFile(w,'zip').then(nativeDownload=>reply({ok:true,nativeDownload}),error=>reply({ok:false,error:error.message}));return true;
  }
  if(m.type==='downloadSrt'&&sender.id===chrome.runtime.id&&sender.tab&&(sender.frameId===undefined||sender.frameId===0)){
   const w=srtWorker();
