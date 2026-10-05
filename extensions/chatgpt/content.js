@@ -449,6 +449,8 @@
     const editor = findInput();
     const scope = composerScope();
     if (!scope) return 'missing';
+    const status=scope.cloneNode(true);status.querySelectorAll('textarea, [contenteditable], [hidden], [aria-hidden="true"]').forEach(el=>el.remove());
+    if(/upload failed|error uploading|unable to upload|unsupported file|file too large/i.test(status.textContent||''))return 'failed';
     const named = [...scope.querySelectorAll('[title], [aria-label], [data-filename], [data-file-name], span, p, div, button')].filter(el =>
       visible(el) && !el.contains(editor) && !editor?.contains(el) && !el.closest('[data-user-message-bubble], [data-message-author-role], [data-markdown-text-style]') &&
       (el.getAttribute('title') === name || el.getAttribute('data-filename') === name || el.getAttribute('data-file-name') === name ||
@@ -459,13 +461,12 @@
     // Completed cards may retain a hidden progress node: only visible state counts.
     const busySelector='[role="progressbar"], [aria-busy="true"], [data-loading="true"], .animate-spin';
     const busy = cards.some(el => [el,...el.querySelectorAll(busySelector)].some(node=>node.matches(busySelector)&&hasVisibleState(node)));
-    const status=scope.cloneNode(true);status.querySelectorAll('textarea, [contenteditable], [hidden], [aria-hidden="true"]').forEach(el=>el.remove());
     const failed = cards.some(el => /upload failed|error uploading|unable to upload|unsupported file|file too large/i.test(
       el.textContent || '')) || /upload failed|error uploading|unable to upload|unsupported file|file too large/i.test(status.textContent || '');
     return failed?'failed':busy?'uploading':'ready';
   }
 
-  async function attachFile(attachment, textPrompt=false) {
+  async function attachFile(attachment, textPrompt=false, waitForSend=false) {
     let file;
     if(textPrompt){
       if(attachment?.name!=='prompt-instructions.txt'||typeof attachment.text!=='string'||!attachment.text.trim()||attachment.text.length>100000)throw Error('Invalid prompt TXT attachment. No prompt was sent.');
@@ -498,7 +499,10 @@
       const failure=pageFailure();if(failure)throw failure;
       state=attachmentState(attachment.name);
       if(state==='failed')throw Error(label+' upload failed. No prompt was sent. Check the attachment in the Work tab.');
-      progress('WAITING_ATTACHMENT',{detail:state==='missing'?'Waiting for the attached file card':state==='uploading'?'File upload is still busy':'Checking the completed file upload'});
+      // Work TXT readiness follows the actionable Send control. File-card
+      // markup can remain stale or use a filename this layout does not expose.
+      if(waitForSend)state=findSendButton()?'ready':'send-disabled';
+      progress(waitForSend?'WAITING_SEND_BUTTON':'WAITING_ATTACHMENT',{detail:waitForSend?(state==='ready'?'Send is enabled; preparing SRT text':'Waiting for Send to become enabled after attaching TXT'):state==='missing'?'Waiting for the attached file card':state==='uploading'?'File upload is still busy':'Checking the completed file upload'});
       if(state==='ready') {
         if(++stable>=2)return;
       }else stable=0;
@@ -506,12 +510,12 @@
     throw Error(label+' attachment did not become ready within 120 seconds ('+state+'). No prompt was sent. Check the upload in the worker tab.');
   }
 
-  async function clickSend(text, attachmentName) {
+  async function clickSend(text, attachmentName, fileReadyBySend=false) {
     let detail='';
     for (let i = 0; i < (attachmentName ? 400 : 10); i++) {
       const failure=pageFailure();if(failure)throw failure;
       const btn = findSendButton();
-      const fileState=attachmentName?attachmentState(attachmentName):'ready';
+      const fileState=attachmentName&&!fileReadyBySend?attachmentState(attachmentName):'ready';
       if(fileState==='failed')throw Error('Attachment upload failed before Send. No prompt was sent.');
       if (btn && fileState==='ready') {
         checkEnteredPrompt(text);
@@ -649,7 +653,7 @@
       const beforeMessages = new Set(assistantMessages().map(messageKey));
       const failure=pageFailure();if(failure)throw failure;
       const fileFirst=!!msg.promptAttachment&&msg.downloadPromptZip===true;
-      if(fileFirst){progress('ATTACHING_FILE');await attachFile(msg.promptAttachment,true);}
+      if(fileFirst){progress('ATTACHING_FILE');await attachFile(msg.promptAttachment,true,true);}
       progress('TYPING');
       await typeMessage(msg.userMessage);
       const attachment=msg.promptAttachment||msg.attachment;
@@ -666,7 +670,7 @@
       if(!customGPT)checkComposerStillSelected(composerMode);
       checkModelSelection(selectedModel);
       progress('SENDING');
-      await clickSend(msg.userMessage, msg.attachment?.name||msg.promptAttachment?.name);
+      await clickSend(msg.userMessage, msg.attachment?.name||msg.promptAttachment?.name, fileFirst);
       submitted=true;
       // A failed progress notification must not discard an already sent answer.
       try{await chrome.runtime.sendMessage?.({type:'requestSubmitted',requestId:msg.requestId});}catch{}

@@ -1,3 +1,7 @@
+## Studio v0.7.75 / ChatGPT Bridge 1.12.3
+
+SRT to Prompt waits for **Send to become enabled after attaching the TXT**, then types the SRT rows and clicks Send. Filename/card detection no longer blocks either step for this workflow. Explicit upload failures still stop the request; a disabled Send still waits. Reload Bridge 1.12.3 and refresh ChatGPT tabs after updating. See [release notes](docs/releases/0.7.75.md).
+
 ## Studio v0.7.74 / ChatGPT Bridge 1.12.2
 
 SRT to Prompt now uploads the TXT and waits for file readiness before entering the SRT rows and clicking Send. Later groups only enter their rows. JSON to SRT retains its existing input order. Reload extension 1.12.2 after updating. Submission diagnostics remain available; the current user-side failure still needs composer DOM/status to identify conclusively.
