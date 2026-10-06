@@ -76,9 +76,10 @@ test('all 300 scenes share one scrollable table; filtering and selection reach r
  s.w.localStorage.setItem('flowkit.scene-board.v1/p1/v1',JSON.stringify({page:8}));
  await s.w.sceneBoard.open();assert.equal(s.$('scb-rows').children.length,300);assert.ok(s.$('scb-rows').querySelector('[data-segment-id="s300"]'));assert.equal(s.$('scb-next'),null);
  s.$('scb-table-scroll').scrollTop=450;await s.w.sceneBoard.open();assert.equal(s.$('scb-table-scroll').scrollTop,450);
- s.$('scb-select-filtered').click();assert.match(s.$('scb-count').textContent,/200 selected/);
+ s.$('scb-select-filtered').click();assert.match(s.$('scb-count').textContent,/200 selected/);assert.equal(s.$('scb-select-all').indeterminate,true);
  s.$('scb-clear').click();s.$('scb-search').value='Detailed image s300';s.$('scb-search').dispatchEvent(new s.w.Event('input'));assert.equal(s.$('scb-rows').children.length,1);assert.equal(s.$('scb-table-scroll').scrollTop,0);
- s.$('scb-select-filtered').click();assert.match(s.$('scb-count').textContent,/1 selected/);assert.equal(s.$('scb-rows').querySelector('input').checked,true);
+ s.$('scb-select-all').click();assert.match(s.$('scb-count').textContent,/1 selected/);assert.equal(s.$('scb-select-all').checked,true);assert.equal(s.$('scb-rows').querySelector('input').checked,true);
+s.$('scb-select-all').click();assert.match(s.$('scb-count').textContent,/0 selected/);assert.equal(s.$('scb-rows').querySelector('input').checked,false);
  }finally{s.dom.window.close();}
 });
 test('Scene Board displays the numbered image folder and collects saved images without generating',async()=>{
