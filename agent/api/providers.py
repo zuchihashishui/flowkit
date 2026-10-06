@@ -32,7 +32,7 @@ from agent.services.cli_providers import (
 
 router = APIRouter(prefix="/api/providers", tags=["providers"])
 logger = logging.getLogger(__name__)
-_PROVIDERS_FILE = Path(__file__).parent.parent / "providers.json"
+_PROVIDERS_FILE = config._PROVIDERS_FILE
 
 
 def _read() -> dict:

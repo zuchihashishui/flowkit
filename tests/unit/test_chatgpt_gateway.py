@@ -263,3 +263,49 @@ async def test_rejected_project_url_is_not_an_uncertain_browser_submission(monke
         await g.complete('Scene',page_url='https://chatgpt.com/g/g-test',temporary=False)
     assert g.audit_rows()[0]['state']=='NOT_SUBMITTED'
     assert not g.blocked()
+
+
+@pytest.mark.asyncio
+async def test_txt_instructions_are_session_metadata_and_scene_is_the_only_message(monkeypatch):
+    calls=transport(monkeypatch,{'choices':[{'message':{'content':'Generated image prompt'}}]})
+    payload={'provider':'chatgpt-web','prompt_kind':'image','text':'日本語のSRT行。','retained_prompt':'','project_settings':{'image_prompt_url':'https://chatgpt.com/g/g-old-image','chatgpt_url':'https://chatgpt.com/'},'text_session_id':'11111111-1111-1111-1111-111111111111','prompt_template':'Create a visual prompt.\nKeep the same style.'}
+    result=await write_concept(payload)
+    request=json.loads(calls[0].content)
+    assert request['messages']==[{'role':'user','content':payload['text']}]
+    assert request['textSessionId']==payload['text_session_id']
+    assert request['promptTemplate']==payload['prompt_template']
+    assert request['pageUrl']=='https://chatgpt.com/'
+    assert request['temporary'] is True and request['composerMode']=='chat'
+    assert result.image_prompt=='Generated image prompt'
+
+@pytest.mark.asyncio
+async def test_worker_502_preserves_actionable_error_phase_and_partial_response(monkeypatch):
+    transport(monkeypatch,{'error':'TXT upload failed in the composer','phase':'ATTACHING_FILE','submitted':False,'partialResponse':'Retained diagnostic text'},502)
+    with pytest.raises(g.GatewayReviewRequired,match=r'ATTACHING_FILE \(before Send\): TXT upload failed'):
+        await g.complete('prompt')
+    row=g.audit_rows()[0]
+    assert '502 Bad Gateway' not in row['error']
+    assert 'Retained diagnostic text' in row['response']
+    assert row['state']=='NEEDS_REVIEW'
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('fail_save',[False,True])
+async def test_zip_batch_awaits_file_and_row_save_before_ack(monkeypatch,fail_save):
+    calls=transport(monkeypatch,{'nativeDownload':{'path':'saved.zip','token':'token'},'choices':[{'message':{'content':'image_prompts.zip'}}]})
+    saving=asyncio.Event();release=asyncio.Event()
+    async def save(result):
+        assert result['nativeDownload']['token']=='token'
+        saving.set();await release.wait()
+        if fail_save:raise ValueError('Row save failed')
+        return 'rows saved'
+    task=asyncio.create_task(g.complete('001 First\n\n002 Second',composer_mode='work',temporary=False,text_session_id='session',prompt_template='Instructions',download_prompt_zip=True,validate_payload=save,timeout_seconds=1800))
+    await saving.wait()
+    assert all(r.url.path!='/commit' for r in calls)
+    sent=json.loads(calls[0].content)
+    assert sent['workers']==1 and sent['downloadPromptZip'] is True
+    assert sent['timeout']==1800000
+    release.set()
+    if fail_save:
+        with pytest.raises(g.GatewayReviewRequired):await task
+    else:assert await task=='rows saved'
+    assert json.loads(calls[-1].content)['ok'] is (not fail_save)

@@ -111,3 +111,14 @@ async def import_scenes(body: Resource):
         return await storyboard.import_segments(ctx['video_id'], storyboard.ImportBody(format='srt', content=text, source_kind=body.kind, source_id=body.id))
     except (ValueError, OSError) as e:
         raise HTTPException(409, str(e)) from e
+
+
+@router.post('/files')
+async def organize_files(body: ProjectSelection):
+    from agent.services import video_files
+    try:
+        if body.video_id:
+            return await video_files.sync_video(body.project_id, body.video_id)
+        return await video_files.folders(body.project_id)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(409, 'Could not organize saved files: ' + str(exc)) from exc

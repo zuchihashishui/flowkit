@@ -148,3 +148,9 @@ simulated WhisperX runner, old-job splitting, downloads and persisted options.
 Electron/IPC tests exercise the form, previews, export names, project handoffs
 and stale-backend detection. No WhisperX model/GPU run or native Windows dialog
 was performed for this change; the existing recognition runner is unchanged.
+
+### Retry an interrupted local transcription
+
+After a backend restart, an in-flight transcription becomes **Interrupted** and waits for you. Use **Retry job** on a Failed or Interrupted job to queue the same saved audio, model, device, language, batch size and transcript split settings. This is a local WhisperX retry; it does not call ElevenLabs or generate narration again.
+
+The retry creates a new job ID and preserves the previous attempt, log and any partial files. It retains the original project/video ownership even if project defaults have changed. Completed transcripts cannot be overwritten through this action. A missing source file or another queued/running transcription for the same audio blocks retry with an actionable message.

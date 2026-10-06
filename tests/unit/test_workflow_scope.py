@@ -80,8 +80,9 @@ def finish_srt(env, jid):
     (folder/'subtitles.srt').write_text(SRT, encoding='utf-8')
     env.srt.update(jid, 'COMPLETED', cues=1)
     # Ownership tests use a completed, reviewed SRT fixture.
-    env.srt.save_quality(jid, {'stage':'output', 'status':'REVIEW', 'issues':[]})
-    env.srt.approve_quality(jid)
+    if next(job for job in env.srt.jobs() if job['id']==jid)['method'] != 'legacy-srt':
+        env.srt.save_quality(jid, {'stage':'output', 'status':'REVIEW', 'issues':[]})
+        env.srt.approve_quality(jid)
 
 
 async def post(env, route, body):

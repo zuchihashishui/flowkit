@@ -77,15 +77,13 @@ test('scene selection, editing and narration submit only chosen scene data',asyn
     await submit('scene-editor');
     assert.equal(calls.find(c=>c.method==='PATCH').route,'/api/scenes/s2');
     assert.equal($('scene-selection').textContent,'1 of 2 scenes selected');
-    await change('video-mode','scenes');await submit('video-form');
-    let payload=calls.filter(c=>c.route==='/api/desktop/jobs'&&c.method==='POST').at(-1).body.jobs;
-    assert.equal(payload.length,1);assert.equal(payload[0].scene_id,'s2');assert.equal(payload[0].prompt,'Updated cloud');
+    let payload;
     await submit('voice-form');
     payload=calls.filter(c=>c.route==='/api/desktop/jobs'&&c.method==='POST').at(-1).body.jobs;
     assert.equal(payload.length,1);assert.equal(payload[0].prompt,'Updated narration');assert.equal(payload[0].template,'narrator');
     $('add-scene').click();$('scene-prompt').value='A new scene';await submit('scene-editor');
     assert.equal(s.scenes.length,3);assert.equal(s.scenes[2].display_order,2);
-    $('clear-scenes').click();await submit('video-form');assert.match($('notice').textContent,/Select 1–100/);
+    $('clear-scenes').click();await submit('voice-form');assert.match($('notice').textContent,/Select 1–100/);
   }finally{s.dom.window.close();}
 });
 
@@ -116,10 +114,10 @@ test('Projects owns the only selector; selection persists and all media lists fo
   assert.equal(w.document.querySelector('header select'),null);assert.equal($('job-project'),null);
   assert.equal($('project-select').value,'p2');assert.equal($('active-project-name').textContent,'Second project');
   assert.equal(w.workflow.context().project_id,'p2');assert.equal(w.workflow.context().video_id,'v1');assert.equal($('active-video-name').textContent,'First collection');assert.equal($('video-select').hidden,false);assert.equal($('new-collection'),null);
-  assert.match($('image-jobs').textContent,/Cloud job/);assert.doesNotMatch($('image-jobs').textContent,/Uncertain job/);
-  w.document.querySelector('[data-page="image"]').click();assert.equal($('active-project-name').textContent,'Second project');
+  assert.match($('all-jobs').textContent,/Cloud job/);assert.doesNotMatch($('all-jobs').textContent,/Uncertain job/);
+  w.document.querySelector('[data-page="scene-board"]').click();assert.equal($('active-project-name').textContent,'Second project');
   await change('project-select','p1');assert.equal(w.localStorage.getItem('active-project-id'),'p1');
-  assert.match($('image-jobs').textContent,/Uncertain job/);assert.doesNotMatch($('image-jobs').textContent,/Cloud job/);
+  assert.match($('all-jobs').textContent,/Uncertain job/);assert.doesNotMatch($('all-jobs').textContent,/Cloud job/);
   assert.match($('queue-summary').textContent,/3 jobs/);assert.match($('job-project-context').textContent,/First project/);
   assert.equal(w.document.querySelector('#project-list [data-active="true"]').dataset.projectId,'p1');
   w.document.querySelector('[data-page="whisperx"]').click();assert.equal($('project-scope-note').hidden,true);
@@ -160,8 +158,6 @@ test('multiple videos can be selected, created, renamed and restored within one 
   w.confirm=()=>true;await change('video-select','v2');assert.equal(w.workflow.context().project_id,'p1');assert.equal(w.workflow.context().video_id,'v2');
   assert.equal($('scenes').querySelectorAll('[data-scene-id]').length,0);assert.match($('all-jobs').textContent,/Only video two/);assert.doesNotMatch($('all-jobs').textContent,/Boat job/);
   assert.equal(w.localStorage.getItem('active-video:p1'),'v2');
-  $('image-prompt').value='New prompt';await submit('image-form');
-  assert.equal(calls.filter(c=>c.route==='/api/desktop/jobs'&&c.method==='POST').at(-1).body.jobs[0].video_id,'v2');
   $('edit-video-title').value='Updated second topic';await submit('edit-video');assert.equal($('active-video-name').textContent,'Updated second topic');
   assert.equal(calls.filter(c=>c.method==='PATCH').at(-1).route,'/api/videos/v2');
   $('new-video-title').value='Third topic';await submit('create-video');assert.equal($('video-select').value,'v3');assert.equal(w.workflow.context().video_id,'v3');
@@ -171,4 +167,57 @@ test('multiple videos can be selected, created, renamed and restored within one 
  }finally{s.dom.window.close();}
  const restored=await studio('p1',true,'v2');
  try{assert.equal(restored.$('video-select').value,'v2');assert.equal(restored.w.workflow.context().video_id,'v2');}finally{restored.dom.window.close();}
+});
+
+test('Scene Board owns downloads and recovery links; the old queue route is removed',async()=>{
+ const s=await studio('p1',true,'v1'),{$,w,calls}=s;
+ try{
+  assert.equal(w.document.querySelector('[data-page="queue"]'),null);
+  assert.equal(w.document.querySelector('[data-view="queue"]'),null);
+  for(const id of ['all-jobs','job-details','pause','export-filtered','flow-activity-jobs'])assert.equal($(id).closest('[data-view]').dataset.view,'scene-board');
+  await w.focusProductionJob('c');
+  assert.equal(w.document.querySelector('[data-page].active').dataset.page,'scene-board');
+  assert.equal($('job-search').value,'c');assert.match($('job-detail-text').textContent,/Download failed/);
+  assert.equal($('all-jobs').querySelector('[data-job-id="c"]')!==null,true);
+  await assert.rejects(w.focusProductionJob('second-video-job'),/does not belong/);
+  assert.equal(calls.filter(c=>c.method==='POST'&&c.route==='/api/desktop/jobs').length,0);
+ }finally{s.dom.window.close();}
+});
+
+test('job previews and exports stay inside Scene Board and late previews cannot reopen after leaving',async()=>{
+ const s=await studio('p2'),{$,w,click,exports}=s;
+ const urls=[],revoked=[];w.URL.createObjectURL=()=>{const url='blob:preview-'+urls.length;urls.push(url);return url;};w.URL.revokeObjectURL=url=>revoked.push(url);
+ w.studio.preview=async()=>({bytes:new Uint8Array([1]),kind:'image',mime:'image/png'});
+ try{
+  w.document.querySelector('[data-page="scene-board"]').click();
+  await click($('all-jobs'),'Preview');
+  assert.equal($('heading').textContent,'Scene Board');assert.equal($('download-preview').hidden,false);
+  assert.equal($('download-preview').querySelector('img').src,'blob:preview-0');
+  await click($('all-jobs'),'Export files');assert.deepEqual(exports,['b']);
+  $('close-job-details').click();assert.equal($('download-preview').hidden,true);assert.deepEqual(revoked,['blob:preview-0']);
+  let release;w.studio.preview=()=>new Promise(r=>release=r);
+  await click($('all-jobs'),'Preview');
+  w.document.querySelector('[data-page="projects"]').click();
+  release({bytes:new Uint8Array([2]),kind:'image',mime:'image/png'});await tick();
+  assert.equal($('heading').textContent,'Project');assert.equal($('download-preview').hidden,true);assert.equal(urls.length,1);
+ }finally{s.dom.window.close();}
+});
+
+test('Scene Board history preserves pause, saved-result resume and scoped queued cancellation',async()=>{
+ const s=await studio('p1',true,'v1'),{$,w,click,calls}=s;let paused=false,resumed=false;
+ const base=w.studio.api;
+ w.studio.api=async(method,route,body)=>{
+  if(route==='/api/desktop/pause'){calls.push({method,route,body});paused=body.paused;return{paused};}
+  if(route==='/api/desktop/jobs/c/resume'){calls.push({method,route,body});resumed=true;return{};}
+  const value=await base(method,route,body);
+  if(route==='/api/desktop/jobs'&&method==='GET'){value.paused=paused;if(resumed){const row=value.jobs.find(j=>j.id==='c');row.can_resume=false;row.state='DOWNLOADING';}}
+  return value;
+ };
+ try{
+  w.document.querySelector('[data-page="scene-board"]').click();
+  $('pause').click();await tick();assert.equal(paused,true);assert.equal($('pause').textContent,'Resume all media jobs');
+  await click($('all-jobs'),'Resume saved result');assert.match($('all-jobs').textContent,/DOWNLOADING/);
+  $('cancel-filtered').click();await tick();assert.deepEqual(Array.from(calls.find(c=>c.route==='/api/desktop/jobs/cancel').body.ids),['a']);
+  assert.equal(calls.some(c=>c.route==='/api/desktop/jobs'&&c.method==='POST'),false);
+ }finally{s.dom.window.close();}
 });

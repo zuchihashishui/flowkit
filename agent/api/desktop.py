@@ -13,10 +13,11 @@ from urllib.parse import urlparse
 import aiohttp
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Literal
 
 from agent.config import OUTPUT_DIR, BASE_DIR
+from agent.models.prompt_limits import MEDIA_PROMPT_MAX_CHARS, VOICE_TEXT_MAX_CHARS
 from agent.api import flow, tts
 from agent.services.flow_client import get_flow_client
 from agent.services.omni_flash import extract_omni_workflows
@@ -66,7 +67,7 @@ def update(jid, **values):
 
 class Job(BaseModel):
     kind: Literal["image", "video", "voice"]
-    prompt: str = Field(min_length=1, max_length=5000)
+    prompt: str = Field(min_length=1, max_length=MEDIA_PROMPT_MAX_CHARS)
     project_id: str = ""
     video_id: str = ""
     project_settings: dict | None = None
@@ -82,6 +83,12 @@ class Job(BaseModel):
     image_model: str | None = None
     template: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_-]{1,64}$")
     speed: float = Field(default=1, ge=0.5, le=3)
+
+    @model_validator(mode='after')
+    def voice_text_limit(self):
+        if self.kind == 'voice' and len(self.prompt) > VOICE_TEXT_MAX_CHARS:
+            raise ValueError(f'Voice text must contain at most {VOICE_TEXT_MAX_CHARS} characters.')
+        return self
 
 
 class Batch(BaseModel):
@@ -119,12 +126,18 @@ async def enqueue_jobs(body: Batch, *, preserve_settings: bool = False):
             raise HTTPException(400, "Select a voice template.")
         else:
             await tts.get_voice_template(j.template)
+    resolved=[]
     for j in body.jobs:
         if j.video_id and not preserve_settings:
-            from agent.services.project_settings import get
-            j.project_settings=await get(j.project_id)
+            from agent.services.project_settings import snapshot
+            from agent.services.production_settings import apply_stage
+            ctx={'project_id':j.project_id,'video_id':j.video_id}
+            if j.kind!='voice':j=await apply_stage(j,'media',ctx)
+            j.project_settings=await snapshot(ctx)
         elif not preserve_settings:
             j.project_settings=None
+        resolved.append(j)
+    body.jobs=resolved
     ids = []
     with connection() as db:
         for j in body.jobs:
@@ -346,6 +359,15 @@ async def process(job):
                 target = await download(url, target)
                 files.append(str(target))
         update(jid, state="COMPLETED", files=json.dumps(files))
+        if body.kind == 'image' and body.video_id and body.segment_id:
+            try:
+                from agent.services.scene_images import collect_images
+                await collect_images(body.video_id, {body.segment_id})
+            except Exception as exc:
+                # Generation/download succeeded. A copy failure must not trigger
+                # a paid retry; the Scene Board can collect saved images again.
+                logger.exception('Could not collect saved scene image for job %s', jid)
+                update(jid, error=f'Image saved; scene folder copy failed: {exc}. Use Collect saved images in Scene Board.'[:1500])
         if body.kind != "voice":
             flow_saved("desktop", jid)
     except asyncio.CancelledError:

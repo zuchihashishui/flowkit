@@ -106,3 +106,27 @@ test('WhisperX displays measured stage progress, Japanese character counts, elap
  await $('wx-refresh').onclick();assert.equal($('wx-stage-progress').hidden,true);assert.match($('wx-activity-message').textContent,/could not load/);
  dom.window.close();
 });
+
+test('retry is offered only for recoverable local transcription failures and uses the saved job ID',async()=>{
+ const {dom,w,$,calls}=setup(),original=w.studio.api;
+ let retried=false;
+ w.studio.api=async(method,url,body)=>{
+  if(url==='/api/whisperx/jobs/failed-job/retry'){
+   calls.push({method,url,body});retried=true;return {id:'new-job',previous_id:'failed-job',retried:true};
+  }
+  const data=await original(method,url,body);
+  if(url==='/api/whisperx/status')data.jobs=[
+   {id:'failed-job',title:'Interrupted narration',state:retried?'QUEUED':'INTERRUPTED',phase:retried?'QUEUED':'INTERRUPTED',options:{model:'large-v3',device:'cuda'},can_retry:!retried},
+   {id:'missing-source',title:'Missing audio',state:'FAILED',phase:'FAILED',options:{model:'large-v3',device:'cuda'},can_retry:false}
+  ];
+  return data;
+ };
+ try{
+  await $('wx-refresh').onclick();
+  const retries=[...$('wx-jobs').querySelectorAll('button')].filter(b=>b.textContent==='Retry job');
+  assert.equal(retries.length,1);await retries[0].onclick();
+  assert.equal(calls.filter(c=>c.url==='/api/whisperx/jobs/failed-job/retry').length,1);
+  assert.match($('wx-message').textContent,/queued again with its saved source and settings/);
+  assert.equal([...$('wx-jobs').querySelectorAll('button')].filter(b=>b.textContent==='Retry job').length,0);
+ }finally{dom.window.close();}
+});

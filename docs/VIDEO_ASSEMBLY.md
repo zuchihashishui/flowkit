@@ -83,3 +83,20 @@ These checks run in the development Linux environment. The user's Windows FFmpeg
 - All stage transitions stay manual. Loading files, checking the timeline or completing media generation does not start the next stage.
 
 Additional automated checks cover project/SRT ownership, repeated scene imports, stale concepts, failed-only retries, rounded generation duration, UI preflight blocking and resume controls. Real FFmpeg tests simulate interruption after one scene, then verify successful resume and re-encoding of a deliberately damaged checkpoint. Provider output in these tests is fixture data, not a live paid generation.
+
+
+### Still-image motion
+
+In **Merge Audio + SRT + Media → Image / video framing**, choose **Still-image motion**:
+
+- **None (default)** keeps the existing static-image output.
+- **Slow zoom in** gradually moves toward the center of each still image.
+- **Slow zoom out** gradually moves away from the center.
+
+Motion spans each still-image scene's actual frame duration with a centered 10% scale change. It resets at each scene boundary. Video clips retain their own motion, speed and duration, including the existing trim, hold-last-frame and loop behavior. SRT timestamps and narration remain unchanged.
+
+**Fit entire frame** keeps the complete image visible throughout the effect, on a fixed black canvas: zoom in starts with additional padding and finishes at the normal fitted size; zoom out reverses this. **Fill frame** fills the canvas throughout and crops edges as the image zooms. Subtitles are composed after motion, so their size remains fixed.
+
+The choice is saved in the video draft and frozen in each queued render plan. Project/video production defaults also support `assembly.image_motion`. Old jobs without this field continue with `none`. A resumed render verifies its source files and motion settings before reusing saved image clips; changing image motion does not invalidate unrelated video-clip checkpoints.
+
+API: `image_motion` accepts only `none`, `zoom_in`, or `zoom_out` in preview, preflight and render requests. Assembly status advertises `image_motion_version: 1`; the desktop blocks a requested effect against an older backend instead of silently rendering static images.

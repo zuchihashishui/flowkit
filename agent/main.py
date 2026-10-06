@@ -32,7 +32,7 @@ from agent.worker.processor import get_worker_controller
 from agent.services.flow_client import get_flow_client
 from agent.services.event_bus import event_bus
 from agent.sdk import init_sdk
-from agent.api import desktop, storyboard, chatgpt, elevenlabs, whisperx, srt, assembly, workflow
+from agent.api import desktop, storyboard, chatgpt, elevenlabs, whisperx, srt, assembly, workflow, production, maintenance
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -133,6 +133,8 @@ async def lifespan(app: FastAPI):
     srt_task = asyncio.create_task(srt_service.run())
     from agent.services.assembly_service import service as assembly_service
     assembly_task = asyncio.create_task(assembly_service.run())
+    from agent.services import video_files
+    video_files_task = asyncio.create_task(video_files.run())
     logger.info("WS server + worker started")
 
     yield
@@ -148,7 +150,8 @@ async def lifespan(app: FastAPI):
     whisperx_task.cancel()
     srt_task.cancel()
     assembly_task.cancel()
-    await asyncio.gather(ws_task, worker_task, desktop_task, storyboard_task, chatgpt_task, elevenlabs_task, whisperx_task, srt_task, assembly_task, return_exceptions=True)
+    video_files_task.cancel()
+    await asyncio.gather(ws_task, worker_task, desktop_task, storyboard_task, chatgpt_task, elevenlabs_task, whisperx_task, srt_task, assembly_task, video_files_task, return_exceptions=True)
     await close_db()
     logger.info("Flow Kit stopped")
 
@@ -195,6 +198,15 @@ async def flow_caller_observability(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def backup_write_guard(request, call_next):
+    from agent.services.studio_backup import is_backing_up
+    if request.method not in {"GET", "HEAD", "OPTIONS"} and is_backing_up():
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=409, content={"detail":"Backup in progress. Wait for it to finish before changing data or starting jobs."})
+    return await call_next(request)
+
+
 app.include_router(characters_router, prefix="/api")
 app.include_router(projects_router, prefix="/api")
 app.include_router(videos_router, prefix="/api")
@@ -216,6 +228,8 @@ app.include_router(whisperx.router, prefix="/api")
 app.include_router(srt.router, prefix="/api")
 app.include_router(assembly.router, prefix="/api")
 app.include_router(workflow.router, prefix="/api")
+app.include_router(production.router, prefix="/api")
+app.include_router(maintenance.router, prefix="/api")
 
 
 import secrets as _secrets
@@ -262,6 +276,8 @@ async def health():
             "project_single_video": False,
             "project_multi_video": True,
             "project_provider_urls": True,
+            "production_workspace": True,
+            "image_motion": True,
             "elevenlabs_native_download_files": True,
             "elevenlabs_unlimited_native_audio": True,
             "elevenlabs_recover_downloads": True,

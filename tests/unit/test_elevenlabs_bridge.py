@@ -608,3 +608,17 @@ async def test_project_tts_url_is_forwarded_only_to_capable_extension(bridge):
     await bridge.step()
     assert next(m for m in peer.sent if m['type']=='generate')['pageUrl']==url
     assert bridge.job(job['id'])['state']=='COMPLETED'
+
+
+@pytest.mark.asyncio
+async def test_project_voice_expectation_is_checked_then_first_saved_voice_is_retained(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, '_merge_audio', lambda jid: None)
+    frozen = {'production': {'tts': {'expected_voice': 'Configured voice'}}}
+    job = bridge.enqueue('日'*4200, project_settings=frozen)
+    peer = await connected(bridge, response={'ok': True, 'audioBase64': wav_payload(), 'mimeType': 'audio/wav', 'voice': 'Actual confirmed voice'})
+    assert await bridge.step()
+    assert next(message for message in peer.sent if message['type'] == 'generate')['expectedVoice'] == 'Configured voice'
+    assert await bridge.step()
+    generations = [message for message in peer.sent if message['type'] == 'generate']
+    assert generations[1]['expectedVoice'] == 'Actual confirmed voice'
+    assert bridge.job(job['id'])['state'] == 'COMPLETED'

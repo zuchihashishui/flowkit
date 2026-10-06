@@ -98,6 +98,7 @@ class WhisperXService:
         end = job.get('finished') or time.time()
         job['elapsed_seconds'] = max(0, end-job['started']) if job.get('started') else 0
         job['result_available'] = job['state'] == 'COMPLETED'
+        job['can_retry'] = job['state'] in ('FAILED', 'INTERRUPTED')
         job['transcript_split'] = job['progress'].get('transcript_split')
         job['split_available'] = job['result_available'] and bool(job['transcript_split']) and job['id'] not in self.split_locks
         return job
@@ -178,6 +179,28 @@ class WhisperXService:
             values['updated'] = time.time()
             db.execute('UPDATE wx_jobs SET ' + ','.join(k + '=?' for k in values) + ' WHERE id=?',
                        (*values.values(), jid))
+
+    def retry(self, jid):
+        """Explicit local retry in a new job; preserve the original attempt/files."""
+        previous = self.job(jid)
+        _, audio = self.resolve_source(previous['source_id'])
+        if not audio.is_file():
+            raise ValueError('The original audio file is missing. Import it again before starting a new transcription.')
+        source_ref = scope.audio_ref(self, previous['source_id'])
+        with self.db() as db:
+            # Serialize the eligibility check and insert, including repeated UI clicks.
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT * FROM wx_jobs WHERE id=?', (jid,)).fetchone()
+            if not row or row['state'] not in ('FAILED', 'INTERRUPTED'):
+                raise ValueError('Only failed or interrupted transcriptions can be retried. Completed JSON is kept unchanged.')
+            if db.execute("SELECT 1 FROM wx_jobs WHERE source_id=? AND state IN ('QUEUED','RUNNING')", (row['source_id'],)).fetchone():
+                raise ValueError('A transcription for this audio is already queued or running.')
+            new_id, now = str(uuid.uuid4()), time.time()
+            db.execute('INSERT INTO wx_jobs(id,source_id,title,state,phase,error,options,created,updated) VALUES(?,?,?,?,?,?,?,?,?)',
+                       (new_id, row['source_id'], row['title'], 'QUEUED', 'QUEUED', None, row['options'], now, now))
+            scope.record(db, 'whisperx', new_id, scope.ownership(db, 'whisperx', jid),
+                         [source_ref, scope.ref('whisperx', jid)])
+        return {'id': new_id, 'retried': True, 'previous_id': jid}
 
     def worker_progress(self, jid, data):
         job = self.job(jid)
@@ -320,7 +343,7 @@ class WhisperXService:
             self.update(jid, state='COMPLETED', phase='COMPLETED', progress=json.dumps(progress), finished=time.time())
         except asyncio.CancelledError:
             if self.job(jid)['state'] != 'CANCELLED':
-                self.update(jid, state='INTERRUPTED', phase='INTERRUPTED', error='Backend stopped. Start a new transcription to retry.', finished=time.time())
+                self.update(jid, state='INTERRUPTED', phase='INTERRUPTED', error='Backend stopped. Use Retry job to transcribe the same audio with the saved options.', finished=time.time())
             raise
         except Exception as error:
             if self.job(jid)['state'] != 'CANCELLED':
@@ -350,7 +373,7 @@ class WhisperXService:
 
     async def run(self):
         with self.db() as db:
-            db.execute("UPDATE wx_jobs SET state='INTERRUPTED',phase='INTERRUPTED',finished=?,error='Backend restarted; start a new transcription to retry.' WHERE state='RUNNING'", (time.time(),))
+            db.execute("UPDATE wx_jobs SET state='INTERRUPTED',phase='INTERRUPTED',finished=?,error='Backend restarted. Use Retry job to transcribe the same audio with the saved options.' WHERE state='RUNNING'", (time.time(),))
         while True:
             try:
                 await self.discover()

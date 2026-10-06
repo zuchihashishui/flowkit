@@ -282,3 +282,89 @@ async def test_render_resume_reuses_only_verified_completed_scenes(tmp_path,monk
     assert service.jobs()[0]['saved_scenes']==0
     with pytest.raises(ValueError,match='Only failed'):
         service.resume(jid)
+
+
+def patterned_png():
+    """Solid centered subject lets decoded frames measure visible zoom direction."""
+    def chunk(name, data):
+        return struct.pack('!I', len(data)) + name + data + struct.pack('!I', zlib.crc32(name+data))
+    rows = []
+    for y in range(36):
+        rows.append(b'\0'+b''.join(bytes((0, 0, 255) if 22 <= x < 42 and 10 <= y < 26 else (255, 0, 0)) for x in range(64)))
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('!2I5B', 64, 36, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(b''.join(rows))) + chunk(b'IEND', b'')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('motion,fit', [('zoom_in','fit'),('zoom_out','fit'),('zoom_in','crop'),('zoom_out','crop')])
+async def test_real_image_motion_direction_frame_timing_and_mixed_video_unchanged(tmp_path, monkeypatch, motion, fit):
+    from agent.services import assembly_service as module
+    service, body, _, _ = await inputs(tmp_path)
+    image = await service.import_upload('image', Upload('subject.png', patterned_png()))
+    clip = await clip_input(tmp_path, service)
+    body.update(image_ids=[image['id']], video_ids=[clip['id']], visual_mode='mixed',
+                mapping={'1':image['id'], '2':clip['id']}, image_motion=motion, fit=fit, subtitles='off')
+    plan = service.plan(body)
+    assert [c['image_motion'] for c in plan['scenes']] == [motion, 'none']
+    assert [c['frames'] for c in plan['scenes']] == [63, 48]
+    filters = []
+    real_command = module.command
+    async def capture(args, **kwargs):
+        if args[0] == 'ffmpeg' and '/clips/' in str(args[-1]):
+            filters.append(args[args.index('-vf')+1])
+        return await real_command(args, **kwargs)
+    monkeypatch.setattr(module, 'command', capture)
+    jid = service.enqueue(body)['id']
+    await service.process(jid)
+    assert service.jobs()[0]['state'] == 'COMPLETED', service.jobs()[0]['error']
+    target = service.result_path(jid)
+    info = await probe(target)
+    assert int(info['streams'][0]['nb_frames']) == 111
+    assert abs(float(info['format']['duration']) - 3.7) < .05
+    assert 'zoompan=' in filters[0] and 'zoompan=' not in filters[1]
+    # Decode the first and last frame of the still scene: its centered subject
+    # must grow/shrink monotonically and reach a 10% scale difference.
+    widths, centers = [], []
+    for frame in [0, 31, 62]:
+        raw = await command(['ffmpeg','-v','error','-i',target,'-vf',f'select=eq(n\\,{frame}),crop=1280:2:0:358',
+            '-frames:v','1','-threads','1','-f','rawvideo','-pix_fmt','rgb24','pipe:1'])
+        xs = [x for x in range(1280) if raw[3*x+2] > 180 and raw[3*x] < 40]
+        assert xs
+        widths.append(xs[-1]-xs[0]+1); centers.append((xs[-1]+xs[0])/2)
+    assert max(centers)-min(centers) <= 2
+    assert widths == sorted(widths, reverse=motion=='zoom_out')
+    assert 1.08 < max(widths)/min(widths) < 1.12
+    # Video starts at the same scene boundary and its own audio stays muted.
+    pixel = await command(['ffmpeg','-v','error','-ss','2.15','-i',target,'-vf','crop=2:2:100:100',
+        '-frames:v','1','-threads','1','-f','rawvideo','-pix_fmt','rgb24','pipe:1'])
+    assert pixel[0] > 200 and pixel[1] < 30
+    assert (target.parent/'subtitles.srt').read_bytes() == SRT
+
+
+def test_motion_checkpoint_identity_keeps_legacy_and_video_compatibility():
+    import hashlib
+    from agent.services import render_cache
+    plan = {'size':'720p','fps':30,'fit':'fit','clip_end':'freeze'}
+    image, video = {'kind':'image','frames':63}, {'kind':'video','frames':63}
+    legacy = {'version':1,'source':'digest','kind':'image','frames':63,**plan}
+    assert render_cache.key(plan,image,'digest') == hashlib.sha256(json.dumps(legacy,sort_keys=True).encode()).hexdigest()
+    assert render_cache.key(plan,image,'digest') == render_cache.key({**plan,'image_motion':'none'},image,'digest')
+    keys = {render_cache.key({**plan,'image_motion':m},image,'digest') for m in ['none','zoom_in','zoom_out']}
+    assert len(keys) == 3
+    assert len({render_cache.key({**plan,'image_motion':m},video,'digest') for m in ['none','zoom_in','zoom_out']}) == 1
+
+
+@pytest.mark.asyncio
+async def test_image_motion_defaults_validation_and_frozen_job_plan(tmp_path):
+    service, body, _, _ = await inputs(tmp_path)
+    assert body['image_motion'] == 'none'
+    body.pop('image_motion')
+    assert service.plan(body)['image_motion'] == 'none'
+    with pytest.raises(ValueError):
+        Plan(**{**body, 'image_motion':'spin'})
+    with pytest.raises(ValueError, match='Slow zoom'):
+        service.plan({**body, 'image_motion':'spin'})
+    job = service.enqueue({**body, 'image_motion':'zoom_in'})['id']
+    body['image_motion'] = 'zoom_out'
+    with service.db() as db:
+        stored = json.loads(db.execute('SELECT plan FROM assembly_jobs WHERE id=?',(job,)).fetchone()['plan'])
+    assert stored['image_motion'] == 'zoom_in'

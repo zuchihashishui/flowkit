@@ -4,7 +4,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {JSDOM}=require('jsdom');
 function ui(api){
- const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'../ui/index.html'),'utf8'),{runScripts:'outside-only'});
+ const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'fixtures/chatgpt-retired-ui.html'),'utf8'),{runScripts:'outside-only'});
  dom.window.studio={api,chatgptAction:async()=>{}};
  dom.window.eval(fs.readFileSync(path.join(__dirname,'../ui/chatgpt-model.js'),'utf8'));
  dom.window.eval(fs.readFileSync(path.join(__dirname,'../ui/chatgpt-chat.js'),'utf8'));

@@ -57,7 +57,7 @@ function sameFlowDestination(actual,expected){
     return a.origin===b.origin&&a.pathname.replace(/\/$/,'')===b.pathname.replace(/\/$/,'')&&a.search===b.search;
   }catch{return false;}
 }
-async function openFlowWindow({temporary=false,url=FLOW_TAB_URL}={}) {
+async function openFlowWindow({temporary=false,url=FLOW_TAB_URL,focused=false}={}) {
   if(url!==FLOW_TAB_URL){
     const u=new URL(url);if(!isFlowPage(url)||u.username||u.password||u.hash)throw Error('Invalid project Flow URL');
     if(closingFlowTabs)await closingFlowTabs;
@@ -65,7 +65,7 @@ async function openFlowWindow({temporary=false,url=FLOW_TAB_URL}={}) {
     const promise=(async()=>{
       const old=projectFlowTabs.get(url),existing=old?await chrome.tabs.get(old).catch(()=>null):null;
       if(existing&&sameFlowDestination(existing.pendingUrl||existing.url,url))return existing;
-      const win=await chrome.windows.create({url,type:'normal',focused:false});
+      const win=await chrome.windows.create({url,type:'normal',focused});
       const tab=win.tabs?.[0]||(await chrome.tabs.query({windowId:win.id}))[0];
       if(!Number.isInteger(tab?.id))throw Error('Chrome did not return the Flow worker tab');
       ownedFlowTabs.add(tab.id);projectFlowTabs.set(url,tab.id);
@@ -82,7 +82,7 @@ async function openFlowWindow({temporary=false,url=FLOW_TAB_URL}={}) {
       const tab=await chrome.tabs.get(id).catch(()=>null);
       if(tab&&isFlowPage(tab.url||tab.pendingUrl))return tab;
     }
-    const win=await chrome.windows.create({url:FLOW_TAB_URL,type:'normal',focused:false});
+    const win=await chrome.windows.create({url:FLOW_TAB_URL,type:'normal',focused});
     const tab=win.tabs?.[0]||(await chrome.tabs.query({windowId:win.id}))[0];
     if(!Number.isInteger(tab?.id))throw Error('Chrome did not return the Flow worker tab');
     ownedFlowTabs.add(tab.id);
@@ -94,6 +94,22 @@ async function openFlowWindow({temporary=false,url=FLOW_TAB_URL}={}) {
   if(temporary)return create();
   flowWindowPromise=create();
   try{return await flowWindowPromise;}finally{flowWindowPromise=null;}
+}
+
+// Manual navigation must reveal the window too: activating a tab alone does
+// not bring a background/minimized Chrome window to the foreground.
+async function showFlowTab() {
+  if(closingFlowTabs)await closingFlowTabs;
+  const tabs=await chrome.tabs.query({url:flowUrls});
+  let tab=tabs.find(t=>ownedFlowTabs.has(t.id)&&!t.discarded)||tabs.find(t=>!t.discarded)||tabs[0];
+  if(!tab)tab=await openFlowWindow({focused:true});
+  tab=await reviveTabIfNeeded(tab);
+  if(!tab)throw Error('The Flow tab could not be restored. Try Open Flow Tab again.');
+  const activated=await chrome.tabs.update(tab.id,{active:true});
+  const windowId=activated.windowId??tab.windowId;
+  const win=await chrome.windows.get(windowId);
+  await chrome.windows.update(windowId,{...(win.state==='minimized'?{state:'normal'}:{}),focused:true});
+  return {ok:true,tabId:tab.id,windowId};
 }
 async function closeSavedFlowTabs() {
   if(activeBatchRpcs.size||flowWindowPromise||projectFlowPromises.size||closingFlowTabs)return {closed:false};
@@ -922,16 +938,10 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   }
 
   if (msg.type === 'OPEN_FLOW_TAB') {
-    chrome.tabs.query({ url: flowUrls }).then((tabs) => {
-      if (tabs.length) {
-        chrome.tabs.update(tabs[0].id, { active: true });
-        reply({ ok: true, tabId: tabs[0].id });
-      } else {
-        openFlowWindow()
-          .then((tab) => reply({ ok: true, tabId: tab.id }))
-          .catch((e) => reply({ error: e.message }));
-      }
-    }).catch((e) => reply({ error: e.message }));
+    if(sender.tab){reply({error:'Extension page required'});return false;}
+    showFlowTab()
+      .then(reply)
+      .catch(e=>reply({error:e.message||'Could not open the Flow tab.'}));
     return true;
   }
 

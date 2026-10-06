@@ -70,3 +70,11 @@ caller validation, and editable UI preservation. Windows process commands are te
 through an adapter; a native Windows restart and paid generation were not executed
 in the development environment. No ElevenLabs or ChatGPT extension code changed in
 0.7.19.
+
+## Queue recovery after restart
+
+- ElevenLabs, ChatGPT text/concept jobs and SRT jobs quarantine uncertain submissions for manual review. A restart does not blindly send paid work again.
+- Desktop Google Flow jobs with saved provider results can resume polling/downloading those results. Jobs without a confirmed result require review.
+- The legacy `/requests` worker follows the same rule: only video/reference-video/upscale requests with a saved provider operation ID are resumed by polling. Uncertain requests appear as **Failed** with a `NEEDS_REVIEW:` error because the legacy database status enum has no separate review state. Existing media IDs, URLs and operation IDs are retained. Inspect Google Flow and local files before manually retrying these requests.
+- Local WhisperX jobs become **Interrupted**. **Retry job** creates a separate attempt using the saved source/options; completed JSON remains unchanged.
+- Local assembly renders can resume verified scene checkpoints. Image-motion settings are part of image checkpoint identity.

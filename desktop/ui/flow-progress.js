@@ -16,6 +16,6 @@
   } catch (e) { $('flow-activity-summary').textContent = 'Flow activity unavailable: ' + e.message; }
   finally { refreshing = false; }
  }
- document.querySelector('[data-page="queue"]').addEventListener('click', refresh);
- setInterval(() => { if (!document.querySelector('[data-view="queue"]').hidden) refresh(); }, 3000);
+ document.querySelector('[data-page="scene-board"]').addEventListener('click', refresh);
+ setInterval(() => { if (!document.querySelector('[data-view="scene-board"]').hidden) refresh(); }, 3000);
 })();

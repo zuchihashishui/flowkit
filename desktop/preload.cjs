@@ -1,5 +1,7 @@
 const {contextBridge, ipcRenderer} = require('electron');
 contextBridge.exposeInMainWorld('studio', Object.freeze({
+  maintenanceSaveBackup: id => ipcRenderer.invoke('maintenance-save-backup', id),
+  maintenanceRestore: () => ipcRenderer.invoke('maintenance-restore'),
   openProjectPage: (projectId, key) => ipcRenderer.invoke('open-project-page', projectId, key),
   assemblyImport: (kind, context) => ipcRenderer.invoke('assembly-import', kind, context),
   assemblyMedia: (id, action) => ipcRenderer.invoke('assembly-media', id, action),
@@ -20,6 +22,7 @@ contextBridge.exposeInMainWorld('studio', Object.freeze({
   importVoice: (name, text, consent) => ipcRenderer.invoke('import-voice', name, text, consent),
   exportJob: id => ipcRenderer.invoke('export-job', id),
   preview: (id, index) => ipcRenderer.invoke('preview', id, index),
+  openVideoFiles: (projectId, videoId=null) => ipcRenderer.invoke('open-video-files', projectId, videoId),
   openOutput: () => ipcRenderer.invoke('open-output'),
   openFlow: () => ipcRenderer.invoke('open-flow'),
   openExtension: () => ipcRenderer.invoke('open-extension'),

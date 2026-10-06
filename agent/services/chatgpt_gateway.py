@@ -2,6 +2,7 @@
 import asyncio
 from contextlib import contextmanager
 import json
+import inspect
 import sqlite3
 import time
 import uuid
@@ -129,7 +130,7 @@ async def commit(request_id, ok):
         r = await client.post(URL+'/commit', json={'request_id':request_id,'ok':ok})
         r.raise_for_status()
 
-async def complete(prompt, model=None, validate=None, job_id=None, *, attachment=None, composer_mode=None, temporary=None, timeout_seconds=None, fresh_tab=False, page_url=None):
+async def complete(prompt, model=None, validate=None, job_id=None, *, attachment=None, composer_mode=None, temporary=None, timeout_seconds=None, fresh_tab=False, page_url=None, prepared_tab_token=None, download_srt=False, validate_payload=None, srt_job_id=None, text_session_id=None, prompt_template=None, download_prompt_zip=False):
     global _cleanup_pending
     config = settings()
     timeout = timeout_seconds or config['timeout_seconds']
@@ -140,14 +141,24 @@ async def complete(prompt, model=None, validate=None, job_id=None, *, attachment
     if temporary is None:
         temporary = attachment is None
     extra = {'composerMode': composer_mode}
+    if text_session_id:
+        extra.update(textSessionId=text_session_id, promptTemplate=prompt_template)
     if page_url:
         extra['pageUrl'] = page_url
     if fresh_tab:
         extra['freshTab'] = True
+    if srt_job_id:
+        extra['srtJobId'] = srt_job_id
+    if download_prompt_zip:
+        extra['downloadPromptZip'] = True
+    if download_srt:
+        extra['downloadSrt'] = True
+    if prepared_tab_token:
+        extra['preparedTabToken'] = prepared_tab_token
     if attachment is not None:
         extra['attachment'] = attachment
     inflight = _srt_inflight if fresh_tab else _inflight
-    limit = 1 if fresh_tab else config['workers']
+    limit = 1 if fresh_tab or download_prompt_zip else config['workers']
     if config['paused'] or len(inflight) >= limit:
         raise GatewayBusy('ChatGPT queue is paused or all workers are busy.')
     rid = str(uuid.uuid4())
@@ -162,10 +173,10 @@ async def complete(prompt, model=None, validate=None, job_id=None, *, attachment
             if job_id:
                 c.execute('UPDATE chat_queue SET audit_id=? WHERE id=?',(rid,job_id))
         audited = True
-        async with httpx.AsyncClient(trust_env=False, timeout=timeout+(240 if attachment is not None else 90)) as client:
+        async with httpx.AsyncClient(trust_env=False, timeout=timeout+(1080 if download_srt else 840 if attachment is not None else 690)) as client:
             response = await client.post(URL+'/v1/chat/completions',json={
                 'messages':[{'role':'user','content':prompt}], 'model':model or 'auto',
-                'timeout':timeout*1000,'workers':config['workers'],'temporary':temporary, **extra})
+                'timeout':timeout*1000,'workers':1 if download_prompt_zip else config['workers'],'temporary':temporary, **extra})
         raw = response.text
         with db() as c:
             c.execute('UPDATE requests SET response=? WHERE id=?',(raw,rid))
@@ -176,11 +187,17 @@ async def complete(prompt, model=None, validate=None, job_id=None, *, attachment
             error = GatewayNotSubmitted if response.status_code==400 else GatewayBusy
             raise error(result.get('error','No available worker'))
         remote_id = result.get('id') or result.get('request_id')
+        if response.is_error and isinstance(result,dict) and result.get('error'):
+            phase = str(result.get('phase') or 'GATEWAY')
+            sent = 'after Send' if result.get('submitted') is True else 'before Send' if result.get('submitted') is False else 'submission status unknown'
+            raise ValueError(f"{phase} ({sent}): {str(result['error'])[:1500]}")
         response.raise_for_status()
         text = result['choices'][0]['message']['content']
         if not isinstance(text,str) or not text.strip():
             raise ValueError('ChatGPT returned an empty answer')
-        value = validate(text) if validate else text
+        value = validate_payload(result) if validate_payload else validate(text) if validate else text
+        if inspect.isawaitable(value):
+            value = await value
         # Commit the durable result before telling the extension to reuse the tab.
         with db() as c:
             c.execute("UPDATE requests SET state='COMPLETED' WHERE id=?",(rid,))
@@ -303,8 +320,35 @@ async def inspect_tabs(kind, model='auto'):
 async def ensure_project_workers():
     async with httpx.AsyncClient(trust_env=False,timeout=15) as client:
         try:
-            r=await client.post(URL+'/workers/ensure')
+            r=await client.post(URL+'/workers/ensure', json={'workers': 1})
         except httpx.HTTPError as error:
             raise ValueError('Cannot reach the ChatGPT gateway. Restart it before creating prompts.') from error
         if r.status_code!=200:
             raise ValueError('Reload the updated ChatGPT extension and restart the gateway for project GPT URLs. '+r.text[:300])
+    # A single Work conversation processes ZIP batches sequentially.
+    update_settings({'workers': 1})
+
+async def prepare_srt(page_url, token=None):
+    async with httpx.AsyncClient(trust_env=False, timeout=125) as client:
+        try:
+            response = await client.post(URL+'/srt/prepare', json={'pageUrl':page_url, 'token':token or str(uuid.uuid4())})
+        except httpx.HTTPError as error:
+            raise ValueError('Cannot prepare the ChatGPT window. Restart the gateway and check the ChatGPT extension connection.') from error
+        if response.status_code != 200:
+            try: message = response.json().get('error', response.text)
+            except ValueError: message = response.text
+            raise ValueError(message[:1000] or 'Cannot prepare the SRT tab.')
+        return response.json()
+
+
+async def stop_srt(job_id):
+    async with httpx.AsyncClient(trust_env=False, timeout=20) as client:
+        try:
+            response = await client.post(URL+'/srt/cancel', json={'jobId':job_id})
+            if response.status_code != 200:
+                try: message = response.json().get('error', response.text)
+                except ValueError: message = response.text
+                raise ValueError(str(message)[:1000])
+            return response.json()
+        except httpx.HTTPError as error:
+            raise ValueError('Could not confirm that the SRT worker stopped. Check the ChatGPT window and connection.') from error
