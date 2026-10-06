@@ -1,3 +1,7 @@
+## Studio v0.7.83
+
+Saved files are now also organized under `output/projects/<project-name--id>/<video-title--id>/`, with ElevenLabs, WhisperX, SRT, audio, prompts, images, clips and exports together. Open project/video folders from Project, or Open video folder in Scene Board. Existing originals remain intact; assigned legacy results are collected automatically. See [release notes](docs/releases/0.7.83.md).
+
 ## Studio v0.7.81
 
 Scene Board automatically collects downloaded images into output/scene_images/<video-id>/ as 001.png, 002.jpg, etc., preserving the actual image format and immutable job originals. The board displays the folder path and provides Collect saved images for existing results. Submission remains one prompt per request, up to three desktop media jobs concurrently, with a default minimum three-second interval. See [release notes](docs/releases/0.7.81.md).

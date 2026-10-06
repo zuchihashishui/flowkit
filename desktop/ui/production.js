@@ -2,7 +2,7 @@
 (() => {
   const host = document.getElementById('production-dashboard');
   if (!host) return;
-  host.innerHTML = `<section class="panel production-panel"><div class="toolbar"><div><h2>Production dashboard</h2><p>Every video keeps its own sources and results. Each stage starts only when you click.</p></div><button type="button" id="pd-refresh">Refresh progress</button></div><p id="pd-message" role="status" aria-live="polite"></p><div id="pd-videos" class="production-videos"></div></section><section class="panel space"><div class="toolbar"><h2>Recovery center</h2><button type="button" id="pd-recovery-refresh">Refresh recovery</button></div><p id="pd-recovery-summary">Select a project to inspect saved work.</p><p class="muted">Saved results stay in their original video. Uncertain requests need inspection before retrying; reopening Studio does not resend them.</p><div id="pd-recovery" class="production-recovery"></div></section>`;
+  host.innerHTML = `<section class="panel production-panel"><div class="toolbar"><div><h2>Production dashboard</h2><p>Every video keeps its own sources and results. Each stage starts only when you click.</p></div><div class="actions"><button type="button" id="pd-files">Open project folder</button><button type="button" id="pd-refresh">Refresh progress</button></div></div><p id="pd-message" role="status" aria-live="polite"></p><div id="pd-videos" class="production-videos"></div></section><section class="panel space"><div class="toolbar"><h2>Recovery center</h2><button type="button" id="pd-recovery-refresh">Refresh recovery</button></div><p id="pd-recovery-summary">Select a project to inspect saved work.</p><p class="muted">Saved results stay in their original video. Uncertain requests need inspection before retrying; reopening Studio does not resend them.</p><div id="pd-recovery" class="production-recovery"></div></section>`;
   const $ = id => document.getElementById(id);
   const request = (method, path, body) => window.studio.api(method, path, body);
   const node = (tag, text, cls) => { const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el; };
@@ -26,13 +26,20 @@
     }
     return true;
   }
+  async function openFiles(videoId=null) {
+    const current=ctx();if(!current.project_id)throw Error('Select a project first.');
+    $('pd-message').textContent='Organizing saved files…';
+    const result=await window.studio.openVideoFiles(current.project_id,videoId);
+    if(ctx().project_id!==current.project_id)return;
+    $('pd-message').textContent=(result.directory||result.project_directory)+(result.warnings?.length?' · '+result.warnings.join(' · '):'');
+  }
   function renderVideos(data) {
     $('pd-videos').replaceChildren();
     if(!data.videos?.length){$('pd-videos').append(node('p','Create a video above to start production.','muted'));return;}
     for(const video of data.videos){
       const card=node('article',undefined,'production-video');card.dataset.videoId=video.id;
       const title=node('div',undefined,'toolbar'),head=node('div');head.append(node('h3',video.title),node('small',`${video.scene_count || 0} scenes${ctx().video_id===video.id?' · Active video':''}`));
-      const actions=node('div',undefined,'actions');actions.append(button('Scene Board',()=>navigate(video.id,'scene-board')));
+      const actions=node('div',undefined,'actions');actions.append(button('Open video folder',()=>openFiles(video.id)),button('Scene Board',()=>navigate(video.id,'scene-board')));
       if(video.next_stage)actions.append(button('Check next step',async()=>{
         if(await window.selectProductionVideo?.(video.id,'projects')===false)return;
         if(ctx().video_id===video.id)await check(video.next_stage);
@@ -111,6 +118,7 @@
       return !report.blocked;
     }finally{checking=false;}
   }
+  $('pd-files').onclick=async()=>{$('pd-files').disabled=true;try{await openFiles();}catch(e){$('pd-message').textContent=e.message;}finally{$('pd-files').disabled=false;}};
   $('pd-refresh').onclick=()=>void refresh();$('pd-recovery-refresh').onclick=()=>void refresh();
   document.addEventListener('project-changed',()=>{++ticket;overview=null;$('pd-videos').replaceChildren();$('pd-recovery').replaceChildren();queueMicrotask(()=>void refresh());});
   document.addEventListener('workflow-changed',()=>{closeReport();if(overview)renderVideos(overview);});

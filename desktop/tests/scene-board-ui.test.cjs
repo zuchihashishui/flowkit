@@ -89,3 +89,9 @@ test('Scene Board displays the numbered image folder and collects saved images w
  try{await s.w.sceneBoard.open();assert.match(s.$('scb-image-folder').textContent,/scene_images\/v1/);s.$('scb-collect').click();await tick();assert.deepEqual(writes,['/api/storyboard/videos/v1/collect-images']);assert.match(s.$('scb-message').textContent,/1 images collected/);assert.equal(s.checks.length,0);
  }finally{s.dom.window.close();}
 });
+test('Scene Board opens files for its video without sending generation',async()=>{
+ const opened=[],s=setup(async()=>structuredClone(record));
+ s.w.studio.openVideoFiles=async(project,video)=>{opened.push({project,video});return{directory:'/projects/p1/v1',warnings:[]};};
+ try{await s.w.sceneBoard.open();s.$('scb-open-files').click();await tick();assert.deepEqual(opened,[{project:'p1',video:'v1'}]);assert.match(s.$('scb-message').textContent,/projects\/p1\/v1/);assert.equal(s.checks.length,0);
+ }finally{s.dom.window.close();}
+});

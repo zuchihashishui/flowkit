@@ -263,6 +263,16 @@ app.whenReady().then(async()=>{
     return {...settings};
   });
   handle('choose-output',async()=>{const r=await dialog.showOpenDialog(win,{properties:['openDirectory','createDirectory']});if(!r.canceled){settings.output=r.filePaths[0];await saveSettings();}return settings;});
+  handle('open-video-files',async(projectId,videoId=null)=>{
+    if(typeof projectId!=='string'||!/^[a-zA-Z0-9_-]{1,100}$/.test(projectId)||videoId!==null&&(typeof videoId!=='string'||!/^[a-zA-Z0-9_-]{1,100}$/.test(videoId)))throw Error('Select a project and video first.');
+    const result=await request('POST','/api/workflow/files',{project_id:projectId,video_id:videoId},1800000);
+    const folder=videoId?result.directory:result.project_directory;
+    if(typeof folder!=='string'||!path.isAbsolute(folder)||typeof result.root_directory!=='string'||!path.isAbsolute(result.root_directory))throw Error('Backend returned an invalid project folder.');
+    const relative=path.relative(result.root_directory,folder);
+    if(!relative||relative==='..'||relative.startsWith('..'+path.sep)||path.isAbsolute(relative))throw Error('Folder is outside the project workspace.');
+    const error=await shell.openPath(folder);if(error)throw Error(error);
+    return result;
+  });
   handle('open-output',async()=>{await fs.mkdir(settings.output,{recursive:true});const error=await shell.openPath(settings.output);if(error)throw Error(error);});
   handle('save-chat-results',async ids=>{
     if(!Array.isArray(ids)||!ids.length||ids.length>200||ids.some(id=>typeof id!=='string'))throw Error('Select 1–200 jobs');

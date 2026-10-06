@@ -39,3 +39,10 @@ test('recovery routes media to the exact queue job and saved SRT quality review 
  try{await tick();assert.equal(s.$('pd-recovery').querySelectorAll('article').length,2);s.$('pd-recovery').querySelector('[data-job-id="media"] button').click();await tick();assert.deepEqual(s.calls[0],{video:'v1',page:'queue'});assert.deepEqual(focused,['media']);s.$('pd-recovery').querySelector('[data-job-id="subtitle"] button').click();await tick();assert.deepEqual(s.calls[1],{video:'v1',page:'srt'});
  }finally{s.dom.window.close();}
 });
+test('folder buttons pass the clicked video owner and display copy warnings',async()=>{
+ const opened=[],s=setup(async(method,route)=>route.includes('/overview')?overview:recovery);
+ s.w.studio.openVideoFiles=async(project,video)=>{opened.push({project,video});return{directory:video?'/projects/p/'+video:null,project_directory:'/projects/p',warnings:video?['Missing old audio']:[]};};
+ try{await tick();s.$('pd-files').click();await tick();assert.deepEqual(opened[0],{project:'p1',video:null});
+ s.w.document.querySelector('[data-video-id="v2"] button').click();await tick();assert.deepEqual(opened[1],{project:'p1',video:'v2'});assert.match(s.$('pd-message').textContent,/Missing old audio/);assert.equal(s.calls.length,0);
+ }finally{s.dom.window.close();}
+});
