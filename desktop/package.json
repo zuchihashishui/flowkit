@@ -1,6 +1,10 @@
 {
   "name": "flowkit-studio",
+<<<<<<< HEAD
   "version": "0.7.86",
+=======
+  "version": "0.7.85",
+>>>>>>> e8698be (update)
   "private": true,
   "description": "Flowkit desktop studio",
   "main": "main.cjs",

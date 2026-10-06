@@ -1,7 +1,10 @@
+<<<<<<< HEAD
 ## Studio v0.7.86
 
 Scene Board video generation now always chooses duration from each SRT row: ≤4s → 4s, ≤6s → 6s, ≤8s → 8s, ≤10s → 10s. The shared manual duration selector is removed, and each Video row previews its chosen duration. See [release notes](docs/releases/0.7.86.md).
 
+=======
+>>>>>>> e8698be (update)
 ## Studio v0.7.85
 
 Prompt to Image and Prompt to Video are now integrated into **Scene Board**; both separate menus are removed. Each row defaults to Image; choose Video in its Create column, select rows and click Generate selected scenes. Mixed selections use the matching saved prompts. See [release notes](docs/releases/0.7.85.md).

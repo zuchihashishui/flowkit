@@ -675,6 +675,7 @@ async def test_scene_folder_copy_failure_keeps_completed_original_without_resubm
     assert len(result['files'])==1
     assert desktop.rows()[0]['error'] is None
     generate.assert_awaited_once()
+<<<<<<< HEAD
 
 
 @pytest.mark.asyncio
@@ -707,3 +708,5 @@ async def test_video_batch_uses_each_srt_duration_at_all_flow_boundaries(documen
         assert payload['end_ms'] - payload['start_ms'] == ms
     assert [note['generation_seconds'] for note in result['durations']] == [expected for _, expected in cases]
     assert [note['short'] for note in result['durations']] == [ms > 10000 for ms, _ in cases]
+=======
+>>>>>>> e8698be (update)
