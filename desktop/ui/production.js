@@ -83,7 +83,7 @@
   }
   async function openRecovery(job){
     if(['image','video','voice'].includes(job.kind)){
-      if(await navigate(job.video_id,'queue'))await window.focusProductionJob?.(job.id);
+      if(await navigate(job.video_id,'scene-board'))await window.focusProductionJob?.(job.id);
     }else if(job.action==='inspect'&&['concept','srt'].includes(job.kind)&&['NEEDS_REVIEW','WAITING_COMMIT','SUBMISSION_UNCERTAIN'].includes(job.state)){
       if(await navigate(job.video_id,'settings')){$('cg-status')?.click();$('cg-history')?.click();$('cg-state')?.scrollIntoView?.({block:'center'});}
     }else await navigate(job.video_id,job.stage);

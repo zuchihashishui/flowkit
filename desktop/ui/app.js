@@ -22,6 +22,7 @@ const api = async (method, path, body) => {
 const ACTIVE = ['RUNNING', 'SUBMITTING', 'DOWNLOADING'];
 let projects = [], videos = [], scenes = [], jobs = [], paused = false, refreshing = false;
 let loadedProject = '', loadedCollection = '', sceneRequest = 0, projectRequest = 0;
+let downloadPreviewVersion = 0;
 let editingScene = null, editorDirty = false, sceneSaving = false, detailId = null, bulkExporting = false;
 const selectedScenes = new Set();
 const exported = new Set(), exportFailed = new Set(), exporting = new Set(), previewUrls = new Map();
@@ -46,6 +47,7 @@ function notice(text, error = false) {
   $('notice').classList.toggle('error', error);
 }
 function show(page) {
+  if(page!=='scene-board')clearDownloadPreview();
   if (page === 'storyboard') action(() => window.storyboard?.open());
   if (page === 'scene-board') action(() => window.sceneBoard?.open());
   document.querySelectorAll('[data-view]').forEach(e => e.hidden = e.dataset.view !== page);
@@ -206,6 +208,7 @@ window.focusProductionJob=async id=>{
   $('job-scope').value='video';$('job-kind').value='';$('job-state').value='';$('job-search').value=id;
   renderJobs();showJobDetails(job);$('job-details').scrollIntoView?.({block:'nearest'});return true;
 };
+window.sceneDownloads={focus:window.focusProductionJob,export:async id=>{await exportJob(id);renderJobs();},open:()=>{$('scene-downloads-title').focus({preventScroll:true});$('scene-downloads').scrollIntoView?.({block:'start'});}};
 window.refreshStudioProjects=refreshProjects;
 
 async function loadScenes() {
@@ -215,7 +218,7 @@ async function loadScenes() {
   if(window.videoSettings&&!window.videoSettings.canChangeVideo(id)){$('video-select').value=loadedCollection;return;}
   if(id!==loadedCollection&&window.storyboard?.canChangeVideo&&!window.storyboard.canChangeVideo(id)){$('video-select').value=loadedCollection;return;}
   if(loadedCollection!==id){
-    detailId=null;
+    detailId=null;clearDownloadPreview();
     for(const kind of ['image','video','voice']){
       $(kind+'-preview').replaceChildren();
       if(previewUrls.has(kind)){URL.revokeObjectURL(previewUrls.get(kind));previewUrls.delete(kind);}
@@ -274,10 +277,25 @@ async function exportJob(id) {
     const folder = await window.studio.exportJob(id); exported.add(id); exportFailed.delete(id); notice('Saved to ' + folder); return true;
   } catch (e) { exportFailed.add(id); throw e; } finally { exporting.delete(id); }
 }
+function clearDownloadPreview() {
+  ++downloadPreviewVersion;
+  const host=$('download-preview');host.querySelectorAll('audio,video').forEach(media=>media.pause());host.replaceChildren();host.hidden=true;
+  if(previewUrls.has('download')){URL.revokeObjectURL(previewUrls.get('download'));previewUrls.delete('download');}
+}
 async function preview(job) {
   const project=loadedProject,video=loadedCollection;
+  const inBoard=!document.querySelector('[data-view="scene-board"]').hidden;
+  if(inBoard){showJobDetails(job);clearDownloadPreview();}
+  const version=downloadPreviewVersion;
   const result = await window.studio.preview(job.id, 0), kind = result.kind;
   if(project!==loadedProject||video!==loadedCollection)return;
+  if(inBoard){
+    if(version!==downloadPreviewVersion||detailId!==job.id||document.querySelector('[data-view="scene-board"]').hidden)return;
+    const url=URL.createObjectURL(new Blob([result.bytes],{type:result.mime}));previewUrls.set('download',url);
+    const media=element(kind==='image'?'img':kind==='voice'?'audio':'video');media.src=url;
+    if(kind==='image')media.alt=job.payload.label;else media.controls=true;
+    $('download-preview').replaceChildren(media);$('download-preview').hidden=false;return;
+  }
   if (previewUrls.has(kind)) URL.revokeObjectURL(previewUrls.get(kind));
   const url = URL.createObjectURL(new Blob([result.bytes], {type: result.mime})); previewUrls.set(kind, url);
   const media = element(kind === 'image' ? 'img' : kind === 'voice' ? 'audio' : 'video'); media.src = url;
@@ -296,11 +314,11 @@ function filteredJobs() {
   const search = $('job-search').value.trim().toLowerCase(), kind = $('job-kind').value, state = $('job-state').value;
   return projectJobs().filter(j => (!kind || j.payload.kind === kind) && (!state || (state === 'ACTIVE' ? ACTIVE.includes(j.state) : j.state === state)) && (!search || [j.id, j.payload.label, j.payload.prompt].some(s => (s || '').toLowerCase().includes(search))));
 }
-function showJobDetails(job) { detailId = job.id; show('queue'); renderDetails(); }
+function showJobDetails(job) { if(detailId!==job.id)clearDownloadPreview();detailId=job.id;show('scene-board');renderDetails();$('job-details').scrollIntoView?.({block:'nearest'}); }
 function renderDetails() {
   const job = jobs.find(j => j.id === detailId);
   $('job-details').hidden = !job;
-  if (!job) return;
+  if (!job) {clearDownloadPreview();return;}
   const p = job.payload;
   $('job-detail-text').textContent = `${p.label}\nJob ID: ${job.id}\nState: ${job.state}\nCreated: ${new Date(job.created * 1000).toLocaleString()}\nProject: ${projects.find(x => x.id === p.project_id)?.name || p.project_id || 'None'}\nVideo: ${p.video_id || 'Unassigned'}\nScene ID: ${p.scene_id || 'None'}\nScript segment: ${p.segment_id || 'None'}\nConcept ID: ${p.concept_id || 'None'}\nNarration timing (ms): ${p.start_ms ?? '—'} → ${p.end_ms ?? '—'}\nMedia: ${p.kind}\n${p.kind === 'voice' ? 'Voice: ' + p.template + ' · Speed: ' + p.speed : 'Orientation: ' + p.orientation + (p.kind === 'video' ? ' · Duration: ' + p.duration + ' seconds' : ' · Model: ' + (p.image_model || 'Backend default'))}\n\nFull prompt\n${p.prompt}\n\nError\n${job.error || 'None'}\n\nBackend files\n${job.files.join('\n') || 'No files yet'}`;
 }
@@ -333,13 +351,16 @@ function renderJobs() {
   $('queue-stats').replaceChildren(...counts.map(([name, count]) => { const e = element('div', undefined, 'stat'); e.append(element('strong', String(count)), element('small', name)); return e; }));
   $('queue-summary').textContent = `${scoped.length} jobs · Queue ${paused ? 'paused' : 'running'}`;
   $('filter-summary').textContent = `${visible.length} matching job(s)`;
-  $('pause').textContent = paused ? 'Resume queue' : 'Pause queue';
+  $('pause').textContent = paused ? 'Resume all media jobs' : 'Pause all media jobs';
   $('cancel-filtered').disabled = !visible.some(j => j.state === 'QUEUED');
   $('export-filtered').disabled = bulkExporting || !visible.some(j => j.state === 'COMPLETED');
   renderDetails();
 }
 async function refreshJobs() {
-  const data = await api('GET', '/api/desktop/jobs'); jobs = data.jobs; paused = data.paused; syncProjectFilter(); renderJobs();
+  const signature=items=>JSON.stringify(items.map(j=>[j.id,j.state,j.stage,j.error,j.files]));
+  const data = await api('GET', '/api/desktop/jobs'),changed=signature(jobs)!==signature(data.jobs);
+  jobs = data.jobs; paused = data.paused; syncProjectFilter(); renderJobs();
+  if(changed)document.dispatchEvent(new Event('media-jobs-updated'));
   if ($('auto-export').checked && !bulkExporting) {
     const job = jobs.find(j => j.state === 'COMPLETED' && !exported.has(j.id) && !exportFailed.has(j.id) && !exporting.has(j.id));
     if (job) await action(() => exportJob(job.id));
@@ -444,7 +465,7 @@ $('import-scenes').onclick = () => action(async () => {
 $('pause').onclick = () => action(async () => { await api('POST', '/api/desktop/pause', {paused: !paused}); await refreshJobs(); }, $('pause'));
 for (const id of ['job-search', 'job-kind', 'job-state','job-scope']) $(id).addEventListener(id === 'job-search' ? 'input' : 'change', renderJobs);
 $('change-project').onclick=()=>show('projects');
-$('close-job-details').onclick = () => { detailId = null; renderDetails(); };
+$('close-job-details').onclick = () => { detailId = null; clearDownloadPreview();renderDetails(); };
 $('cancel-filtered').onclick = () => action(() => cancelJobs(filteredJobs().filter(j => j.state === 'QUEUED').slice(0, 1000).map(j => j.id)), $('cancel-filtered'));
 $('export-filtered').onclick = () => action(async () => {
   const items = filteredJobs().filter(j => j.state === 'COMPLETED');

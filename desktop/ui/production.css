@@ -3,3 +3,5 @@
 .scene-board-folder{overflow-wrap:anywhere;user-select:text}
 
 .scene-board-select-all{display:flex;align-items:center;gap:6px;font-weight:600}.scene-board-select-all input{margin:0}
+
+.scene-download-list{max-height:560px;overflow:auto;overscroll-behavior:contain;padding-right:8px}#scene-downloads{scroll-margin-top:20px}#scene-downloads-title{margin-top:28px}

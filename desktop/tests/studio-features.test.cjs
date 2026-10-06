@@ -172,3 +172,56 @@ test('multiple videos can be selected, created, renamed and restored within one 
  const restored=await studio('p1',true,'v2');
  try{assert.equal(restored.$('video-select').value,'v2');assert.equal(restored.w.workflow.context().video_id,'v2');}finally{restored.dom.window.close();}
 });
+
+test('Scene Board owns downloads and recovery links; the old queue route is removed',async()=>{
+ const s=await studio('p1',true,'v1'),{$,w,calls}=s;
+ try{
+  assert.equal(w.document.querySelector('[data-page="queue"]'),null);
+  assert.equal(w.document.querySelector('[data-view="queue"]'),null);
+  for(const id of ['all-jobs','job-details','pause','export-filtered','flow-activity-jobs'])assert.equal($(id).closest('[data-view]').dataset.view,'scene-board');
+  await w.focusProductionJob('c');
+  assert.equal(w.document.querySelector('[data-page].active').dataset.page,'scene-board');
+  assert.equal($('job-search').value,'c');assert.match($('job-detail-text').textContent,/Download failed/);
+  assert.equal($('all-jobs').querySelector('[data-job-id="c"]')!==null,true);
+  await assert.rejects(w.focusProductionJob('second-video-job'),/does not belong/);
+  assert.equal(calls.filter(c=>c.method==='POST'&&c.route==='/api/desktop/jobs').length,0);
+ }finally{s.dom.window.close();}
+});
+
+test('job previews and exports stay inside Scene Board and late previews cannot reopen after leaving',async()=>{
+ const s=await studio('p2'),{$,w,click,exports}=s;
+ const urls=[],revoked=[];w.URL.createObjectURL=()=>{const url='blob:preview-'+urls.length;urls.push(url);return url;};w.URL.revokeObjectURL=url=>revoked.push(url);
+ w.studio.preview=async()=>({bytes:new Uint8Array([1]),kind:'image',mime:'image/png'});
+ try{
+  w.document.querySelector('[data-page="scene-board"]').click();
+  await click($('all-jobs'),'Preview');
+  assert.equal($('heading').textContent,'Scene Board');assert.equal($('download-preview').hidden,false);
+  assert.equal($('download-preview').querySelector('img').src,'blob:preview-0');
+  await click($('all-jobs'),'Export files');assert.deepEqual(exports,['b']);
+  $('close-job-details').click();assert.equal($('download-preview').hidden,true);assert.deepEqual(revoked,['blob:preview-0']);
+  let release;w.studio.preview=()=>new Promise(r=>release=r);
+  await click($('all-jobs'),'Preview');
+  w.document.querySelector('[data-page="projects"]').click();
+  release({bytes:new Uint8Array([2]),kind:'image',mime:'image/png'});await tick();
+  assert.equal($('heading').textContent,'Project');assert.equal($('download-preview').hidden,true);assert.equal(urls.length,1);
+ }finally{s.dom.window.close();}
+});
+
+test('Scene Board history preserves pause, saved-result resume and scoped queued cancellation',async()=>{
+ const s=await studio('p1',true,'v1'),{$,w,click,calls}=s;let paused=false,resumed=false;
+ const base=w.studio.api;
+ w.studio.api=async(method,route,body)=>{
+  if(route==='/api/desktop/pause'){calls.push({method,route,body});paused=body.paused;return{paused};}
+  if(route==='/api/desktop/jobs/c/resume'){calls.push({method,route,body});resumed=true;return{};}
+  const value=await base(method,route,body);
+  if(route==='/api/desktop/jobs'&&method==='GET'){value.paused=paused;if(resumed){const row=value.jobs.find(j=>j.id==='c');row.can_resume=false;row.state='DOWNLOADING';}}
+  return value;
+ };
+ try{
+  w.document.querySelector('[data-page="scene-board"]').click();
+  $('pause').click();await tick();assert.equal(paused,true);assert.equal($('pause').textContent,'Resume all media jobs');
+  await click($('all-jobs'),'Resume saved result');assert.match($('all-jobs').textContent,/DOWNLOADING/);
+  $('cancel-filtered').click();await tick();assert.deepEqual(Array.from(calls.find(c=>c.route==='/api/desktop/jobs/cancel').body.ids),['a']);
+  assert.equal(calls.some(c=>c.route==='/api/desktop/jobs'&&c.method==='POST'),false);
+ }finally{s.dom.window.close();}
+});

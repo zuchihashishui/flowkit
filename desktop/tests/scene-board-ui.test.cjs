@@ -95,3 +95,24 @@ test('Scene Board opens files for its video without sending generation',async()=
  try{await s.w.sceneBoard.open();s.$('scb-open-files').click();await tick();assert.deepEqual(opened,[{project:'p1',video:'v1'}]);assert.match(s.$('scb-message').textContent,/projects\/p1\/v1/);assert.equal(s.checks.length,0);
  }finally{s.dom.window.close();}
 });
+test('scene actions open the exact current job and export its existing file',async()=>{
+ const actions=[],s=setup(async()=>structuredClone(record));
+ s.w.sceneDownloads={open:()=>actions.push('open'),focus:async id=>actions.push(['details',id]),export:async id=>actions.push(['export',id])};
+ try{
+  await s.w.sceneBoard.open();s.$('scb-show-downloads').click();
+  const row=s.$('scb-rows').querySelector('[data-segment-id="s1"]');
+  [...row.querySelectorAll('button')].find(b=>b.textContent==='Export files').click();await tick();
+  [...row.querySelectorAll('button')].find(b=>b.textContent==='Job details').click();await tick();
+  const failed=s.$('scb-rows').querySelector('[data-segment-id="s2"]');
+  [...failed.querySelectorAll('button')].find(b=>b.textContent==='Job details').click();await tick();
+  assert.deepEqual(actions,['open',['export','image-1'],['details','image-1'],['details','failed-image']]);assert.equal(s.checks.length,0);
+ }finally{s.dom.window.close();}
+});
+test('saved-result recovery refreshes failed scene rows when media history changes',async()=>{
+ let latest=structuredClone(record);const s=setup(async()=>structuredClone(latest));
+ try{await s.w.sceneBoard.open();assert.match(s.$('scb-rows').querySelector('[data-segment-id="s2"]').textContent,/FAILED/);
+ latest.segments[1].media_jobs[0].state='DOWNLOADING';
+ s.w.document.dispatchEvent(new s.w.Event('media-jobs-updated'));await tick();
+ assert.match(s.$('scb-rows').querySelector('[data-segment-id="s2"]').textContent,/image · DOWNLOADING/);
+ }finally{s.dom.window.close();}
+});

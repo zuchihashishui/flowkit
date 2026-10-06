@@ -36,7 +36,7 @@ test('late previous-project dashboard response cannot overwrite the selected pro
 test('recovery routes media to the exact queue job and saved SRT quality review to its stage',async()=>{
  const focused=[],s=setup(async(method,route)=>route.includes('/overview')?overview:{counts:{},jobs:[{id:'media',kind:'image',video_id:'v1',stage:'images',state:'FAILED',action:'resume_download'},{id:'subtitle',kind:'srt',video_id:'v1',stage:'srt',state:'COMPLETED',action:'inspect',message:'Review timing exceptions.'},{id:'done',kind:'image',video_id:'v1',stage:'images',state:'COMPLETED',action:null}]});
  s.w.focusProductionJob=async id=>focused.push(id);
- try{await tick();assert.equal(s.$('pd-recovery').querySelectorAll('article').length,2);s.$('pd-recovery').querySelector('[data-job-id="media"] button').click();await tick();assert.deepEqual(s.calls[0],{video:'v1',page:'queue'});assert.deepEqual(focused,['media']);s.$('pd-recovery').querySelector('[data-job-id="subtitle"] button').click();await tick();assert.deepEqual(s.calls[1],{video:'v1',page:'srt'});
+ try{await tick();assert.equal(s.$('pd-recovery').querySelectorAll('article').length,2);s.$('pd-recovery').querySelector('[data-job-id="media"] button').click();await tick();assert.deepEqual(s.calls[0],{video:'v1',page:'scene-board'});assert.deepEqual(focused,['media']);s.$('pd-recovery').querySelector('[data-job-id="subtitle"] button').click();await tick();assert.deepEqual(s.calls[1],{video:'v1',page:'srt'});
  }finally{s.dom.window.close();}
 });
 test('folder buttons pass the clicked video owner and display copy warnings',async()=>{

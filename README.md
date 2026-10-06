@@ -1,3 +1,7 @@
+## Studio v0.7.84
+
+Queue & Downloads is integrated into **Scene Board → Jobs & downloads**; the separate sidebar menu is removed. Job filters, Flow activity, pause/resume, queued cancellation, saved-result recovery, previews and exports remain available. Scene rows link directly to job details and existing file exports. See [release notes](docs/releases/0.7.84.md).
+
 ## Studio v0.7.83
 
 Saved files are now also organized under `output/projects/<project-name--id>/<video-title--id>/`, with ElevenLabs, WhisperX, SRT, audio, prompts, images, clips and exports together. Open project/video folders from Project, or Open video folder in Scene Board. Existing originals remain intact; assigned legacy results are collected automatically. See [release notes](docs/releases/0.7.83.md).
