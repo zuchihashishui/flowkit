@@ -59,10 +59,12 @@
     const counts=data.counts || {};
     $('pd-recovery-summary').textContent=['queued','running','needs_review','failed','resumable','download_recoverable'].map(k=>`${counts[k] || 0} ${k.replace(/_/g,' ')}`).join(' · ')+(data.retained_results?` · ${data.retained_results} completed results retained`:'');
     const target=$('pd-recovery');target.replaceChildren();
-    const actionable=(data.jobs || []).filter(job=>job.action);
+    const actionable=(data.jobs || []).filter(job=>job.action).sort((a,b)=>(Number(b.created)||0)-(Number(a.created)||0));
+    if(actionable.length)$('pd-recovery-summary').textContent+=` · Showing latest ${Math.min(5,actionable.length)} of ${actionable.length} tasks`;
+    target.setAttribute('tabindex','0');target.setAttribute('aria-label','Latest five tasks requiring attention');
     if(!actionable.length){target.append(node('p','No unfinished work needs attention in this project.','muted'));return;}
     const titles=new Map((overview?.videos || []).map(v=>[v.id,v.title]));
-    for(const job of actionable){
+    for(const job of actionable.slice(0,5)){
       const row=node('article',undefined,'production-recovery-item');row.dataset.jobId=job.id;
       row.append(node('strong',`${job.title || job.kind} · ${human(job.state)}`),node('small',`${titles.get(job.video_id)||job.video_id||'Unassigned'} · ${names[job.stage]||job.stage||job.kind}`));
       if(job.message)row.append(node('p',job.message));

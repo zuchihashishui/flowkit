@@ -1,3 +1,11 @@
+## Studio v0.7.78
+
+Scene Board uses one scrolling table like SRT to Prompt, with sticky column headers and no pagination. Filtering and selection cover every matching scene; each action still supports up to 200 selected scenes. Refresh preserves the scroll position. See [release notes](docs/releases/0.7.78.md).
+
+## Studio v0.7.77
+
+Project recovery shows only the five latest actionable tasks in a scrollable panel. Older jobs remain stored.
+
 ## Studio v0.7.76 / ChatGPT Bridge 1.12.3
 
 Scene Board now provides Image Model, Aspect Ratio (16:9 / 9:16), and Generate selected images. Settings are saved per video; completed and active images are preserved. Prompt to Image remains available for standalone prompts. Retry keeps original job settings. See [release notes](docs/releases/0.7.76.md).

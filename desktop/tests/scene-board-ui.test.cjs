@@ -21,7 +21,7 @@ test('scene board shows real current image thumbnails, retained older results, t
 });
 test('selected-only media retry excludes successful and running jobs and runs a scoped preflight',async()=>{
  const writes=[],s=setup(async(method,route,body)=>{if(method==='POST'){writes.push({route,body});return{ids:['new'],resumed:[],skipped:[]};}return structuredClone(record);});
- try{await s.w.sceneBoard.open();s.$('scb-target').value='image';s.$('scb-select-page').click();s.$('scb-retry').click();await tick();assert.equal(writes.length,1);assert.equal(writes[0].route,'/api/storyboard/videos/v1/retry-failed');assert.deepEqual(Array.from(writes[0].body.segment_ids),['s2']);assert.equal(writes[0].body.kind,'image');assert.equal(writes[0].body.reviewed,true);assert.equal(s.checks[0][0],'images');assert.equal(s.checks[0][1].video_id,'v1');assert.match(s.$('scb-message').textContent,/Successful results were kept/);
+ try{await s.w.sceneBoard.open();s.$('scb-target').value='image';s.$('scb-select-filtered').click();s.$('scb-retry').click();await tick();assert.equal(writes.length,1);assert.equal(writes[0].route,'/api/storyboard/videos/v1/retry-failed');assert.deepEqual(Array.from(writes[0].body.segment_ids),['s2']);assert.equal(writes[0].body.kind,'image');assert.equal(writes[0].body.reviewed,true);assert.equal(s.checks[0][0],'images');assert.equal(s.checks[0][1].video_id,'v1');assert.match(s.$('scb-message').textContent,/Successful results were kept/);
  }finally{s.dom.window.close();}
 });
 test('video prompt retry preserves an existing image prompt and selected filters are separate per video',async()=>{
@@ -53,7 +53,7 @@ test('Scene Board generates selected missing images using model and aspect ratio
   if(method==='POST'){writes.push({route,body});return{ids:['new'],skipped:[]};}
   return structuredClone(record);
  });
- try{await s.w.sceneBoard.open();assert.equal(writes.length,0);s.$('scb-model').value='model-test';s.$('scb-ratio').value='VERTICAL';s.$('scb-select-page').click();s.$('scb-generate').click();await tick();
+ try{await s.w.sceneBoard.open();assert.equal(writes.length,0);s.$('scb-model').value='model-test';s.$('scb-ratio').value='VERTICAL';s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();
  assert.equal(writes.length,1);assert.equal(writes[0].route,'/api/storyboard/videos/v1/generate-media');assert.deepEqual(JSON.parse(JSON.stringify(writes[0].body)),{segment_ids:['s2'],kind:'image',image_model:'model-test',orientation:'VERTICAL',regenerate:false});assert.equal(s.checks[0][0],'images');assert.match(s.$('scb-message').textContent,/2 scenes skipped/);
  }finally{s.dom.window.close();}
 });
@@ -65,8 +65,19 @@ test('Scene Board image settings are restored per video and default to video pro
 });
 test('Scene Board does not generate with missing prompts, blocked preflight, or changed video',async()=>{
  let writes=0,resolveCheck;const doc=structuredClone(record),s=setup(async(method,route)=>{if(method==='POST')writes++;return route==='/api/models'?{}:doc;});
- try{doc.segments[1].ready=false;await s.w.sceneBoard.open();s.$('scb-select-page').click();s.$('scb-generate').click();await tick();assert.equal(writes,0);assert.match(s.$('scb-message').textContent,/current image prompt/);
+ try{doc.segments[1].ready=false;await s.w.sceneBoard.open();s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();assert.equal(writes,0);assert.match(s.$('scb-message').textContent,/current image prompt/);
  doc.segments[1].ready=true;await s.w.sceneBoard.open();s.w.production.check=async()=>false;s.$('scb-generate').click();await tick();assert.equal(writes,0);
  s.w.production.check=async()=>new Promise(r=>resolveCheck=r);s.$('scb-generate').click();await tick();s.context({project_id:'p1',video_id:'v2'});resolveCheck(true);await tick();assert.equal(writes,0);
+ }finally{s.dom.window.close();}
+});
+test('all 300 scenes share one scrollable table; filtering and selection reach rows after the old page boundary',async()=>{
+ const doc={...structuredClone(record),segments:Array.from({length:300},(_,i)=>scene('s'+(i+1)))},s=setup(async()=>doc);
+ try{
+ s.w.localStorage.setItem('flowkit.scene-board.v1/p1/v1',JSON.stringify({page:8}));
+ await s.w.sceneBoard.open();assert.equal(s.$('scb-rows').children.length,300);assert.ok(s.$('scb-rows').querySelector('[data-segment-id="s300"]'));assert.equal(s.$('scb-next'),null);
+ s.$('scb-table-scroll').scrollTop=450;await s.w.sceneBoard.open();assert.equal(s.$('scb-table-scroll').scrollTop,450);
+ s.$('scb-select-filtered').click();assert.match(s.$('scb-count').textContent,/200 selected/);
+ s.$('scb-clear').click();s.$('scb-search').value='Detailed image s300';s.$('scb-search').dispatchEvent(new s.w.Event('input'));assert.equal(s.$('scb-rows').children.length,1);assert.equal(s.$('scb-table-scroll').scrollTop,0);
+ s.$('scb-select-filtered').click();assert.match(s.$('scb-count').textContent,/1 selected/);assert.equal(s.$('scb-rows').querySelector('input').checked,true);
  }finally{s.dom.window.close();}
 });

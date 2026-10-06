@@ -37,3 +37,7 @@ nav .nav-secondary{margin-top:12px;border-top:1px solid var(--line);border-radiu
 .sb-badge{display:inline-block;padding:4px 9px;border-radius:6px;font-weight:600;background:#333b49;color:#e3e9f2;white-space:nowrap}
 .sb-badge[data-state="completed"]{background:#164b38;color:#adf0cc}.sb-badge[data-state="error"]{background:#632d35;color:#ffd0d6}.sb-badge[data-state="running"]{background:#214779;color:#cce2ff}.sb-badge[data-state="queued"]{background:#524726;color:#ffe6a1}
 .sb-table td p{max-height:150px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;margin:0}.sb-table td small{display:block;max-width:270px;white-space:pre-wrap;overflow-wrap:anywhere;margin-top:8px}.sb-table th{position:sticky;top:0;z-index:1;background:var(--panel,#1b2130)}
+
+/* Keep project recovery history compact, including expanded error details. */
+#pd-recovery{max-height:480px;max-height:min(480px,60vh);overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;overflow-wrap:anywhere}
+#pd-recovery pre{white-space:pre-wrap;overflow-wrap:anywhere}
