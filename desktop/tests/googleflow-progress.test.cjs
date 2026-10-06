@@ -62,3 +62,30 @@ test('Flow background keeps running badge until concurrent RPCs settle and rejec
   assert.equal(listener({type:'FLOW_PROGRESS'}, {tab:{id:1}}, result=>refused=result),false);
   assert.match(refused.error,/Extension page required/);
 });
+
+for(const outcome of ['success','background-error','runtime-error','no-reply','throw']){
+ test(`Open Flow Tab button shows pending state and ${outcome} feedback`,()=>{
+  const dom=new JSDOM(fs.readFileSync(path.join(dir,'side_panel.html'),'utf8'),{runScripts:'outside-only'}),w=dom.window;
+  let reply,timeout,sends=0;
+  w.chrome={runtime:{onMessage:{addListener(){}},sendMessage(msg,callback){
+   if(msg.type!=='OPEN_FLOW_TAB'){callback?.();return;}
+   sends++;if(outcome==='throw')throw Error('Extension context invalidated');reply=callback;
+  }}};
+  w.setTimeout=fn=>{timeout=fn;return 1;};w.clearTimeout=()=>{};
+  try{
+   w.eval(fs.readFileSync(path.join(dir,'side_panel.js'),'utf8'));
+   const btn=w.document.getElementById('btn-flow'),status=w.document.getElementById('flow-open-status');btn.click();
+   if(outcome!=='throw'){
+    assert.equal(btn.disabled,true);assert.match(status.textContent,/Opening/);btn.click();assert.equal(sends,1);
+    if(outcome==='success')reply({ok:true,tabId:2});
+    if(outcome==='background-error')reply({error:'Window unavailable <script>bad()</script>'});
+    if(outcome==='runtime-error'){w.chrome.runtime.lastError={message:'Message port closed'};reply();delete w.chrome.runtime.lastError;}
+    if(outcome==='no-reply'){timeout();reply({ok:true});assert.match(status.textContent,/No reply/,'A late reply cannot erase timeout feedback');}
+   }
+   assert.equal(btn.disabled,false);assert.equal(btn.textContent,'Open Flow Tab');assert.equal(status.dataset.state,outcome==='success'?'success':'error');assert.equal(status.querySelector('script'),null);
+   if(outcome==='background-error')assert.match(status.textContent,/Window unavailable/);
+   if(outcome==='runtime-error')assert.match(status.textContent,/Message port closed/);
+   if(outcome==='throw')assert.match(status.textContent,/Extension context invalidated/);
+  }finally{w.close();}
+ });
+}

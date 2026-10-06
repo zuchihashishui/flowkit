@@ -271,9 +271,24 @@ document.getElementById('main-toggle').addEventListener('change', (e) => {
 // ── Action buttons ───────────────────────────────────────────
 
 document.getElementById('btn-flow').addEventListener('click', () => {
-  chrome.runtime.sendMessage({ type: 'OPEN_FLOW_TAB' }, () => {
-    if (chrome.runtime.lastError) return;
-  });
+  const btn=document.getElementById('btn-flow'),status=document.getElementById('flow-open-status');
+  if(btn.disabled)return;
+  btn.disabled=true;btn.textContent='Opening…';
+  status.textContent='Opening the Flow tab…';status.dataset.state='pending';
+  let finished=false;
+  const finish=error=>{
+    if(finished)return;finished=true;clearTimeout(timer);
+    btn.disabled=false;btn.textContent='Open Flow Tab';
+    status.dataset.state=error?'error':'success';
+    status.textContent=error?'Could not open Flow: '+error:'Flow tab is open and its window is in front.';
+  };
+  const timer=setTimeout(()=>finish('No reply from the extension after 30 seconds. Check Chrome windows, then reload the extension if needed.'),30000);
+  try{
+    chrome.runtime.sendMessage({type:'OPEN_FLOW_TAB'},data=>{
+      const error=chrome.runtime.lastError?.message||data?.error||(!data?.ok?'The extension returned no confirmation.':null);
+      finish(error);
+    });
+  }catch(error){finish(error.message||'Extension connection unavailable. Reload the extension.');}
 });
 
 document.getElementById('btn-token').addEventListener('click', () => {

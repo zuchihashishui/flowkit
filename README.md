@@ -1,3 +1,7 @@
+## Studio v0.7.79 / Google Flow Bridge 0.6.3
+
+Open Flow Tab now brings the Chrome window forward, restores minimized windows and displays opening/error feedback. Reload extensions/googleflow in Chrome and reopen the side panel. See [release notes](docs/releases/0.7.79.md).
+
 ## Studio v0.7.78
 
 Scene Board uses one scrolling table like SRT to Prompt, with sticky column headers and no pagination. Filtering and selection cover every matching scene; each action still supports up to 200 selected scenes. Refresh preserves the scroll position. See [release notes](docs/releases/0.7.78.md).
