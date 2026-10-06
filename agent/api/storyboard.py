@@ -256,8 +256,19 @@ async def read_document(video_id: str):
             warnings.append(f"Segment {s['ordinal']} extends beyond the audio duration.")
     if doc['audio_duration_ms'] and previous_end < doc['audio_duration_ms']:
         warnings.append(f"Audio continues {doc['audio_duration_ms'] - previous_end} ms after the last segment.")
+    from agent.services.scene_images import image_folder
     return {'video': video, 'document': doc, 'segments': segments, 'warnings': warnings,
+            'image_output_directory': str(image_folder(video_id)),
             'prompt_outputs': [item for item in prompt_outputs.values() if item]}
+
+
+@router.post('/videos/{video_id}/collect-images')
+async def collect_saved_images(video_id: str):
+    from agent.services.scene_images import collect_images
+    try:
+        return await collect_images(video_id)
+    except OSError as exc:
+        raise HTTPException(409, f'Could not copy saved images. Check folder permissions and free space: {exc}') from exc
 
 
 @router.post('/videos/{video_id}/segments')

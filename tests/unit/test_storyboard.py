@@ -18,6 +18,9 @@ CONCEPT = Concept(title='Paper boat', description='A paper boat illustrates the 
 
 @pytest_asyncio.fixture
 async def document(tmp_path, monkeypatch):
+    from agent.services import scene_images
+    monkeypatch.setattr(scene_images, 'OUTPUT_DIR', tmp_path/'output')
+    monkeypatch.setattr(desktop, 'ROOT', tmp_path/'originals')
     # pytest gives each test a fresh event loop; contended locks bind to it.
     monkeypatch.setattr(s, '_db_lock', asyncio.Lock())
     monkeypatch.setattr(schema, 'DB_PATH', tmp_path/'app.db')
@@ -586,3 +589,89 @@ async def test_long_image_prompt_reaches_flow_with_saved_project_url(document, m
     assert captured[0]['image_model'] == 'TEST_MODEL'
     assert captured[0]['aspect_ratio'] == 'IMAGE_ASPECT_RATIO_PORTRAIT'
     assert desktop.rows()[0]['state'] == 'COMPLETED'
+    from agent.services.scene_images import image_folder
+    assert (image_folder(document)/'001.png').read_bytes() == b'mocked-image'
+
+@pytest.mark.asyncio
+async def test_collect_scene_images_names_original_ordinals_and_preserves_formats(document):
+    from pathlib import Path
+    from agent.services.scene_images import collect_images
+    scenes = (await s.read_document(document))['segments']
+    for scene in scenes:
+        await s.save_concept(scene['id'], CONCEPT)
+    await s.generate_media(document, s.MediaBody(segment_ids=[row['id'] for row in scenes], kind='image'))
+    originals = []
+    for job in desktop.rows():
+        payload = json.loads(job['payload'])
+        ordinal = next(row['ordinal'] for row in scenes if row['id'] == payload['segment_id'])
+        path = desktop.ROOT / job['id'] / ('output_1.jpg' if ordinal == 2 else 'output_1.png')
+        path.parent.mkdir(parents=True);path.write_bytes(f'image-{ordinal}'.encode())
+        originals.append(path)
+        desktop.update(job['id'],state='COMPLETED',files=json.dumps([str(path)]))
+    result = await collect_images(document)
+    folder = Path(result['directory'])
+    assert folder.name == document
+    assert (folder/'001.png').read_bytes() == b'image-1'
+    assert (folder/'002.jpg').read_bytes() == b'image-2'
+    assert all(path.is_file() for path in originals)
+    assert (await s.read_document(document))['image_output_directory'] == str(folder)
+    assert len((await s.collect_saved_images(document))['files']) == 2
+
+
+@pytest.mark.asyncio
+async def test_numbered_images_keep_newer_completed_result_and_do_not_mix_videos(document):
+    from pathlib import Path
+    from agent.services.scene_images import collect_images
+    data=await s.read_document(document);sid=data['segments'][0]['id']
+    await s.save_concept(sid,CONCEPT)
+    body=s.MediaBody(segment_ids=[sid],kind='image',regenerate=True)
+    old_id=(await s.generate_media(document,body))['ids'][0]
+    new_id=(await s.generate_media(document,body))['ids'][0]
+    def completed(jid,name,content):
+        path=desktop.ROOT/jid/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(content)
+        desktop.update(jid,state='COMPLETED',files=json.dumps([str(path)]))
+        return path
+    old=completed(old_id,'output_1.jpg',b'old')
+    first=await collect_images(document);folder=Path(first['directory']);assert (folder/'001.jpg').exists()
+    completed(new_id,'output_1.png',b'new')
+    with desktop.connection() as db:
+        db.execute('UPDATE jobs SET created=1 WHERE id=?',(old_id,))
+        db.execute('UPDATE jobs SET created=2 WHERE id=?',(new_id,))
+    await collect_images(document,{sid})
+    assert (folder/'001.png').read_bytes()==b'new'
+    assert not (folder/'001.jpg').exists();assert old.read_bytes()==b'old'
+    # Repeating collection for an older completion must retain the newer result.
+    desktop.update(old_id,state='COMPLETED')
+    await collect_images(document,{sid});assert (folder/'001.png').read_bytes()==b'new'
+    second=await crud.create_video(project_id=data['video']['project_id'],title='Other')
+    other=await collect_images(second['id']);assert other['directory'] != str(folder);assert other['files']==[]
+    # Changing the source makes the old job ineligible for further copying.
+    await s.save_concept(sid,CONCEPT.model_copy(update={'image_prompt':'A new scene'}))
+    assert (await collect_images(document))['files']==[]
+
+
+@pytest.mark.asyncio
+async def test_scene_folder_copy_failure_keeps_completed_original_without_resubmission(document,monkeypatch,tmp_path):
+    from agent.services import scene_images, browser_lifecycle
+    sid=(await s.read_document(document))['segments'][0]['id']
+    await s.save_concept(sid,CONCEPT)
+    jid=(await s.generate_media(document,s.MediaBody(segment_ids=[sid],kind='image')))['ids'][0]
+    generate=AsyncMock(return_value={'media':[{'image':{'generatedImage':{'fifeUrl':'https://flow-content.google/test.png'}}}]})
+    monkeypatch.setattr(desktop.flow,'generate_image',generate)
+    monkeypatch.setattr(browser_lifecycle,'flow_started',lambda *args:None)
+    monkeypatch.setattr(browser_lifecycle,'flow_saved',lambda *args:None)
+    async def download(url,path):path.write_bytes(b'image');return path
+    monkeypatch.setattr(desktop,'download',download)
+    def fail_copy(*args):raise OSError('Disk full')
+    original_copy=scene_images.copy_image
+    monkeypatch.setattr(scene_images,'copy_image',fail_copy)
+    await desktop.process(desktop.rows()[0])
+    job=desktop.rows()[0]
+    assert job['state']=='COMPLETED';assert 'scene folder copy failed' in job['error']
+    assert len(json.loads(job['files']))==1;generate.assert_awaited_once()
+    await desktop.process(job);generate.assert_awaited_once()
+    monkeypatch.setattr(scene_images,'copy_image',original_copy)
+    result=await s.collect_saved_images(document)
+    assert len(result['files'])==1
+    assert desktop.rows()[0]['error'] is None
+    generate.assert_awaited_once()

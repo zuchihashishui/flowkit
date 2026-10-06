@@ -359,6 +359,15 @@ async def process(job):
                 target = await download(url, target)
                 files.append(str(target))
         update(jid, state="COMPLETED", files=json.dumps(files))
+        if body.kind == 'image' and body.video_id and body.segment_id:
+            try:
+                from agent.services.scene_images import collect_images
+                await collect_images(body.video_id, {body.segment_id})
+            except Exception as exc:
+                # Generation/download succeeded. A copy failure must not trigger
+                # a paid retry; the Scene Board can collect saved images again.
+                logger.exception('Could not collect saved scene image for job %s', jid)
+                update(jid, error=f'Image saved; scene folder copy failed: {exc}. Use Collect saved images in Scene Board.'[:1500])
         if body.kind != "voice":
             flow_saved("desktop", jid)
     except asyncio.CancelledError:

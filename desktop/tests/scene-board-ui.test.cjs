@@ -81,3 +81,10 @@ test('all 300 scenes share one scrollable table; filtering and selection reach r
  s.$('scb-select-filtered').click();assert.match(s.$('scb-count').textContent,/1 selected/);assert.equal(s.$('scb-rows').querySelector('input').checked,true);
  }finally{s.dom.window.close();}
 });
+test('Scene Board displays the numbered image folder and collects saved images without generating',async()=>{
+ const writes=[],doc={...structuredClone(record),image_output_directory:'C:/flowkit/output/scene_images/v1'},s=setup(async(method,route,body)=>{
+  if(method==='POST'){writes.push(route);return{directory:doc.image_output_directory,files:['001.png'],warnings:[]};}return doc;
+ });
+ try{await s.w.sceneBoard.open();assert.match(s.$('scb-image-folder').textContent,/scene_images\/v1/);s.$('scb-collect').click();await tick();assert.deepEqual(writes,['/api/storyboard/videos/v1/collect-images']);assert.match(s.$('scb-message').textContent,/1 images collected/);assert.equal(s.checks.length,0);
+ }finally{s.dom.window.close();}
+});

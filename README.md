@@ -1,3 +1,7 @@
+## Studio v0.7.81
+
+Scene Board automatically collects downloaded images into output/scene_images/<video-id>/ as 001.png, 002.jpg, etc., preserving the actual image format and immutable job originals. The board displays the folder path and provides Collect saved images for existing results. Submission remains one prompt per request, up to three desktop media jobs concurrently, with a default minimum three-second interval. See [release notes](docs/releases/0.7.81.md).
+
 ## Studio v0.7.80
 
 Fix Scene Board generate-media HTTP 500 for saved image/video prompts longer than 5,000 characters. Studio media jobs now accept the same 50,000-character limit as saved concepts without truncation. Invalid stored job input returns a scene-specific 422 before any batch is queued. Restart Studio and its backend after updating. See [release notes](docs/releases/0.7.80.md).
