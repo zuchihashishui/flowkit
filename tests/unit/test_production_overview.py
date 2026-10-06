@@ -300,3 +300,31 @@ def test_recovery_only_resumes_known_remote_results_and_local_renders():
     assert overview.recovery_advice({**base, 'kind':'image', 'can_resume':False})['action'] == 'retry'
     assert overview.recovery_advice({**base, 'kind':'assembly', 'can_resume':True})['action'] == 'resume_render'
     assert overview.recovery_advice({**base, 'state':'NEEDS_REVIEW', 'kind':'image', 'can_resume':False})['action'] == 'inspect'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('error', [NotImplementedError('subprocess unsupported'), ValueError('Invalid environment response')])
+async def test_whisperx_check_error_is_actionable_and_never_enqueues(env, monkeypatch, error):
+    source = audio(env, env.a)
+    monkeypatch.setattr(env.wx, 'check', AsyncMock(side_effect=error))
+    response = await env.client.post('/api/production/preflight', json={**env.a, 'stage':'whisperx', 'source_id':source, 'device':'cuda'})
+    assert response.status_code == 200
+    report = response.json()
+    assert report['blocked'] is True
+    check = next(c for c in report['checks'] if c['id'] == 'whisperx_environment')
+    assert check['status'] == 'fail'
+    assert type(error).__name__ in check['message']
+    assert str(error) in check['message']
+    assert not env.wx.jobs()
+
+
+@pytest.mark.asyncio
+async def test_unexpected_preflight_error_returns_json_detail_and_logs_traceback(env, monkeypatch, caplog):
+    async def fail(_body):
+        raise RuntimeError('fixture diagnostic failure')
+    monkeypatch.setattr(overview, 'preflight', fail)
+    response = await env.client.post('/api/production/preflight', json={**env.a, 'stage':'whisperx'})
+    assert response.status_code == 500
+    assert 'RuntimeError: fixture diagnostic failure' in response.json()['detail']
+    assert 'whisperx' in response.json()['detail']
+    assert any(record.exc_info for record in caplog.records)

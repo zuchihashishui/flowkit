@@ -260,3 +260,72 @@ Không còn placeholder hoặc lời hướng dẫn của mẫu trong file kết
 AI VIDEO PROMPT là một đoạn tiếng Anh tự đầy đủ và khớp mô tả scene.
 Thông tin, nhãn tiếng Nhật và số liệu không bị thêm hoặc biến đổi ý nghĩa.
 Toàn bộ scene nằm trong một file TXT UTF-8 có thể tải về.
+
+
+==================================================
+FILE OUTPUT — MỖI SCENE MỘT TXT, ĐÓNG GÓI ZIP
+==================================================
+
+1. Tạo một file TXT thực tế cho mỗi scene, mã hóa UTF-8, giữ đúng dấu tiếng Việt và chữ tiếng Nhật. Số file TXT phải bằng số mục đầu vào.
+
+2. Tên file phải trùng chính xác số thứ tự của mục tương ứng, chỉ thêm đuôi .txt.
+Ví dụ: 1 → 1.txt; 2 → 2.txt; 3 → 3.txt.
+Nếu đầu vào là 001, 002, 003 thì tạo 001.txt, 002.txt, 003.txt.
+Nếu đầu vào là 021, 022, 023 thì tạo 021.txt, 022.txt, 023.txt, không đánh số lại từ 001.
+Không thêm tiền tố, tên scene hoặc nội dung lời dẫn vào tên file.
+
+3. Mỗi file chỉ chứa một scene hoàn chỉnh theo đúng mẫu, bao gồm tất cả các mục từ SCENE đến NEGATIVE PROMPT. Không tạo file tổng hợp nhiều scene.
+
+4. Hai dòng đầu của mỗi file phải có cấu trúc:
+SCENE [Số thứ tự giữ nguyên từ đầu vào] [Tên ngắn của scene bằng tiếng Việt]
+VIDEO TYPE: 10-SECOND EXPLAINER
+
+Không thêm dấu ngoặc vuông vào kết quả thật. Không chèn dòng trống giữa hai dòng đầu này. Không đặt lời giới thiệu, tên file hoặc tiêu đề tổng ở phía trước.
+
+5. File kết thúc ngay sau nội dung NEGATIVE PROMPT của chính scene đó. Không thêm lời kết, ghi chú hoặc scene khác phía sau.
+
+6. Nội dung file là plain text: không dùng Markdown heading, dấu **, code block, bảng Markdown, writing block hoặc thẻ HTML. Giữ các nhãn và đường phân cách bằng dấu gạch ngang trong mẫu.
+
+7. Không đưa lời chào, mục lục, hướng dẫn sử dụng, mô tả file, placeholder hoặc bản prompt hướng dẫn này vào các file kết quả.
+
+8. AI VIDEO PROMPT trong mỗi file phải là một đoạn tiếng Anh liền mạch, tự đầy đủ, không bullet hoặc xuống dòng trong chính đoạn prompt. Các phần mô tả khác vẫn được xuống dòng theo mẫu.
+
+9. Đóng gói tất cả các file TXT thành MỘT file ZIP tên video_prompts.zip. Các file TXT nằm trực tiếp ở thư mục gốc của ZIP, không có thư mục con, file ẩn, README, bản tổng hợp hoặc mã xử lý. Thêm file theo thứ tự các mục đầu vào.
+
+10. Không chỉ hiển thị nội dung trong chat rồi gọi đó là file. Phải tạo các TXT và ZIP thực tế bằng khả năng tạo file của môi trường đang chạy. Nếu xử lý nội bộ theo nhiều nhóm, vẫn phải hoàn thành đủ tất cả các mục được gửi trước khi trả ZIP cuối cùng.
+
+11. Sau khi tạo và kiểm tra thành công, phản hồi cuối chỉ cần một câu ngắn thông báo số file TXT và link tải video_prompts.zip. Không dán lại toàn bộ nội dung prompt vào chat, trừ khi người dùng yêu cầu. Quy tắc plain text áp dụng bên trong các TXT; phản hồi chat được dùng link Markdown để tải ZIP.
+
+12. Không tạo link giả, không khẳng định đã tạo hoặc kiểm tra file nếu chưa thực hiện thành công. Nếu môi trường không hỗ trợ tạo file, nói rõ giới hạn; không gọi văn bản trong chat là tệp đính kèm.
+
+==================================================
+KIỂM TRA TRƯỚC KHI GIAO FILE
+==================================================
+
+Số lượng scene và số file TXT bằng số lượng mục nội dung đầu vào.
+Số thứ tự scene và tên file khớp chính xác đầu vào, giữ nguyên số 0 ở đầu, không thiếu, không trùng, không tự đánh số lại.
+Mỗi file chỉ chứa một scene, đúng nội dung của mục tương ứng.
+Mỗi file bắt đầu bằng SCENE [số] [tên] trên cùng một dòng.
+Dòng ngay sau đó là VIDEO TYPE: 10-SECOND EXPLAINER.
+Mỗi scene có đủ tất cả các mục của mẫu, bao gồm AI VIDEO PROMPT và NEGATIVE PROMPT.
+Mỗi scene có đúng 10 giây, với các khoảng 0–4, 4–7 và 7–10 giây; FINAL HOLD nằm trong 10 giây đó.
+Không còn placeholder hoặc lời hướng dẫn của mẫu trong file kết quả.
+AI VIDEO PROMPT là một đoạn tiếng Anh tự đầy đủ và khớp mô tả scene, thời gian, nhãn chữ, âm thanh và frame cuối.
+Không có tham chiếu yêu cầu đọc scene hoặc file khác.
+Không vô tình sao chép toàn bộ prompt của mục khác; mô tả nhận diện nhân vật và phong cách được phép lặp lại để giữ nhất quán.
+Thông tin, nhãn tiếng Nhật và số liệu không bị thêm hoặc biến đổi ý nghĩa.
+Không có voiceover, dialogue, lip sync hoặc subtitles; không thêm nhạc nền nếu chưa được yêu cầu.
+Tất cả TXT đọc được bằng UTF-8 và kết thúc ngay sau NEGATIVE PROMPT.
+ZIP mở được và chứa đúng danh sách các TXT ở thư mục gốc, không có file phụ hoặc thư mục con.
+Nếu phát hiện thiếu hoặc sai, sửa trước khi trả link tải.
+
+==================================================
+QUY TẮC ƯU TIÊN CUỐI CÙNG
+==================================================
+
+Một mục đầu vào → một scene video 10 giây → một file TXT hoàn chỉnh.
+Tên TXT giữ đúng số thứ tự đầu vào.
+Tự đếm và xử lý đầy đủ các mục được cung cấp, không mặc định số lượng.
+Chỉ viết prompt; không tạo video hoặc ảnh thực tế.
+Đóng gói tất cả TXT vào video_prompts.zip và trả link tải ZIP thực tế.
+Nếu có mâu thuẫn về số lượng file, đặt tên hoặc cách giao kết quả ở phần trên, áp dụng quy tắc này.

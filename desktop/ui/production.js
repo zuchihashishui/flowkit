@@ -107,7 +107,12 @@
       const {silentOnSuccess,...input}=options;
       const report=await request('POST','/api/production/preflight',{...input,...current,stage});
       if(current.project_id!==ctx().project_id || current.video_id!==ctx().video_id)throw Error('The active video changed. Run the check again for the selected video.');
-      closeReport();dialog=node('div',undefined,'production-modal');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.setAttribute('aria-label','Production preflight');
+      closeReport();
+      if(stage==='whisperx'){
+        if(report.blocked)throw Error((report.checks||[]).filter(item=>item.status==='fail').map(item=>item.message).join(' · ')||'WhisperX is not ready. Run Check environment for details.');
+        return true;
+      }
+      dialog=node('div',undefined,'production-modal');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.setAttribute('aria-label','Production preflight');
       const panel=node('section',undefined,'panel production-modal-panel'),header=node('div',undefined,'toolbar');header.append(node('h2',`${names[stage]||stage} · ${report.blocked?'Action required':'Ready to start'}`),button('Close',closeReport));panel.append(header);
       const checks=node('ul',undefined,'production-checks');for(const item of report.checks || []){const li=node('li');li.dataset.status=item.status;li.append(node('strong',({pass:'Ready',warn:'Note',fail:'Fix required'})[item.status]||item.status),node('span',item.message));checks.append(li);}panel.append(checks,node('p',report.blocked?'Resolve the items above before starting this stage.':'The check is complete. Continue from the selected stage when ready.','muted'));dialog.append(panel);document.body.append(dialog);
       dialog.querySelector('button')?.focus();

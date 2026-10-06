@@ -342,12 +342,6 @@ async def dashboard_ws(websocket: WebSocket):
 
 
 if __name__ == "__main__":
-    import uvicorn
-    reload_enabled = os.environ.get("GLA_RELOAD", "0") == "1"
-    uvicorn.run(
-        "agent.main:app",
-        host=API_HOST,
-        port=API_PORT,
-        reload=reload_enabled,
-        reload_excludes=["*.db", "*.db-wal", "*.db-shm", "output/*"],
-    )
+    from agent.server_runtime import run_server
+    run_server("agent.main:app", host=API_HOST, port=API_PORT,
+               reload=os.environ.get("GLA_RELOAD", "0") == "1")

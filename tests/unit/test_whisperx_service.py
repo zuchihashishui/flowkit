@@ -358,3 +358,31 @@ async def test_retry_endpoint_ownership_missing_audio_and_state_checks(service,t
             assert response.status_code==409 and 'original audio file is missing' in response.text
     finally:
         await schema.close_db()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('response', ['not-json', 'null', '[]', '{"ok":"yes"}'])
+async def test_check_rejects_malformed_worker_report(service, tmp_path, monkeypatch, response):
+    stub_runner(tmp_path, monkeypatch, 'print(' + repr('FLOWKIT_CHECK '+response) + ')\n')
+    result = await service.check()
+    assert result['ok'] is False
+    assert 'error' in result
+
+
+@pytest.mark.asyncio
+async def test_check_does_not_accept_success_from_failed_worker(service, tmp_path, monkeypatch):
+    stub_runner(tmp_path, monkeypatch, 'print(\'FLOWKIT_CHECK {"ok":true}\');sys.exit(1)\n')
+    result = await service.check()
+    assert result['ok'] is False
+    assert 'code 1' in result['error']
+
+
+@pytest.mark.asyncio
+async def test_check_explains_unsupported_subprocess_loop(service, monkeypatch):
+    async def unsupported(*args, **kwargs):
+        raise NotImplementedError()
+    monkeypatch.setattr(module.asyncio, 'create_subprocess_exec', unsupported)
+    result = await service.check()
+    assert result['ok'] is False
+    assert 'event loop' in result['error']
+    assert 'GLA_RELOAD=0' in result['error']

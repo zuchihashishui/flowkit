@@ -276,13 +276,26 @@ class WhisperXService:
             text = stdout.decode('utf-8', errors='replace')
             for line in text.splitlines():
                 if line.startswith('FLOWKIT_CHECK '):
-                    return json.loads(line[len('FLOWKIT_CHECK '):])
+                    report = json.loads(line[len('FLOWKIT_CHECK '):])
+                    if not isinstance(report, dict) or not isinstance(report.get('ok'), bool):
+                        raise ValueError('Invalid FLOWKIT_CHECK response: expected an object with boolean ok.')
+                    if process.returncode != 0:
+                        return {'ok': False, 'python': python_bin(), 'error': f'WhisperX check exited with code {process.returncode}: {text[-2500:]}'}
+                    return report
             return {'ok': False, 'python': python_bin(), 'error': text[-2500:] or 'Environment check failed.'}
-        except (OSError, asyncio.TimeoutError) as error:
-            return {'ok': False, 'python': python_bin(), 'error': str(error) or 'WhisperX import check exceeded 90 seconds.'}
+        except NotImplementedError:
+            return {'ok': False, 'python': python_bin(), 'error':
+                    'This backend event loop does not support subprocesses. On Windows, stop the backend '
+                    'started through uvicorn directly and restart the updated Studio, or run python -m agent.main (GLA_RELOAD=0).'}
+        except (OSError, ValueError, asyncio.TimeoutError) as error:
+            return {'ok': False, 'python': python_bin(), 'error':
+                    f'{type(error).__name__}: {str(error) or "WhisperX import check exceeded 90 seconds."}'}
         finally:
             if process and process.returncode is None:
-                process.kill()
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass  # The check may exit between returncode inspection and kill.
                 await process.wait()
 
     async def step(self):

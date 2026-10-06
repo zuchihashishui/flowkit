@@ -6,6 +6,7 @@ readiness reuses the same source-revision rules as generation and assembly.
 import asyncio
 from collections import Counter
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -15,6 +16,8 @@ from fastapi import HTTPException
 
 from agent.db.schema import get_db
 from agent.services import workflow_scope as scope
+
+logger = logging.getLogger(__name__)
 
 STAGES = [
     ('elevenlabs', 'Narration'), ('whisperx', 'Transcript JSON'), ('srt', 'SRT / scenes'),
@@ -420,6 +423,8 @@ async def preflight(body):
     if stage == 'whisperx':
         try:
             info = await asyncio.wait_for(wx.check(), timeout=20)
+            if not isinstance(info, dict):
+                raise ValueError('WhisperX environment check returned an invalid response.')
             add('whisperx_environment', bool(info.get('ok')), 'WhisperX environment check passed.' if info.get('ok') else str(info.get('error') or 'WhisperX imports or dependencies are unavailable.'))
             from agent.services.production_settings import effective
             device = body.get('device') or (await effective(ctx))['whisperx']['device']
@@ -428,6 +433,13 @@ async def preflight(body):
             add('model', False, 'This check does not download a model or transcribe audio. The first model load may need network access.', warn=True)
         except asyncio.TimeoutError:
             add('whisperx_environment', False, 'Environment check exceeded 20 seconds. Run Check environment in WhisperX before starting.')
+        except HTTPException:
+            raise
+        except Exception as error:
+            logger.exception('WhisperX preflight environment check failed for video %s', ctx['video_id'])
+            add('whisperx_environment', False,
+                f'WhisperX environment check failed ({type(error).__name__}: {str(error) or "No error message"}). '
+                'Run Check environment in WhisperX. See backend.log for the full traceback.')
     data = await storyboard.read_document(ctx['video_id']) if stage in {'image_prompts', 'video_prompts', 'images', 'videos', 'assembly'} else None
     direct_jobs = body.get('direct_jobs') if stage in {'images', 'videos'} else None
     if direct_jobs is not None:
