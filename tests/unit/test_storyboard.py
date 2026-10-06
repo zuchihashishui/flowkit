@@ -675,3 +675,35 @@ async def test_scene_folder_copy_failure_keeps_completed_original_without_resubm
     assert len(result['files'])==1
     assert desktop.rows()[0]['error'] is None
     generate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_video_batch_uses_each_srt_duration_at_all_flow_boundaries(document):
+    original = await s.read_document(document)
+    video = await crud.create_video(project_id=original['video']['project_id'], title='Duration boundaries')
+    await s.save_document(video['id'], s.DocumentBody(script_text='Duration checks', visual_style='Paper art'))
+    cases = [(1, 4), (3999, 4), (4000, 4), (4001, 6), (6000, 6),
+             (6001, 8), (8000, 8), (8001, 10), (10000, 10), (10001, 10)]
+    def stamp(ms):
+        seconds, millis = divmod(ms, 1000)
+        minutes, seconds = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        return f'{hours:02}:{minutes:02}:{seconds:02},{millis:03}'
+    cues = []
+    for i, (ms, _) in enumerate(cases):
+        start = 12345 + i * 20000
+        cues.append(f'{i+1}\n{stamp(start)} --> {stamp(start+ms)}\nScene {i+1}')
+    data = await s.import_segments(video['id'], s.ImportBody(format='srt', content='\n\n'.join(cues)))
+    for item in data['segments']:
+        await s.save_concept(item['id'], CONCEPT)
+    result = await s.generate_media(video['id'], s.MediaBody(
+        segment_ids=[item['id'] for item in data['segments']], kind='video', duration_mode='srt'))
+    assert len(result['ids']) == len(cases)
+    jobs = {payload['segment_id']: payload for row in desktop.rows()
+            if (payload := json.loads(row['payload']))['kind'] == 'video'}
+    for item, (ms, expected) in zip(data['segments'], cases):
+        payload = jobs[item['id']]
+        assert payload['duration'] == expected
+        assert payload['end_ms'] - payload['start_ms'] == ms
+    assert [note['generation_seconds'] for note in result['durations']] == [expected for _, expected in cases]
+    assert [note['short'] for note in result['durations']] == [ms > 10000 for ms, _ in cases]
