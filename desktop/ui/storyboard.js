@@ -118,10 +118,6 @@
     const source=data?.document?.source;
     if(source)$('sb-status').textContent+=source.source_id?` · Source: ${source.kind} / ${source.source_id}`:' · Source: manually imported segments';
     renderRows($('sb-rows'),'editor');
-    for(const kind of ['image','video']) {
-      $(kind+'-storyboard-name').textContent=data ? data.video.title+' · '+checked.size+' selected segments' : 'Choose a script in SRT to Prompt.';
-      renderRows($(kind+'-storyboard-rows'),kind);
-    }
     document.dispatchEvent(new Event('storyboard-selection'));
   }
   function showAudio() {
@@ -267,7 +263,7 @@
   $('sb-activate').onclick=()=>run(async()=>{const s=editedSegment();if(editorDirty)throw Error('Save or discard edits before switching versions.');const id=$('sb-version').value;if(!id)throw Error('Choose a saved version.');await api('POST','/api/storyboard/concepts/'+id+'/select',{});await reload();openEditor(data.segments.find(x=>x.id===s.id));notice('Concept version selected.');});
   $('sb-audio').ontimeupdate=()=>{const audio=$('sb-audio');if(audio.dataset.stopMs&&audio.currentTime*1000>=Number(audio.dataset.stopMs)){audio.pause();delete audio.dataset.stopMs;}};
   $('sb-audio').onerror=()=>notice('Audio playback is unavailable. Check the backend and audio format.',true);
-  for(const kind of ['image','video'])$('sb-to-'+(kind==='image'?'images':'videos')).onclick=()=>{show(kind);$(kind+'-mode').value='storyboard';updateInputSummary();};
+  $('sb-to-board').onclick=()=>run(async()=>{const ids=[...checked];show('scene-board');await window.sceneBoard.selectSegments(ids);});
   document.querySelectorAll('[data-open-storyboard]').forEach(b=>b.onclick=()=>show('storyboard'));
   function failedScene(s,kind){
     const terminal=['FAILED','NEEDS_REVIEW','INTERRUPTED','CANCELLED'];
@@ -282,7 +278,7 @@
     const r=await api('POST',path('/retry-failed'),{segment_ids:items.map(s=>s.id),kind:'concept',reviewed:true,provider:$('sb-provider').value,prompt_kind:$('sb-provider').value==='chatgpt-web'?$('sb-prompt-kind').value:'both',model:$('sb-model').value.trim()||null});
     await reload();notice(`${r.ids.length} failed rows queued again.`);
   }
-  for(const kind of ['concept','image','video']){
+  for(const kind of ['concept']){
     const prefix=kind==='concept'?'sb':kind;
     $(prefix+'-select-failed').onclick=()=>run(async()=>{assertSaved();checked.clear();for(const s of data.segments)if(failedScene(s,kind))checked.add(s.id);selectionChanged();});
     $(prefix+'-retry-failed').onclick=()=>run(async()=>{
@@ -301,12 +297,7 @@
     openSegment:async id=>{await open();const segment=data?.segments.find(s=>s.id===id);if(segment)openEditor(segment);},
     canImportSource:()=>discard(),
     projectChanged:()=>{if(owner!==$('project-select').value){++requestId;owner='';collection='';data=null;checked.clear();$('sb-script').value='';$('sb-style').value='';$('sb-collection').replaceChildren(option('','Select a collection'));fillInputs();showAudio();render();}},
-    generateMedia:async kind=>{
-      const items=selected();if(items.some(s=>!s.ready||!s.active_concept?.[kind+'_prompt']?.trim()))throw Error('Selected segments need current concepts and a saved prompt for this media type. Create it in SRT to Prompt.');
-      if(!confirm(`Generate ${kind} for up to ${items.length} selected segment(s)? Uses Google Flow credits.`))return;
-      const r=await api('POST',path('/generate-media'),{segment_ids:items.map(s=>s.id),kind,orientation:$(kind+'-ratio').value,duration:Number($('duration').value),duration_mode:kind==='video'&&$('video-duration-auto').checked?'srt':'manual',image_model:kind==='image'?$('image-model').value||null:null,regenerate:$(kind+'-regenerate').checked});
-      await reload();await refreshJobs();notice(`${r.ids.length} media job(s) queued; ${r.skipped.length} existing jobs/results skipped.${r.durations?.some(d=>d.short)?' Some scenes exceed 10 seconds; their clips need hold/loop during assembly.':''}`);
-    }
+
   };
   document.addEventListener('workflow-changed',()=>{
     const ctx=window.workflow?.context();

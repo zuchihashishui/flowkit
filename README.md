@@ -1,3 +1,7 @@
+## Studio v0.7.85
+
+Prompt to Image and Prompt to Video are now integrated into **Scene Board**; both separate menus are removed. Each row defaults to Image; choose Video in its Create column, select rows and click Generate selected scenes. Mixed selections use the matching saved prompts. See [release notes](docs/releases/0.7.85.md).
+
 ## Studio v0.7.84
 
 Queue & Downloads is integrated into **Scene Board → Jobs & downloads**; the separate sidebar menu is removed. Job filters, Flow activity, pause/resume, queued cancellation, saved-result recovery, previews and exports remain available. Scene rows link directly to job details and existing file exports. See [release notes](docs/releases/0.7.84.md).

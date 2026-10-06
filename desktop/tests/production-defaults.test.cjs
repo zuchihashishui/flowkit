@@ -38,11 +38,11 @@ function setup({scripts=[],storage={}}={}){
 test('form drafts isolate every video and project, retain explicit edits when inherited defaults change',async()=>{
  const s=setup();try{
   s.select('p1','v1');assert.equal(s.$('el-chunk-size').value,'3000');assert.equal(s.$('wx-language').value,'ja');
-  s.edit('el-text','日本語の原稿');s.edit('image-prompt','A mountain for video one');s.edit('video-prompt','A moving mountain');s.edit('el-title','Topic one');s.edit('el-chunk-size','1200');s.edit('srt-prompt','My video SRT prompt');
+  s.edit('el-text','日本語の原稿');s.edit('el-title','Topic one');s.edit('el-chunk-size','1200');s.edit('srt-prompt','My video SRT prompt');
   s.select('p1','v2',{...defaults,tts:{model:'Eleven v3',max_chunk_characters:2200},srt:{instructions:'Video two instructions'}});
-  assert.equal(s.$('el-text').value,'');assert.equal(s.$('image-prompt').value,'');assert.equal(s.$('video-prompt').value,'');assert.equal(s.$('el-chunk-size').value,'2200');assert.equal(s.$('srt-prompt').value,'Video two instructions');
+  assert.equal(s.$('el-text').value,'');assert.equal(s.$('el-chunk-size').value,'2200');assert.equal(s.$('srt-prompt').value,'Video two instructions');
   s.edit('el-text','Video two narration');
-  s.select('p1','v1');assert.equal(s.$('image-prompt').value,'A mountain for video one');assert.equal(s.$('video-prompt').value,'A moving mountain');assert.equal(s.$('el-text').value,'日本語の原稿');assert.equal(s.$('el-title').value,'Topic one');assert.equal(s.$('el-chunk-size').value,'1200');assert.equal(s.$('srt-prompt').value,'My video SRT prompt');
+  s.select('p1','v1');assert.equal(s.$('el-text').value,'日本語の原稿');assert.equal(s.$('el-title').value,'Topic one');assert.equal(s.$('el-chunk-size').value,'1200');assert.equal(s.$('srt-prompt').value,'My video SRT prompt');
   s.settings({...defaults,tts:{model:'Different model',max_chunk_characters:2500},whisperx:{...defaults.whisperx,language:'en'}});
   assert.equal(s.$('el-chunk-size').value,'1200');assert.equal(s.$('el-model').value,'Different model');assert.equal(s.$('wx-language').value,'en');
   s.select('p2','v1',{...defaults,tts:{model:'Another project',max_chunk_characters:1800}});
@@ -63,25 +63,15 @@ test('reset restores video defaults while preserving narration and invalidating 
 });
 
 test('SRT builtin template stays independent from the old global draft and per-video prompts survive reload',async()=>{
- const s=setup({scripts:['srt.js'],storage:{'srt-prompt':'OLD GLOBAL INSTRUCTIONS','production-form:p1/v1':JSON.stringify({'srt-prompt':'Saved video one'})}});try{
+ const s=setup({scripts:['srt.js'],storage:{'srt-prompt':'OLD GLOBAL INSTRUCTIONS','production-form:p1/v1':JSON.stringify({'srt-prompt':'Saved video one'})}});const builtin=s.$('srt-prompt').value;try{
   s.select('p1','v1');assert.equal(s.$('srt-prompt').value,'Saved video one');
-  s.select('p2','v2',{...defaults,srt:{instructions:''}});assert.match(s.$('srt-prompt').value,/Only JSON is attached, not audio/);assert.doesNotMatch(s.$('srt-prompt').value,/OLD GLOBAL/);
+  s.select('p2','v2',{...defaults,srt:{instructions:''}});assert.equal(s.$('srt-prompt').value,builtin);assert.doesNotMatch(s.$('srt-prompt').value,/OLD GLOBAL/);
   s.edit('srt-prompt','New video two');assert.equal(s.w.localStorage.getItem('srt-prompt'),'OLD GLOBAL INSTRUCTIONS');
   s.select('p1','v1');assert.equal(s.$('srt-prompt').value,'Saved video one');
   s.select('p2','v2',{...defaults,srt:{instructions:''}});assert.equal(s.$('srt-prompt').value,'New video two');
-  s.$('srt-use-template').click();assert.match(s.$('srt-prompt').value,/Only JSON is attached/);
-  assert.match(JSON.parse(s.w.localStorage.getItem('production-form:p2/v2'))['srt-prompt'],/Only JSON is attached/);
+  s.$('srt-use-template').click();assert.equal(s.$('srt-prompt').value,builtin);
+  assert.equal(JSON.parse(s.w.localStorage.getItem('production-form:p2/v2'))['srt-prompt'],builtin);
   await tick();
- }finally{s.dom.window.close();}
-});
-
-test('late model catalogue refresh restores inherited and explicit custom model selections',()=>{
- const s=setup();try{
-  s.select('p','v');assert.equal(s.$('image-model').value,'flow-custom-a');
-  s.$('image-model').innerHTML='<option value="">Backend default</option><option value="other">Other</option>';
-  s.w.productionDefaults.restore('image-model');assert.equal(s.$('image-model').value,'flow-custom-a');
-  s.edit('image-model','other');s.$('image-model').innerHTML='<option value="">Backend default</option>';
-  s.w.productionDefaults.restore('image-model');assert.equal(s.$('image-model').value,'other');
  }finally{s.dom.window.close();}
 });
 

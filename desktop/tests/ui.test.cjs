@@ -47,14 +47,9 @@ test('English UI routes project, scene, generation and voice actions to the brid
     assert(calls.some(c=>c[0]==='POST'&&c[1]==='/api/workflow/project'&&c[2].project_id===project.id));
     w.document.getElementById('import-scenes').click();await tick();
     assert(calls.some(c=>c[1]==='/api/scenes'&&c[2]?.narrator_text==='Narration'));
-    w.document.getElementById('video-mode').value='scenes';
-    await form('video-form');
-    let job=calls.filter(c=>c[0]==='POST'&&c[1]==='/api/desktop/jobs').at(-1)[2].jobs[0];
-    assert.equal(job.kind,'video');assert.equal(job.prompt,'Video prompt');assert.equal(job.project_id,project.id);
-    w.document.getElementById('image-prompt').value='Single image';
-    await form('image-form');
-    job=calls.filter(c=>c[0]==='POST'&&c[1]==='/api/desktop/jobs').at(-1)[2].jobs[0];
-    assert.equal(job.kind,'image');assert.equal(job.prompt,'Single image');
+    assert.equal(w.document.querySelector('[data-page="image"]'),null);
+    assert.equal(w.document.querySelector('[data-page="video"]'),null);
+    let job;
     w.document.getElementById('voice-name').value='my_voice';
     w.document.getElementById('voice-transcript').value='Sample text';
     w.document.getElementById('voice-consent').checked=true;

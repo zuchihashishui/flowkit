@@ -65,7 +65,7 @@ test('Scene Board image settings are restored per video and default to video pro
 });
 test('Scene Board does not generate with missing prompts, blocked preflight, or changed video',async()=>{
  let writes=0,resolveCheck;const doc=structuredClone(record),s=setup(async(method,route)=>{if(method==='POST')writes++;return route==='/api/models'?{}:doc;});
- try{doc.segments[1].ready=false;await s.w.sceneBoard.open();s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();assert.equal(writes,0);assert.match(s.$('scb-message').textContent,/current image prompt/);
+ try{doc.segments[1].ready=false;await s.w.sceneBoard.open();s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();assert.equal(writes,0);assert.match(s.$('scb-message').textContent,/current prompt/);
  doc.segments[1].ready=true;await s.w.sceneBoard.open();s.w.production.check=async()=>false;s.$('scb-generate').click();await tick();assert.equal(writes,0);
  s.w.production.check=async()=>new Promise(r=>resolveCheck=r);s.$('scb-generate').click();await tick();s.context({project_id:'p1',video_id:'v2'});resolveCheck(true);await tick();assert.equal(writes,0);
  }finally{s.dom.window.close();}
@@ -114,5 +114,44 @@ test('saved-result recovery refreshes failed scene rows when media history chang
  latest.segments[1].media_jobs[0].state='DOWNLOADING';
  s.w.document.dispatchEvent(new s.w.Event('media-jobs-updated'));await tick();
  assert.match(s.$('scb-rows').querySelector('[data-segment-id="s2"]').textContent,/image · DOWNLOADING/);
+ }finally{s.dom.window.close();}
+});
+function mixedRecord(){return{video:{id:'v1',project_id:'p1',title:'Mixed'},document:{id:'d1'},segments:[scene('s1'),scene('s2',{active_concept:{image_prompt:'Still image',video_prompt:'Camera pans slowly'}})],warnings:[]};}
+function setSceneKind(s,id,kind){const el=s.$('scb-rows').querySelector('[data-scene-kind="'+id+'"]');el.value=kind;el.dispatchEvent(new s.w.Event('change'));}
+test('scenes default to images and mixed generation submits the exact image/video groups',async()=>{
+ const writes=[],s=setup(async(method,route,body)=>{if(method==='POST'){writes.push(structuredClone(body));return{ids:[body.kind],skipped:[]};}return mixedRecord();});
+ try{
+  await s.w.sceneBoard.open();assert.deepEqual([...s.$('scb-rows').querySelectorAll('[data-scene-kind]')].map(e=>e.value),['image','image']);
+  setSceneKind(s,'s2','video');s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();
+  assert.deepEqual(writes.map(b=>[b.kind,Array.from(b.segment_ids)]),[['image',['s1']],['video',['s2']]]);
+  assert.equal(writes[1].duration_mode,'srt');assert.equal(writes[1].regenerate,false);
+  assert.deepEqual(s.checks.map(c=>c[0]),['images','videos']);assert.match(s.$('scb-message').textContent,/2 media jobs queued/);
+ }finally{s.dom.window.close();}
+});
+test('row types and video duration persist per video and survive reopening the board',async()=>{
+ const s=setup(async(_m,route)=>route.endsWith('v2')?{...mixedRecord(),video:{id:'v2',project_id:'p1',title:'Second'}}:mixedRecord());
+ try{await s.w.sceneBoard.open();setSceneKind(s,'s2','video');s.$('scb-duration').value='10';s.$('scb-duration').onchange();
+ await s.w.sceneBoard.open();assert.equal(s.$('scb-rows').querySelector('[data-scene-kind="s2"]').value,'video');
+ s.context({project_id:'p1',video_id:'v2'});await tick();assert.equal(s.$('scb-rows').querySelector('[data-scene-kind="s2"]').value,'image');assert.equal(s.$('scb-duration').value,'srt');
+ s.context({project_id:'p1',video_id:'v1'});await tick();assert.equal(s.$('scb-rows').querySelector('[data-scene-kind="s2"]').value,'video');assert.equal(s.$('scb-duration').value,'10');
+ }finally{s.dom.window.close();}
+});
+test('missing video prompts or a blocked video preflight prevent both mixed groups from submitting',async()=>{
+ const writes=[],s=setup(async(method,_route,body)=>{if(method==='POST')writes.push(body);return mixedRecord();});
+ try{await s.w.sceneBoard.open();setSceneKind(s,'s1','video');s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();assert.equal(writes.length,0);assert.match(s.$('scb-message').textContent,/001 video prompt/);
+ setSceneKind(s,'s1','image');setSceneKind(s,'s2','video');s.w.production.check=async stage=>stage!=='videos';s.$('scb-generate').click();await tick();assert.equal(writes.length,0);
+ }finally{s.dom.window.close();}
+});
+test('manual video duration and regeneration keep active jobs and originals protected',async()=>{
+ const data=mixedRecord(),writes=[];data.segments[0].media_jobs=[{id:'active',kind:'image',current:true,state:'RUNNING',files:[]}];data.segments[1].media_jobs=[{id:'done',kind:'video',current:true,state:'COMPLETED',files:['clip.mp4']}];
+ const s=setup(async(method,_route,body)=>{if(method==='POST'){writes.push(body);return{ids:['new'],skipped:[],durations:[{short:true}]};}return data;});
+ try{await s.w.sceneBoard.open();setSceneKind(s,'s2','video');s.$('scb-select-filtered').click();s.$('scb-duration').value='6';s.$('scb-regenerate').checked=true;s.$('scb-generate').click();await tick();
+ assert.equal(writes.length,1);assert.deepEqual(Array.from(writes[0].segment_ids),['s2']);assert.equal(writes[0].duration,6);assert.equal(writes[0].duration_mode,'manual');assert.equal(writes[0].regenerate,true);assert.match(s.$('scb-message').textContent,/1 scenes skipped/);assert.match(s.$('scb-message').textContent,/hold\/loop/);
+ }finally{s.dom.window.close();}
+});
+test('a second-group error reports confirmed jobs and never automatically resubmits them',async()=>{
+ const writes=[],s=setup(async(method,_route,body)=>{if(method==='POST'){writes.push(body.kind);if(body.kind==='video')throw Error('Flow unavailable');return{ids:['image-job'],skipped:[]};}return mixedRecord();});
+ try{await s.w.sceneBoard.open();setSceneKind(s,'s2','video');s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();
+ assert.deepEqual(writes,['image','video']);assert.match(s.$('scb-message').textContent,/1 media jobs confirmed queued/);assert.match(s.$('scb-message').textContent,/Flow unavailable/);assert.equal(s.$('scb-generate').disabled,false);
  }finally{s.dom.window.close();}
 });

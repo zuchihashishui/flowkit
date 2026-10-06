@@ -44,6 +44,7 @@ test('script/segments/concepts flow reaches database-backed image generation wit
  try{
   new vm.Script(fs.readFileSync(path.join(__dirname,'../ui/app.js'),'utf8')).runInContext(dom.getInternalVMContext());
   new vm.Script(fs.readFileSync(path.join(__dirname,'../ui/storyboard.js'),'utf8')).runInContext(dom.getInternalVMContext());
+  new vm.Script(fs.readFileSync(path.join(__dirname,'../ui/scene-board.js'),'utf8')).runInContext(dom.getInternalVMContext());
   await tick();await change('project-select','p1');
   w.document.querySelector('[data-page="storyboard"]').click();await tick();
   $('sb-import-script').click();await tick();assert.equal($('sb-script').value,'A complete narration script.');
@@ -58,28 +59,22 @@ test('script/segments/concepts flow reaches database-backed image generation wit
   // A simulated AI result is used only to verify UI/API wiring, not live generation.
   const s=data.segments[1];s.ready=true;s.job.state='COMPLETED';s.active_concept_id='c2';s.active_concept={id:'c2',version:1,title:'Second concept',description:'A clear composition',image_prompt:'A visual illustration',video_prompt:'A slow camera move'};s.concepts=[s.active_concept];
   $('sb-refresh').click();await tick();
-  $('sb-to-images').click();assert.equal($('image-mode').value,'storyboard');assert.equal($('image-storyboard').hidden,false);
-  assert.match($('image-storyboard-rows').textContent,/A visual illustration/);
-  await submit('image-form');
+  $('sb-to-board').click();await tick();await tick();
+  assert.equal($('scene-board').closest('[data-view]').hidden,false);
+  assert.match($('scb-rows').textContent,/A visual illustration/);
+  $('scb-generate').click();await tick();
   const media=calls.find(c=>c.route===base+'/generate-media');
-  assert.deepEqual(JSON.parse(JSON.stringify(media.body.segment_ids)),['s2']);assert.equal(media.body.kind,'image');
+  assert.deepEqual(Array.from(media.body.segment_ids),['s2']);assert.equal(media.body.kind,'image');
   assert.equal(calls.filter(c=>c.route==='/api/desktop/jobs'&&c.method==='POST').length,0);
-  assert.match($('notice').textContent,/1 media job/);
-  $('sb-to-videos').click();await submit('video-form');
+  const picker=$('scb-rows').querySelector('[data-scene-kind="s2"]');picker.value='video';picker.dispatchEvent(new w.Event('change'));
+  $('scb-generate').click();await tick();
   assert.equal(calls.filter(c=>c.route===base+'/generate-media').at(-1).body.duration_mode,'srt');
-  s.media_jobs=[{id:'failed-image',kind:'image',concept_id:'c2',state:'FAILED'}];
-  $('sb-refresh').click();await tick();
-  await $('image-select-failed').onclick();await $('image-retry-failed').onclick();
+  s.media_jobs=[{id:'failed-image',kind:'image',concept_id:'c2',state:'FAILED',files:[]}];
+  await w.sceneBoard.open();$('scb-target').value='image';$('scb-select-failed').click();$('scb-retry').click();await tick();
   const retry=calls.find(c=>c.route===base+'/retry-failed');
-  assert.deepEqual(JSON.parse(JSON.stringify(retry.body.segment_ids)),['s2']);assert.equal(retry.body.kind,'image');
-  s.media_jobs.push({id:'success',kind:'image',concept_id:'c2',state:'COMPLETED'});
-  $('sb-refresh').click();await tick();await $('image-select-failed').onclick();
-  assert.equal(w.storyboard.count(),0);
-  // Restore selected scene to verify stale-concept rejection.
-  const again=$('sb-rows').querySelector('[data-segment-id="s2"]');again.checked=true;again.dispatchEvent(new w.Event('change'));
-  // Stale concepts block media submission before any generation call.
-  s.ready=false;$('sb-refresh').click();await tick();const before=calls.filter(c=>c.route===base+'/generate-media').length;
-  await submit('image-form');assert.match($('notice').textContent,/current concepts/);
+  assert.deepEqual(Array.from(retry.body.segment_ids),['s2']);assert.equal(retry.body.kind,'image');
+  s.ready=false;await w.sceneBoard.open();const before=calls.filter(c=>c.route===base+'/generate-media').length;
+  $('scb-generate').click();await tick();assert.match($('scb-message').textContent,/current prompt/);
   assert.equal(calls.filter(c=>c.route===base+'/generate-media').length,before);
  }finally{dom.window.close();}
 });

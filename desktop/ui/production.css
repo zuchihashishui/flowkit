@@ -5,3 +5,5 @@
 .scene-board-select-all{display:flex;align-items:center;gap:6px;font-weight:600}.scene-board-select-all input{margin:0}
 
 .scene-download-list{max-height:560px;overflow:auto;overscroll-behavior:contain;padding-right:8px}#scene-downloads{scroll-margin-top:20px}#scene-downloads-title{margin-top:28px}
+
+.scene-board-table th:nth-child(3){width:110px}.scene-board-table th:nth-child(4){width:24%}.scene-board-table th:nth-child(5){width:26%}.scene-board-table th:nth-child(6){width:210px}.scene-board-table select[data-scene-kind]{padding:8px;min-width:85px}
