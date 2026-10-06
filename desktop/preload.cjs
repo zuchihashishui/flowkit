@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('studio', Object.freeze({
   importVoice: (name, text, consent) => ipcRenderer.invoke('import-voice', name, text, consent),
   exportJob: id => ipcRenderer.invoke('export-job', id),
   preview: (id, index) => ipcRenderer.invoke('preview', id, index),
+  openVideoFiles: (projectId, videoId=null) => ipcRenderer.invoke('open-video-files', projectId, videoId),
   openOutput: () => ipcRenderer.invoke('open-output'),
   openFlow: () => ipcRenderer.invoke('open-flow'),
   openExtension: () => ipcRenderer.invoke('open-extension'),

@@ -72,7 +72,7 @@ test('ElevenLabs submit guard prevents a double-click from enqueueing twice',asy
 test('Flow activity shows concurrency, runtime submit interval and safe stage labels',async()=>{
  const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'../ui/index.html'),'utf8'),{runScripts:'outside-only'}),w=dom.window;
  w.setInterval=()=>{};w.studio={api:async()=>({active:3,max_concurrent:3,queued:10,completed:7,failed:1,generation_throttle:{min_interval_s:5,cooldown_active:true,cooldown_remaining_s:19.7},jobs:[{id:'1',label:'<img src=x>',kind:'image',state:'RUNNING',stage:'GENERATING_IMAGE'}]})};
- w.eval(fs.readFileSync(path.join(__dirname,'../ui/flow-progress.js'),'utf8'));w.document.querySelector('[data-page="queue"]').click();await new Promise(resolve=>setImmediate(resolve));
+ w.eval(fs.readFileSync(path.join(__dirname,'../ui/flow-progress.js'),'utf8'));w.document.querySelector('[data-page="scene-board"]').click();await new Promise(resolve=>setImmediate(resolve));
  assert.match(w.document.getElementById('flow-activity-summary').textContent,/3\/3 media slots/);assert.match(w.document.getElementById('flow-activity-summary').textContent,/Submit interval: 5s/);assert.match(w.document.getElementById('flow-activity-summary').textContent,/Cooldown: 20s/);assert.equal(w.document.getElementById('flow-activity-jobs').querySelector('img'),null);assert.match(w.document.getElementById('flow-activity-jobs').textContent,/GENERATING IMAGE/);dom.window.close();
 });
 

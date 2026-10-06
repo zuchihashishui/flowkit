@@ -1,3 +1,107 @@
+## Studio v0.7.86
+
+Scene Board video generation now always chooses duration from each SRT row: ≤4s → 4s, ≤6s → 6s, ≤8s → 8s, ≤10s → 10s. The shared manual duration selector is removed, and each Video row previews its chosen duration. See [release notes](docs/releases/0.7.86.md).
+
+## Studio v0.7.85
+
+Prompt to Image and Prompt to Video are now integrated into **Scene Board**; both separate menus are removed. Each row defaults to Image; choose Video in its Create column, select rows and click Generate selected scenes. Mixed selections use the matching saved prompts. See [release notes](docs/releases/0.7.85.md).
+
+## Studio v0.7.84
+
+Queue & Downloads is integrated into **Scene Board → Jobs & downloads**; the separate sidebar menu is removed. Job filters, Flow activity, pause/resume, queued cancellation, saved-result recovery, previews and exports remain available. Scene rows link directly to job details and existing file exports. See [release notes](docs/releases/0.7.84.md).
+
+## Studio v0.7.83
+
+Saved files are now also organized under `output/projects/<project-name--id>/<video-title--id>/`, with ElevenLabs, WhisperX, SRT, audio, prompts, images, clips and exports together. Open project/video folders from Project, or Open video folder in Scene Board. Existing originals remain intact; assigned legacy results are collected automatically. See [release notes](docs/releases/0.7.83.md).
+
+## Studio v0.7.81
+
+Scene Board automatically collects downloaded images into output/scene_images/<video-id>/ as 001.png, 002.jpg, etc., preserving the actual image format and immutable job originals. The board displays the folder path and provides Collect saved images for existing results. Submission remains one prompt per request, up to three desktop media jobs concurrently, with a default minimum three-second interval. See [release notes](docs/releases/0.7.81.md).
+
+## Studio v0.7.80
+
+Fix Scene Board generate-media HTTP 500 for saved image/video prompts longer than 5,000 characters. Studio media jobs now accept the same 50,000-character limit as saved concepts without truncation. Invalid stored job input returns a scene-specific 422 before any batch is queued. Restart Studio and its backend after updating. See [release notes](docs/releases/0.7.80.md).
+
+## Studio v0.7.79 / Google Flow Bridge 0.6.3
+
+Open Flow Tab now brings the Chrome window forward, restores minimized windows and displays opening/error feedback. Reload extensions/googleflow in Chrome and reopen the side panel. See [release notes](docs/releases/0.7.79.md).
+
+## Studio v0.7.78
+
+Scene Board uses one scrolling table like SRT to Prompt, with sticky column headers and no pagination. Filtering and selection cover every matching scene; each action still supports up to 200 selected scenes. Refresh preserves the scroll position. See [release notes](docs/releases/0.7.78.md).
+
+## Studio v0.7.77
+
+Project recovery shows only the five latest actionable tasks in a scrollable panel. Older jobs remain stored.
+
+## Studio v0.7.76 / ChatGPT Bridge 1.12.3
+
+Scene Board now provides Image Model, Aspect Ratio (16:9 / 9:16), and Generate selected images. Settings are saved per video; completed and active images are preserved. Prompt to Image remains available for standalone prompts. Retry keeps original job settings. See [release notes](docs/releases/0.7.76.md).
+
+## Studio v0.7.75 / ChatGPT Bridge 1.12.3
+
+SRT to Prompt waits for **Send to become enabled after attaching the TXT**, then types the SRT rows and clicks Send. Filename/card detection no longer blocks either step for this workflow. Explicit upload failures still stop the request; a disabled Send still waits. Reload Bridge 1.12.3 and refresh ChatGPT tabs after updating. See [release notes](docs/releases/0.7.75.md).
+
+## Studio v0.7.74 / ChatGPT Bridge 1.12.2
+
+SRT to Prompt now uploads the TXT and waits for file readiness before entering the SRT rows and clicking Send. Later groups only enter their rows. JSON to SRT retains its existing input order. Reload extension 1.12.2 after updating. Submission diagnostics remain available; the current user-side failure still needs composer DOM/status to identify conclusively.
+
+## Studio v0.7.73 / ChatGPT Bridge 1.12.1
+
+SRT to Prompt and JSON → SRT share upload readiness, editor recovery and Send verification. Completed hidden spinners no longer block attachments, split filenames are recognized, Send is scoped to the active composer, and the gateway is notified only after submission is observed. The UI distinguishes waiting for the attachment, waiting for Send and verifying submission. **Reload ChatGPT Bridge 1.12.1 and refresh existing ChatGPT tabs after updating.** See [release notes](docs/releases/0.7.73.md).
+
+## Studio v0.7.72 / ChatGPT Bridge 1.12.0
+
+The desktop menu is now **SRT to Prompt**. Related buttons, help text and scene messages use the same name. This workflow still uses one Work tab, Temporary OFF, five SRT rows per group, a prompt TXT attachment on the first group, one output folder per run and a 30-minute ZIP generation timeout. JSON → SRT has its own separate Work tab. See [release notes](docs/releases/0.7.72.md).
+
+## Studio v0.7.71 / ChatGPT Bridge 1.12.0
+
+Text to Prompt saves all numbered TXT files from one run together in `output/text_prompts/<run-id>/` (for example `001.txt` through `300.txt`). Original ZIPs are retained in its `zips/` subfolder. The UI shows the saved folder path. Each message still contains up to five `[row] [srt text]` entries; the first group attaches the prompt TXT. The ZIP generation timeout is now **30 minutes per group**. See [release notes](docs/releases/0.7.71.md).
+
+## Studio v0.7.70 / ChatGPT Bridge 1.12.0
+
+Text to Prompt now uses **one Work tab, Temporary OFF**. Each message sends up to five original numbered SRT rows. The first message attaches the prompt TXT; later groups reuse the same conversation. Studio downloads each returned ZIP, validates its numbered UTF-8 TXT files and saves every row before allowing the next group. ZIP and TXT copies are retained under `output/text_prompts/<download-id>/`. See [release notes](docs/releases/0.7.70.md).
+
+## Studio v0.7.69
+
+Opening the SRT menu or selecting a transcript for SRT now only refreshes saved data. ChatGPT opens when you click Create SRT or explicitly choose Open / select SRT window. ChatGPT Bridge remains 1.11.5. See [release notes](docs/releases/0.7.69.md).
+
+## Studio v0.7.68 / ChatGPT Bridge 1.11.5
+
+Restore Text to Prompt entry before TXT upload, then restore the sentence if uploading rebuilds the editor. Recognize attachments across the unified composer and an already-active Temporary Chat with a hidden mode switch. Focus each worker before checking the editor, and show each tab’s current step and errors directly in Text to Prompt. See [release notes](docs/releases/0.7.68.md).
+
+## Studio v0.7.67 / ChatGPT Bridge 1.11.4
+
+Coordinate focus, upload and Send across worker windows, then let responses generate concurrently. Upload TXT before typing the sentence so a rebuilt composer cannot erase it. Preserve completed answers even if conversation reuse cannot be verified, and display the original extension error with its phase instead of a generic HTTP 502. See [release notes](docs/releases/0.7.67.md).
+
+## Studio v0.7.66 / ChatGPT Bridge 1.11.3
+
+Text to Prompt attaches the saved instructions as a UTF-8 TXT file on the first turn of each Temporary Chat; only the SRT sentence is typed. Later turns send only the next sentence. Temporary response completion now recognizes the supplied sibling toolbar layout without using another turn or a code-block Copy button as completion evidence. See [release notes](docs/releases/0.7.66.md).
+
+## Studio v0.7.65 / ChatGPT Bridge 1.11.2
+
+Text to Prompt prepares its three Chat / Temporary tabs directly, like JSON → SRT. Historical review records no longer block Start selected rows in the generic preflight dialog. Inactive failed bindings get replacement tabs; their old tabs and audit records remain available. Running requests, pending saves, and account rate limits remain protected. Reload the extension after updating. See [release notes](docs/releases/0.7.65.md).
+
+## Studio 0.7.64 — Separate Chat/Temporary and Work modes
+
+[Update guide](docs/releases/0.7.64.md): **Text to Prompt uses three Chat tabs with Temporary Chat ON. JSON → SRT uses one separate Work tab with Temporary OFF.** Reload ChatGPT Bridge **1.11.1** and restart Studio/backend/gateway. Each Temporary conversation receives TXT + its first SRT row once, then only the following row text. A reload or replaced conversation is detected and receives its instructions again.
+
+## Studio 0.7.63 — Text to Prompt: SRT + TXT
+
+See [the update guide](docs/releases/0.7.63.md). Choose an SRT file and a prompt TXT in **Text to Prompt**, load the rows, select Image / Video prompt and start. Studio opens and binds three ChatGPT tabs automatically. Each tab receives the instructions with its first row, then only SRT text in the same conversation. The table shows pending, queued, running, completed and failed rows, with filters and per-row retry.
+
+> **Studio 0.7.61 / ChatGPT Bridge 1.10.1:** SRT jobs now have Stop job for running requests and Cancel queued job. A blocking job exposes an inline Stop existing SRT job button instead of HTTP 409 on preparation. Restart Studio/backend/gateway and reload extensions/chatgpt. [Details](docs/releases/0.7.61.md).
+
+> **Studio 0.7.60 / ChatGPT Bridge 1.10.0:** New SRT jobs send the original JSON and your unchanged prompt, then download the actual .srt file returned by ChatGPT. Chrome download completes before Studio saves the file and closes the tab. Restart Studio/backend/gateway and reload extensions/chatgpt, accepting Downloads permission. [Upgrade guide](docs/releases/0.7.60.md).
+
+> **Studio 0.7.59 / ChatGPT Bridge 1.9.3:** JSON upload waits for an enabled Send button, ignores unrelated composer spinners and finds enabled controls when disabled duplicates exist. Reload extensions/chatgpt. [Details](docs/releases/0.7.59.md).
+
+> **Studio 0.7.58 / ChatGPT Bridge 1.9.2:** SRT opens a new Work window after an inactive failed request without manual review reset. Restart Studio/backend/gateway and reload extensions/chatgpt. [Details](docs/releases/0.7.58.md).
+
+> **Studio 0.7.57:** Create SRT no longer opens the global preflight checklist or blocks on historical ChatGPT review records. The standalone ChatGPT menu is removed; SRT and Text to Prompt keep their extension integration. Restart Studio. [Details](docs/releases/0.7.57.md).
+
+> **Studio 0.7.56 / ChatGPT Bridge 1.9.1:** In that release, opening SRT immediately prepared a separate, focused ChatGPT window; v0.7.69 removes this navigation side effect. Create SRT sends the prompt and indexed JSON in that same tab. Restart Studio/backend/gateway and reload the ChatGPT extension. [Upgrade guide](docs/releases/0.7.56.md).
+
 > **Studio 0.7.55:** Per-video production dashboard, preflight checks, recovery center, shared project defaults with video overrides, Scene Board, configuration duplication and portable backups. Final assembly supports optional slow **Zoom in / Zoom out** for still images; **None** remains the default. Electron pauses between stages. The new CLI supports explicit continuous runs with saved checkpoints. Restart Studio with the complete source; extension versions are unchanged from 0.7.54. [Release and upgrade guide](docs/releases/0.7.55.md).
 
 > **Studio 0.7.54:** Project Settings stores separate URLs for ElevenLabs, ChatGPT / SRT, image GPT, video GPT and Google Flow. Every video inherits these destinations; queued jobs retain their saved URLs. Text to Prompt sends only each scene’s text and saves a plain reply to the selected Image or Video prompt, preserving the other prompt and matching generated media. Three separate GPT windows are prepared and reused automatically. Restart Studio/backend/gateway and reload all three extensions. [Setup and migration](docs/PROJECT_SETTINGS.md).

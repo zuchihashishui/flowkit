@@ -10,7 +10,7 @@ for(const mode of ['uploaded','old-only','virtualized','streaming','paragraphs']
  const input=d.querySelector('textarea'),main=d.querySelector('main');
  if(['old-only','virtualized'].includes(mode))main.innerHTML=fixture;
  w.chrome={runtime:{onMessage:{addListener:f=>handler=f}}};w.setTimeout=fn=>setImmediate(fn);
- Object.defineProperty(input,'offsetParent',{get:()=>d.body});
+ Object.defineProperty(w.HTMLElement.prototype,'offsetParent',{get:()=>d.body});
  d.execCommand=(cmd,_,value)=>{if(cmd==='insertText')input.value=value;if(cmd==='delete')input.value='';};
  d.querySelector('button').onclick=()=>{
   if(mode==='old-only'){

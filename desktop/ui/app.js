@@ -10,7 +10,9 @@ const api = async (method, path, body) => {
       if(media.length){stage=media[0].kind==='image'?'images':'videos';options={direct_jobs:media};}
     }else if(path.endsWith('/generate-concepts')||body.kind==='concept')stage=body.prompt_kind==='video'?'video_prompts':'image_prompts';
     else stage=body.kind==='image'?'images':'videos';
-    if(stage&&window.production&&ctx?.video_id){
+    // ChatGPT prompt jobs prepare/recover their own tabs, just like JSON → SRT.
+    const preparesTextTabs=['image_prompts','video_prompts'].includes(stage)&&body.provider==='chatgpt-web';
+    if(stage&&!preparesTextTabs&&window.production&&ctx?.video_id){
       if(!await window.production.check(stage,{...options,...ctx,silentOnSuccess:true}))throw Error('Preflight blocked this request. Resolve the listed checks before starting.');
       window.workflow.assertCurrent(ctx);
     }
@@ -20,6 +22,7 @@ const api = async (method, path, body) => {
 const ACTIVE = ['RUNNING', 'SUBMITTING', 'DOWNLOADING'];
 let projects = [], videos = [], scenes = [], jobs = [], paused = false, refreshing = false;
 let loadedProject = '', loadedCollection = '', sceneRequest = 0, projectRequest = 0;
+let downloadPreviewVersion = 0;
 let editingScene = null, editorDirty = false, sceneSaving = false, detailId = null, bulkExporting = false;
 const selectedScenes = new Set();
 const exported = new Set(), exportFailed = new Set(), exporting = new Set(), previewUrls = new Map();
@@ -44,6 +47,7 @@ function notice(text, error = false) {
   $('notice').classList.toggle('error', error);
 }
 function show(page) {
+  if(page!=='scene-board')clearDownloadPreview();
   if (page === 'storyboard') action(() => window.storyboard?.open());
   if (page === 'scene-board') action(() => window.sceneBoard?.open());
   document.querySelectorAll('[data-view]').forEach(e => e.hidden = e.dataset.view !== page);
@@ -91,7 +95,7 @@ function chosenScenes() {
 function updateInputSummary() {
   const count = scenes.filter(s => selectedScenes.has(s.id)).length;
   $('scene-selection').textContent = `${count} of ${scenes.length} scenes selected`;
-  for (const kind of ['video', 'image', 'voice']) {
+  for (const kind of ['voice']) {
     const storyboardMode = $(kind + '-mode').value === 'storyboard';
     const batch = $(kind + '-mode').value !== 'single';
     if (kind !== 'voice') $(kind + '-storyboard').hidden = !storyboardMode;
@@ -139,7 +143,7 @@ async function selectProject(reload=false) {
   ++sceneRequest; loadedProject = id; loadedCollection = ''; videos=[]; scenes = []; selectedScenes.clear(); renderScenes();
   try{localStorage.setItem('active-project-id',id);}catch{}
   detailId=null;
-  for(const kind of ['image','video','voice']){
+  for(const kind of ['voice']){
     $(kind+'-preview').replaceChildren();
     if(previewUrls.has(kind)){URL.revokeObjectURL(previewUrls.get(kind));previewUrls.delete(kind);}
   }
@@ -188,11 +192,6 @@ window.selectProductionVideo=async(id,page)=>{
   if(!pid||!videos.some(v=>v.id===id))throw Error('Video does not belong to the active project. Refresh Project.');
   if(id!==loadedCollection)await selectVideo(id);
   if(loadedProject!==pid||projectVersion!==projectRequest||loadedCollection!==id)return false;
-  if(page==='image'||page==='video'){
-    await window.storyboard?.open();
-    if(loadedProject!==pid||projectVersion!==projectRequest||loadedCollection!==id)return false;
-    $(page+'-mode').value='storyboard';updateInputSummary();
-  }
   destination.click();return true;
 };
 window.focusProductionJob=async id=>{
@@ -204,6 +203,7 @@ window.focusProductionJob=async id=>{
   $('job-scope').value='video';$('job-kind').value='';$('job-state').value='';$('job-search').value=id;
   renderJobs();showJobDetails(job);$('job-details').scrollIntoView?.({block:'nearest'});return true;
 };
+window.sceneDownloads={focus:window.focusProductionJob,export:async id=>{await exportJob(id);renderJobs();},open:()=>{$('scene-downloads-title').focus({preventScroll:true});$('scene-downloads').scrollIntoView?.({block:'start'});}};
 window.refreshStudioProjects=refreshProjects;
 
 async function loadScenes() {
@@ -213,8 +213,8 @@ async function loadScenes() {
   if(window.videoSettings&&!window.videoSettings.canChangeVideo(id)){$('video-select').value=loadedCollection;return;}
   if(id!==loadedCollection&&window.storyboard?.canChangeVideo&&!window.storyboard.canChangeVideo(id)){$('video-select').value=loadedCollection;return;}
   if(loadedCollection!==id){
-    detailId=null;
-    for(const kind of ['image','video','voice']){
+    detailId=null;clearDownloadPreview();
+    for(const kind of ['voice']){
       $(kind+'-preview').replaceChildren();
       if(previewUrls.has(kind)){URL.revokeObjectURL(previewUrls.get(kind));previewUrls.delete(kind);}
     }
@@ -272,10 +272,25 @@ async function exportJob(id) {
     const folder = await window.studio.exportJob(id); exported.add(id); exportFailed.delete(id); notice('Saved to ' + folder); return true;
   } catch (e) { exportFailed.add(id); throw e; } finally { exporting.delete(id); }
 }
+function clearDownloadPreview() {
+  ++downloadPreviewVersion;
+  const host=$('download-preview');host.querySelectorAll('audio,video').forEach(media=>media.pause());host.replaceChildren();host.hidden=true;
+  if(previewUrls.has('download')){URL.revokeObjectURL(previewUrls.get('download'));previewUrls.delete('download');}
+}
 async function preview(job) {
   const project=loadedProject,video=loadedCollection;
+  const inBoard=job.payload.kind!=='voice'||!document.querySelector('[data-view="scene-board"]').hidden;
+  if(inBoard){showJobDetails(job);clearDownloadPreview();}
+  const version=downloadPreviewVersion;
   const result = await window.studio.preview(job.id, 0), kind = result.kind;
   if(project!==loadedProject||video!==loadedCollection)return;
+  if(inBoard){
+    if(version!==downloadPreviewVersion||detailId!==job.id||document.querySelector('[data-view="scene-board"]').hidden)return;
+    const url=URL.createObjectURL(new Blob([result.bytes],{type:result.mime}));previewUrls.set('download',url);
+    const media=element(kind==='image'?'img':kind==='voice'?'audio':'video');media.src=url;
+    if(kind==='image')media.alt=job.payload.label;else media.controls=true;
+    $('download-preview').replaceChildren(media);$('download-preview').hidden=false;return;
+  }
   if (previewUrls.has(kind)) URL.revokeObjectURL(previewUrls.get(kind));
   const url = URL.createObjectURL(new Blob([result.bytes], {type: result.mime})); previewUrls.set(kind, url);
   const media = element(kind === 'image' ? 'img' : kind === 'voice' ? 'audio' : 'video'); media.src = url;
@@ -294,11 +309,11 @@ function filteredJobs() {
   const search = $('job-search').value.trim().toLowerCase(), kind = $('job-kind').value, state = $('job-state').value;
   return projectJobs().filter(j => (!kind || j.payload.kind === kind) && (!state || (state === 'ACTIVE' ? ACTIVE.includes(j.state) : j.state === state)) && (!search || [j.id, j.payload.label, j.payload.prompt].some(s => (s || '').toLowerCase().includes(search))));
 }
-function showJobDetails(job) { detailId = job.id; show('queue'); renderDetails(); }
+function showJobDetails(job) { if(detailId!==job.id)clearDownloadPreview();detailId=job.id;show('scene-board');renderDetails();$('job-details').scrollIntoView?.({block:'nearest'}); }
 function renderDetails() {
   const job = jobs.find(j => j.id === detailId);
   $('job-details').hidden = !job;
-  if (!job) return;
+  if (!job) {clearDownloadPreview();return;}
   const p = job.payload;
   $('job-detail-text').textContent = `${p.label}\nJob ID: ${job.id}\nState: ${job.state}\nCreated: ${new Date(job.created * 1000).toLocaleString()}\nProject: ${projects.find(x => x.id === p.project_id)?.name || p.project_id || 'None'}\nVideo: ${p.video_id || 'Unassigned'}\nScene ID: ${p.scene_id || 'None'}\nScript segment: ${p.segment_id || 'None'}\nConcept ID: ${p.concept_id || 'None'}\nNarration timing (ms): ${p.start_ms ?? '—'} → ${p.end_ms ?? '—'}\nMedia: ${p.kind}\n${p.kind === 'voice' ? 'Voice: ' + p.template + ' · Speed: ' + p.speed : 'Orientation: ' + p.orientation + (p.kind === 'video' ? ' · Duration: ' + p.duration + ' seconds' : ' · Model: ' + (p.image_model || 'Backend default'))}\n\nFull prompt\n${p.prompt}\n\nError\n${job.error || 'None'}\n\nBackend files\n${job.files.join('\n') || 'No files yet'}`;
 }
@@ -309,11 +324,11 @@ async function cancelJobs(ids) {
   await refreshJobs(); notice(`${r.cancelled.length} job(s) cancelled. ${r.skipped.length} skipped because they are no longer queued.`);
 }
 function renderJobs() {
-  const lists = {all: $('all-jobs'), image: $('image-jobs'), video: $('video-jobs'), voice: $('voice-jobs')};
+  const lists = {all: $('all-jobs'), voice: $('voice-jobs')};
   const visible = filteredJobs(), visibleIds = new Set(visible.map(j => j.id));
   Object.values(lists).forEach(e => e.replaceChildren());
   const scoped=projectJobs();
-  for (const job of scoped) for (const key of ['all', job.payload.kind]) {
+  for (const job of scoped) for (const key of (job.payload.kind==='voice'?['all','voice']:['all'])) {
     if ((key === 'all' && !visibleIds.has(job.id)) || (key !== 'all' && lists[key].children.length >= 5)) continue;
     const row = element('div', undefined, 'item'), top = element('div', undefined, 'item-top');
     row.dataset.jobId = job.id;
@@ -331,31 +346,25 @@ function renderJobs() {
   $('queue-stats').replaceChildren(...counts.map(([name, count]) => { const e = element('div', undefined, 'stat'); e.append(element('strong', String(count)), element('small', name)); return e; }));
   $('queue-summary').textContent = `${scoped.length} jobs · Queue ${paused ? 'paused' : 'running'}`;
   $('filter-summary').textContent = `${visible.length} matching job(s)`;
-  $('pause').textContent = paused ? 'Resume queue' : 'Pause queue';
+  $('pause').textContent = paused ? 'Resume all media jobs' : 'Pause all media jobs';
   $('cancel-filtered').disabled = !visible.some(j => j.state === 'QUEUED');
   $('export-filtered').disabled = bulkExporting || !visible.some(j => j.state === 'COMPLETED');
   renderDetails();
 }
 async function refreshJobs() {
-  const data = await api('GET', '/api/desktop/jobs'); jobs = data.jobs; paused = data.paused; syncProjectFilter(); renderJobs();
+  const signature=items=>JSON.stringify(items.map(j=>[j.id,j.state,j.stage,j.error,j.files]));
+  const data = await api('GET', '/api/desktop/jobs'),changed=signature(jobs)!==signature(data.jobs);
+  jobs = data.jobs; paused = data.paused; syncProjectFilter(); renderJobs();
+  if(changed)document.dispatchEvent(new Event('media-jobs-updated'));
   if ($('auto-export').checked && !bulkExporting) {
     const job = jobs.find(j => j.state === 'COMPLETED' && !exported.has(j.id) && !exportFailed.has(j.id) && !exporting.has(j.id));
     if (job) await action(() => exportJob(job.id));
   }
 }
-async function submitMedia(kind) {
-  if ($(kind + '-mode').value === 'storyboard') return window.storyboard.generateMedia(kind);
-  const pid = projectId(), vid=videoId(), batch = $(kind + '-mode').value === 'scenes';
-  const inputs = batch ? chosenScenes() : [{prompt: $(kind + '-prompt').value, video_prompt: $(kind + '-prompt').value}];
-  const payload = inputs.map(s => ({kind, project_id: pid, video_id:vid, scene_id: s.id || '', label: batch ? sceneLabel(s) : kind === 'video' ? 'Prompt to Video' : 'Prompt to Image', prompt: kind === 'video' ? (s.video_prompt || s.prompt || '') : (s.image_prompt || s.prompt || ''), orientation: $(kind + '-ratio').value, duration: Number($('duration').value), image_model: kind === 'image' ? $('image-model').value || null : null}));
-  if (payload.some(j => !j.prompt.trim() || j.prompt.length > 5000)) throw Error('Every prompt must contain 1–5000 characters.');
-  if (!confirm(`Submit ${payload.length} ${kind} job(s)? This uses Google Flow credits.`)) return;
-  await api('POST', '/api/desktop/jobs', {jobs: payload}); await refreshJobs(); notice(`${payload.length} job(s) queued.`);
-}
 function onForm(id, fn) { $(id).onsubmit = e => { e.preventDefault(); action(fn, e.submitter); }; }
 document.querySelectorAll('[data-page]').forEach(b => b.onclick = () => show(b.dataset.page));
 document.addEventListener('storyboard-selection', updateInputSummary);
-for (const kind of ['video', 'image', 'voice']) $(kind + '-mode').onchange = () => { updateInputSummary(); if ($(kind + '-mode').value === 'storyboard') action(() => window.storyboard?.open()); };
+for (const kind of ['voice']) $(kind + '-mode').onchange = () => { updateInputSummary(); if ($(kind + '-mode').value === 'storyboard') action(() => window.storyboard?.open()); };
 onForm('project-form', async () => {
   if (!discardSceneEdit()) return;
   const body = {name: $('project-name').value, description: $('project-description').value, material: $('material').value};
@@ -402,7 +411,6 @@ $('cancel-scene-edit').onclick = discardSceneEdit;
 $('add-scene').onclick = () => action(() => editScene(null));
 $('select-scenes').onclick = () => { scenes.forEach(s => selectedScenes.add(s.id)); renderScenes(); };
 $('clear-scenes').onclick = () => { selectedScenes.clear(); renderScenes(); };
-onForm('video-form', () => submitMedia('video')); onForm('image-form', () => submitMedia('image'));
 onForm('voice-import', async () => {
   const v = await window.studio.importVoice($('voice-name').value, $('voice-transcript').value, $('voice-consent').checked);
   if (v) { await refreshVoices(); $('voice-template').value = v.name; notice('Reference voice imported.'); }
@@ -442,7 +450,7 @@ $('import-scenes').onclick = () => action(async () => {
 $('pause').onclick = () => action(async () => { await api('POST', '/api/desktop/pause', {paused: !paused}); await refreshJobs(); }, $('pause'));
 for (const id of ['job-search', 'job-kind', 'job-state','job-scope']) $(id).addEventListener(id === 'job-search' ? 'input' : 'change', renderJobs);
 $('change-project').onclick=()=>show('projects');
-$('close-job-details').onclick = () => { detailId = null; renderDetails(); };
+$('close-job-details').onclick = () => { detailId = null; clearDownloadPreview();renderDetails(); };
 $('cancel-filtered').onclick = () => action(() => cancelJobs(filteredJobs().filter(j => j.state === 'QUEUED').slice(0, 1000).map(j => j.id)), $('cancel-filtered'));
 $('export-filtered').onclick = () => action(async () => {
   const items = filteredJobs().filter(j => j.state === 'COMPLETED');
@@ -481,9 +489,6 @@ async function initialize() {
     try {
       await api('GET', '/health'); await refreshProjects(); if($('project-select').value)await selectProject(); await refreshVoices();
       const mats = await api('GET', '/api/materials'); $('material').replaceChildren(...mats.map(m => option(m.id, m.name)));
-      const models = await api('GET', '/api/models');
-      $('image-model').replaceChildren(option('', 'Backend default'), ...Object.entries(models.image_models || {}).map(([name, key]) => option(key, name)));
-      window.productionDefaults?.restore('image-model');
       notice('Ready. Connect the Chrome extension to create images and videos.'); await heartbeat(); return;
     } catch (e) { if (attempt === 14) throw e; await new Promise(r => setTimeout(r, 1000)); }
   }

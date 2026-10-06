@@ -38,7 +38,7 @@ async function requireWorkflow(){
   }).finally(()=>{workflowCheck=null;});
   await workflowCheck;
 }
-const storyboardAllowed = /^\/api\/storyboard\/(providers|videos\/[a-zA-Z0-9_-]+(?:\/(segments|generate-concepts|cancel-concepts|generate-media|retry-failed))?|segments\/[a-zA-Z0-9_-]+(?:\/concepts)?|concepts\/[a-zA-Z0-9_-]+\/select)$/;
+const storyboardAllowed = /^\/api\/storyboard\/(providers|videos\/[a-zA-Z0-9_-]+(?:\/(segments|prompt-input|generate-concepts|cancel-concepts|generate-media|retry-failed|collect-images))?|segments\/[a-zA-Z0-9_-]+(?:\/concepts)?|concepts\/[a-zA-Z0-9_-]+\/select)$/;
 const allowed = /^\/(health|api\/(projects(?:\/[a-zA-Z0-9_-]+(?:\/settings)?)?|videos(?:\/[a-zA-Z0-9_-]+)?|scenes(?:\/[a-zA-Z0-9_-]+)?|models|materials|flow\/status|tts\/templates(?:\/[a-zA-Z0-9_-]+)?|desktop\/(jobs(?:\/cancel|\/[a-f0-9-]+\/resume)?|pause|diagnostics|flow-progress)))(\?[^#]*)?$/;
 function whisperxAllowed(method, route) {
   return method === 'GET' && /^\/api\/whisperx\/(status|jobs\/[a-f0-9-]{36}\/preview(?:\/(full|video|image))?)$/.test(route)
@@ -46,7 +46,7 @@ function whisperxAllowed(method, route) {
 }
 function srtAllowed(method, route) {
   return method === 'GET' && /^\/api\/srt\/(status|jobs\/[a-f0-9-]{36}\/(preview|quality))$/.test(route)
-    || method === 'POST' && /^\/api\/srt\/(jobs|analyze|jobs\/[a-f0-9-]{36}\/(cancel|approve))$/.test(route);
+    || method === 'POST' && /^\/api\/srt\/(prepare|jobs|analyze|jobs\/[a-f0-9-]{36}\/(cancel|approve))$/.test(route);
 }
 function assemblyAllowed(method, route) {
   return method === 'GET' && route === '/api/assembly/status'
@@ -73,6 +73,7 @@ async function readBackendResponse(response, route) {
   return data;
 }
 async function request(method, route, body, timeoutMs) {
+  if(timeoutMs===undefined && route==='/api/srt/prepare')timeoutMs=130000;
   if(timeoutMs===undefined && method==='GET' && ['/api/srt/status','/api/whisperx/status','/api/chatgpt/status','/api/workflow/resources'].includes(route.split('?')[0]))timeoutMs=10000;
   if(timeoutMs===undefined && method==='POST' && /^\/api\/assembly\/(preflight|scene-media|jobs)$/.test(route))timeoutMs=1800000;
   const response = await fetch(BASE + route, {method, headers:body ? {'Content-Type':'application/json'} : {}, body: body ? JSON.stringify(body) : undefined, signal:AbortSignal.timeout(timeoutMs ?? (route.startsWith('/api/chatgpt/')?720000:120000))});
@@ -262,6 +263,16 @@ app.whenReady().then(async()=>{
     return {...settings};
   });
   handle('choose-output',async()=>{const r=await dialog.showOpenDialog(win,{properties:['openDirectory','createDirectory']});if(!r.canceled){settings.output=r.filePaths[0];await saveSettings();}return settings;});
+  handle('open-video-files',async(projectId,videoId=null)=>{
+    if(typeof projectId!=='string'||!/^[a-zA-Z0-9_-]{1,100}$/.test(projectId)||videoId!==null&&(typeof videoId!=='string'||!/^[a-zA-Z0-9_-]{1,100}$/.test(videoId)))throw Error('Select a project and video first.');
+    const result=await request('POST','/api/workflow/files',{project_id:projectId,video_id:videoId},1800000);
+    const folder=videoId?result.directory:result.project_directory;
+    if(typeof folder!=='string'||!path.isAbsolute(folder)||typeof result.root_directory!=='string'||!path.isAbsolute(result.root_directory))throw Error('Backend returned an invalid project folder.');
+    const relative=path.relative(result.root_directory,folder);
+    if(!relative||relative==='..'||relative.startsWith('..'+path.sep)||path.isAbsolute(relative))throw Error('Folder is outside the project workspace.');
+    const error=await shell.openPath(folder);if(error)throw Error(error);
+    return result;
+  });
   handle('open-output',async()=>{await fs.mkdir(settings.output,{recursive:true});const error=await shell.openPath(settings.output);if(error)throw Error(error);});
   handle('save-chat-results',async ids=>{
     if(!Array.isArray(ids)||!ids.length||ids.length>200||ids.some(id=>typeof id!=='string'))throw Error('Select 1–200 jobs');
@@ -318,11 +329,11 @@ app.whenReady().then(async()=>{
   handle('open-flow',()=>shell.openExternal('https://flow.google.com/'));
   handle('open-extension',()=>shell.openPath(path.join(ROOT,'extensions','googleflow')));
   handle('import-script-source',async kind=>{
-    if(!['script','segments'].includes(kind))throw Error('Invalid source type');
-    const r=await dialog.showOpenDialog(win,{properties:['openFile'],filters:[{name:'Source text',extensions:kind==='script'?['txt']:['srt','json']}]});
+    if(!['script','segments','prompt','srt'].includes(kind))throw Error('Invalid source type');
+    const r=await dialog.showOpenDialog(win,{properties:['openFile'],filters:[{name:'Source text',extensions:kind==='srt'?['srt']:['script','prompt'].includes(kind)?['txt']:['srt','json']}]});
     if(r.canceled)return null;
     if((await fs.stat(r.filePaths[0])).size>2*1024*1024)throw Error('Source file must be under 2 MiB');
-    return {name:path.basename(r.filePaths[0]),text:await fs.readFile(r.filePaths[0],'utf8')};
+    return {name:path.basename(r.filePaths[0]),text:(await fs.readFile(r.filePaths[0],'utf8')).replace(/^\uFEFF/,'')};
   });
   handle('import-script-audio',async videoId=>{
     if(typeof videoId!=='string'||!/^[a-zA-Z0-9_-]+$/.test(videoId))throw Error('Invalid collection');

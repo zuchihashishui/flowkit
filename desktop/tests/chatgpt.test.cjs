@@ -6,6 +6,8 @@ const {JSDOM}=require('jsdom');
 for(const streaming of [false,true])test(`ChatGPT extension: ${streaming?'partial timeout fails':'completed answer returns'}`,async()=>{
  const dom=new JSDOM('<textarea id="prompt-textarea"></textarea><button data-testid="send-button">Send</button>',{url:'https://chatgpt.com/',runScripts:'outside-only'});
  const w=dom.window;let handler;
+ // jsdom has no layout; expose visible controls just as the editor is exposed.
+ Object.defineProperty(w.HTMLElement.prototype,'offsetParent',{get(){return this.hidden?null:w.document.body;}});
  w.chrome={runtime:{onMessage:{addListener:fn=>handler=fn}}};w.setTimeout=fn=>setImmediate(fn);
  const input=w.document.querySelector('textarea');Object.defineProperty(input,'offsetParent',{get:()=>w.document.body});
  w.document.execCommand=(cmd,_,value)=>{if(cmd==='insertText')input.value=value;if(cmd==='delete')input.value='';};
@@ -34,6 +36,7 @@ for(const label of ['Work with ChatGPT','Ask ChatGPT'])
 for(const mode of ['complete','streaming','disabled','long','hidden-duplicate'])test(`User supplied ${label} / Send / Stop markup: ${mode}`,async()=>{
  const dom=new JSDOM('<div contenteditable="true" aria-multiline="true" dir="auto" role="textbox" spellcheck="true" translate="no" class="ProseMirror" data-composer-markdown="" aria-label="Work with ChatGPT" data-virtualkeyboard="true"><p data-empty-paragraph="true" data-placeholder="Work with ChatGPT" class="placeholder"><br class="ProseMirror-trailingBreak"></p></div><div class="flex items-center"><button type="submit" aria-label="Send"><svg></svg></button></div>',{url:'https://chatgpt.com/',runScripts:'outside-only'});
  const w=dom.window;let handler,clicks=0;
+ Object.defineProperty(w.HTMLElement.prototype,'offsetParent',{get(){return this.hidden?null:w.document.body;}});
  w.document.querySelector('.ProseMirror').setAttribute('aria-label',label);
  w.document.querySelector('[data-placeholder]').setAttribute('data-placeholder',label);
  w.chrome={runtime:{onMessage:{addListener:fn=>handler=fn}}};w.setTimeout=fn=>setImmediate(fn);

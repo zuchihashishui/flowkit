@@ -1,6 +1,13 @@
 // One socket: three reusable text workers and one dedicated, fresh SRT tab.
 let ws,enabled=true,composerMode='chat',modelPreference='auto',workers=[],initialized=false,configuring=false,lastError='',lastRequest='',completed=0;
 const executing=new Set(),closingTabs=new Set(),events=[];
+let setupTail=Promise.resolve(),setupOwner=null;
+async function acquireSetup(requestId){
+ const previous=setupTail;let unlock;setupTail=new Promise(resolve=>unlock=resolve);
+ await previous;let released=false;
+ const release=()=>{if(released)return;released=true;if(setupOwner?.requestId===requestId)setupOwner=null;unlock();};
+ setupOwner={requestId,release};return release;
+}
 const SRT_WORKER_ID='srt-worker';
 const textWorkers=()=>workers.filter(w=>w.kind!=='srt');
 const srtWorker=()=>workers.find(w=>w.kind==='srt')||null;
@@ -9,7 +16,7 @@ const record=message=>{events.unshift({time:new Date().toISOString(),message});e
 const transmit=m=>{if(ws?.readyState===1)ws.send(JSON.stringify(m));};
 let inspecting=false,lastInspection=null,modelCatalog=null;
 function inspectMessage(tabId,message){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Tab inspection timed out; refresh the tab')),5000);chrome.tabs.sendMessage(tabId,message).then(r=>{clearTimeout(timer);resolve(r);},e=>{clearTimeout(timer);reject(e);});});}
-const phases=new Set(['OPENING_TAB','SELECTING_MODE','ENABLING_TEMPORARY','DISABLING_TEMPORARY','SELECTING_MODEL','TYPING','ATTACHING_FILE','SENDING','WAITING_RESPONSE','GENERATING','WORKING','THINKING','USING_TOOLS','VERIFYING_COMPLETION','WAITING_COMPLETION']);
+const phases=new Set(['WAITING_SETUP','OPENING_TAB','SELECTING_MODE','ENABLING_TEMPORARY','DISABLING_TEMPORARY','SELECTING_MODEL','TYPING','ATTACHING_FILE','WAITING_ATTACHMENT','WAITING_SEND_BUTTON','VERIFYING_SUBMISSION','SENDING','WAITING_RESPONSE','GENERATING','WORKING','THINKING','USING_TOOLS','VERIFYING_COMPLETION','WAITING_COMPLETION','DOWNLOADING_SRT','DOWNLOADING_ZIP']);
 async function inspectTabs(kind,options={}) {
  if(inspecting||configuring||textExecuting()||textWorkers().some(w=>w.state!=='IDLE'))throw Error('Pause the text queue and finish or review text worker jobs before checking tabs.');
  const limit=Math.max(1,Math.min(3,Number(options.workers)||3));
@@ -36,7 +43,7 @@ async function inspectTabs(kind,options={}) {
   return lastInspection;
  }finally{inspecting=false;announce();}
 }
-function announce(){transmit({type:'pool',protocol:2,capabilities:['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1'],enabled,workers:textWorkers(),srtWorker:srtWorker(),inspecting});}
+function announce(){transmit({type:'pool',protocol:2,capabilities:['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1','srt-prepare-v1','srt-download-v1','srt-cancel-v1','temporary-text-session-v1','text-worker-recovery-v1','txt-prompt-attachment-v1','serialized-submission-v1','work-prompt-zip-v1','verified-send-v1'],enabled,workers:textWorkers(),srtWorker:srtWorker(),inspecting:inspecting||configuring});}
 async function persist(){await chrome.storage.local.set({workers,enabled,composerMode,modelPreference});announce();}
 async function initialize(){const saved=await chrome.storage.local.get(['workers','enabled','tabId','composerMode','modelPreference']);enabled=saved.enabled!==false;composerMode=saved.composerMode==='work'?'work':'chat';modelPreference=typeof saved.modelPreference==='string'&&saved.modelPreference.length<=100?saved.modelPreference:'auto';
  const previous=saved.workers || (saved.tabId?[{id:'worker-1',tabId:saved.tabId,state:'IDLE'}]:[]);
@@ -51,7 +58,47 @@ async function openWorkerWindow(w, focused=true, pageUrl='https://chatgpt.com/')
  const tab=win?.tabs?.[0]||(win?.id!==undefined?(await chrome.tabs.query({windowId:win.id}))[0]:null);
  if(!Number.isInteger(tab?.id))throw Error('Chrome did not return the new worker tab');
  w.tabId=tab.id;w.windowId=win.id;w.owned=true;
+ w.textSession=null;w.pendingTextSession=null;
  return tab;
+}
+async function prepareSrtTab(options) {
+ if(executing.has(SRT_WORKER_ID))throw Error('An SRT request is still running. Wait for it to finish.');
+ const release=await acquireSetup('prepare-srt');
+ try{return await prepareSrtTabUnlocked(options);}finally{release();}
+}
+async function prepareSrtTabUnlocked(options) {
+ const url=new URL(options.pageUrl||'https://chatgpt.com/');
+ if(url.origin!=='https://chatgpt.com'||url.pathname!=='/'||url.username||url.password||url.hash)throw Error('Use the project ChatGPT home URL for SRT.');
+ let w=srtWorker();
+ if(!enabled)throw Error('Turn on the ChatGPT extension before opening SRT.');
+ if(executing.has(SRT_WORKER_ID)||w&&!['IDLE','NEEDS_REVIEW'].includes(w.state))throw Error('An SRT request is still running or saving. Wait for it to finish.');
+ if(w?.state==='NEEDS_REVIEW'){
+  // Detach the failed binding, leaving the old tab and its answer available.
+  record('Detached previous SRT request '+(w.requestId||'')+'; preparing a new window');
+  w={id:SRT_WORKER_ID,kind:'srt',state:'IDLE',tabId:null};
+  workers=workers.filter(item=>item.id!==SRT_WORKER_ID);workers.push(w);
+ }
+ if(!w){w={id:SRT_WORKER_ID,kind:'srt',state:'IDLE',tabId:null};workers.push(w);}
+ const reuse=options.token&&options.token===w.preparedToken&&w.preparedUrl===url.href;
+ w.state='PREPARING';w.progress={phase:'CREATING_TAB',updated:Date.now()};await persist();
+ try{
+  if(!reuse)await openWorkerWindow(w,true,url.href);
+  else {await chrome.windows.update(w.windowId,{focused:true,state:'normal'});await chrome.tabs.update(w.tabId,{active:true});}
+  let ready=false;
+  for(let i=0;i<120;i++){
+   const tab=await chrome.tabs.get(w.tabId);
+   if(tab.status==='complete'&&new URL(tab.url).origin===url.origin&&new URL(tab.url).pathname===url.pathname){
+    try{if((await chrome.tabs.sendMessage(w.tabId,{type:'ping'}))?.ok){ready=true;break;}}catch{}
+   }
+   await new Promise(resolve=>setTimeout(resolve,500));
+  }
+  if(!ready)throw Error('The new SRT tab is not ready. Sign in or finish loading ChatGPT, then try again.');
+  w.progress={phase:'SELECTING_MODE',updated:Date.now()};await persist();
+  const result=await chrome.tabs.sendMessage(w.tabId,{type:'prepareSrt'});
+  if(!result?.ok)throw Error(result?.error||'Could not select Work in the SRT tab.');
+  w.preparedToken=options.token;w.preparedUrl=url.href;w.state='IDLE';w.error='';w.progress=null;await persist();
+  return {token:w.preparedToken,tabId:w.tabId,windowId:w.windowId,composerMode:'work'};
+ }catch(error){w.state='IDLE';w.preparedToken=null;w.error=error.message;w.progress=null;await persist();throw error;}
 }
 async function closeSavedWorker(w) {
  if(!w.owned||!Number.isInteger(w.tabId))return;
@@ -75,6 +122,8 @@ function connect(){if(!initialized || (ws&&ws.readyState<2))return;
  peer.onmessage=async event=>{
   let m;try{m=JSON.parse(event.data);}catch{return;}
   if(m.type==='chat'){run(m,peer);return;}
+  if(m.type==='cancelSrt'){try{await cancelSrt(m);transmit({type:'controlResult',controlId:m.controlId,ok:true});}catch(e){transmit({type:'controlResult',controlId:m.controlId,ok:false,error:e.message});}return;}
+  if(m.type==='prepareSrt'){try{const data=await prepareSrtTab(m);transmit({type:'controlResult',controlId:m.controlId,ok:true,data});}catch(e){transmit({type:'controlResult',controlId:m.controlId,ok:false,error:e.message});}return;}
   if(m.type==='inspect'){try{const data=await inspectTabs(m.kind,m);transmit({type:'controlResult',controlId:m.controlId,ok:true,data});}catch(e){transmit({type:'controlResult',controlId:m.controlId,ok:false,error:e.message});}return;}
   if(m.type==='quarantine'){const w=workers.find(w=>w.requestId===m.requestId);if(w){w.state='NEEDS_REVIEW';w.error='Gateway deadline or client disconnected';await persist();}return;}
   try{
@@ -82,16 +131,41 @@ function connect(){if(!initialized || (ws&&ws.readyState<2))return;
     const w=workers.find(w=>w.requestId===m.requestId);
     if(!w)throw Error('Request reservation missing');
     if(executing.has(w.id))throw Error('Worker still executing');
-    if(m.ok&&w.state==='AWAITING_SAVE'){if(w.kind==='srt')await tryCloseSavedWorker(w);w.state='IDLE';w.requestId=null;w.error='';w.progress=null;w.requestOptions=null;completed++;record('Saved; '+w.id+' ready');}
+    if(m.ok&&w.state==='AWAITING_SAVE'){if(w.kind==='srt')await tryCloseSavedWorker(w);w.textSession=w.pendingTextSession||null;w.pendingTextSession=null;w.state='IDLE';w.requestId=null;w.error='';w.progress=null;w.requestOptions=null;completed++;record('Saved; '+w.id+' ready');}
     else{w.state='NEEDS_REVIEW';w.error='Result requires review';}
     await persist();
    }else if(m.type==='ensureTextWorkers'){
     if(configuring)throw Error('Worker configuration is in progress.');
-    while(textWorkers().length<3){
-     const id=[1,2,3].map(n=>'worker-'+n).find(id=>!workers.some(w=>w.id===id));
-     workers.push({id,kind:'text',tabId:null,state:'IDLE',owned:true});
-    }
-    await persist();
+    if(!enabled)throw Error('Turn on the ChatGPT extension before creating prompts.');
+    configuring=true;announce();
+    try{
+     const limit=m.workerCount===1?1:3;
+     if(limit===1){
+      const extras=textWorkers().slice(1);
+      if(extras.some(w=>executing.has(w.id)||!['IDLE','NEEDS_REVIEW'].includes(w.state)))throw Error('Finish active text requests before switching to one Work tab.');
+      for(const old of extras){if(old.state==='IDLE')await tryCloseSavedWorker(old);workers=workers.filter(w=>w!==old);}
+     }
+     while(textWorkers().length<limit){
+      const id=[1,2,3].map(n=>'worker-'+n).find(id=>!workers.some(w=>w.id===id));
+      workers.push({id,kind:'text',tabId:null,state:'IDLE',owned:true});
+     }
+     for(let w of textWorkers()){
+      const recover=w.state==='NEEDS_REVIEW'||m.recoverWorkers?.includes(w.id);
+      if(recover){
+       // Keep the old tab and answer; never revive or resend its request.
+       if(executing.has(w.id)||!['IDLE','NEEDS_REVIEW'].includes(w.state))throw Error('A text request is still running or saving. Wait for it to finish.');
+       const replacement={id:w.id,kind:'text',tabId:null,state:'IDLE',owned:true};
+       await openWorkerWindow(replacement,false);
+       record('Detached previous text request '+(w.requestId||'')+' in tab '+w.tabId+'; opened a replacement');
+       workers=workers.map(item=>item===w?replacement:item);w=replacement;
+       await persist();
+      }
+      if(w.state==='IDLE'){
+       if(w.tabId!==null){try{await chrome.tabs.get(w.tabId);}catch{w.tabId=null;w.textSession=null;w.pendingTextSession=null;}}
+       if(w.tabId===null){await openWorkerWindow(w,false);await persist();}
+      }
+     }
+    }finally{configuring=false;await persist();}
    }else if(m.type==='closeIdleText'){
     if(configuring||inspecting||textExecuting()||textWorkers().some(w=>w.state!=='IDLE'))throw Error('Text workers still busy or require review');
     configuring=true;
@@ -101,11 +175,29 @@ function connect(){if(!initialized || (ws&&ws.readyState<2))return;
     for(const w of workers){if(w.tabId===null)continue;const t=await chrome.tabs.get(w.tabId);if(!t.url?.startsWith('https://chatgpt.com/'))throw Error('Worker tab must be on ChatGPT');
      const r=await chrome.tabs.sendMessage(w.tabId,{type:'probe'});if(r.streaming)throw Error('Stop the active generation in '+w.id+' first.');}
     workers=workers.filter(w=>w.tabId!==null||(w.owned&&w.state==='IDLE'));
-    for(const w of workers){w.state='IDLE';w.requestId=null;w.error='';w.progress=null;w.requestOptions=null;}await persist();
+    for(const w of workers){w.state='IDLE';w.requestId=null;w.error='';w.progress=null;w.requestOptions=null;w.textSession=null;w.pendingTextSession=null;}await persist();
    }else return;
    transmit({type:'controlResult',controlId:m.controlId,ok:true});
   }catch(e){transmit({type:'controlResult',controlId:m.controlId,ok:false,error:e.message});}
  };
+}
+async function cancelSrt(options){
+ const w=srtWorker();
+ if(!w||w.requestId!==options.requestId||w.jobId!==options.jobId)throw Error('SRT request changed; no other job was stopped.');
+ w.state='CANCELLED';await persist();
+ if(Number.isInteger(w.tabId)){
+  if(!w.owned)throw Error('The SRT tab is not owned by this worker.');
+  await Promise.race([chrome.tabs.sendMessage(w.tabId,{type:'stopSrt',requestId:w.requestId}).catch(()=>{}),new Promise(resolve=>setTimeout(resolve,1000))]);
+  closingTabs.add(w.tabId);
+  try{await chrome.tabs.remove(w.tabId);}catch(error){
+   try{await chrome.tabs.get(w.tabId);throw error;}catch(check){if(check===error)throw error;}
+  }finally{closingTabs.delete(w.tabId);}
+ }
+ if(setupOwner?.requestId===options.requestId)setupOwner.release();
+ executing.delete(w.id);
+ workers=workers.filter(item=>item!==w);
+ workers.push({id:SRT_WORKER_ID,kind:'srt',tabId:null,state:'IDLE',owned:true});
+ await persist();record('SRT stopped by user: '+options.jobId);
 }
 async function run(m,peer){let w=workers.find(w=>w.id===m.workerId);
  const reply=r=>{if(peer.readyState===1)peer.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,...r}));};
@@ -113,44 +205,148 @@ async function run(m,peer){let w=workers.find(w=>w.id===m.workerId);
  try{const u=new URL(pageUrl);if(u.origin!=='https://chatgpt.com'||u.username||u.password||u.hash||!(u.pathname==='/'||/^\/g\/g-[A-Za-z0-9_-]+\/?$/.test(u.pathname)))throw Error();customGPT=u.pathname.startsWith('/g/');if(customGPT&&(m.temporary!==false||m.attachment))throw Error();}
  catch{reply({ok:false,error:'Invalid project ChatGPT URL/options',not_submitted:true});return;}
  const fresh=m.freshTab===true;
+ const session=m.textSessionId,workZip=m.downloadPromptZip===true;
+ if(workZip&&(!session||textWorkers().length!==1)){reply({ok:false,error:'Prepare one Work worker for ZIP batches.',not_submitted:true});return;}
+ if(session!==undefined&&(typeof session!=='string'||!session||typeof m.promptTemplate!=='string'||!m.promptTemplate.trim()||m.promptTemplate.length>100000||fresh||m.attachment||customGPT||(workZip?(m.temporary!==false||m.composerMode!=='work'):(m.temporary!==true||m.composerMode!=='chat')))){reply({ok:false,error:workZip?'Text to Prompt ZIP requires Work / Temporary OFF':'Legacy text sessions require Chat / Temporary ON',not_submitted:true});return;}
  if(fresh&&(!m.attachment||m.composerMode!=='work'||m.temporary!==false)){reply({ok:false,error:'Invalid fresh SRT tab request',not_submitted:true});return;}
  if((fresh&&m.workerId!==SRT_WORKER_ID)||(!fresh&&w?.kind==='srt')){reply({ok:false,error:'SRT and text workers are separate',not_submitted:true});return;}
  if(inspecting||configuring||!enabled||(w&&w.state!=='IDLE')||(!w&&!fresh)){reply({ok:false,error:'Worker is unavailable',not_submitted:true});return;}
  if(!w){w={id:SRT_WORKER_ID,kind:'srt',tabId:null,state:'IDLE'};workers.push(w);}
  const jobComposerMode=m.composerMode??composerMode,jobModel=m.model==='extension'?modelPreference:m.model;
- w.requestOptions={composerMode:jobComposerMode,temporary:m.temporary===true,model:jobModel||'auto',hasAttachment:!!m.attachment,freshTab:fresh,pageUrl};
- if(fresh)w.tabId=null; // Release the old idle tab's binding; leave its page intact.
- w.state='RUNNING';w.progress={phase:fresh?'CREATING_TAB':'OPENING_TAB',updated:Date.now(),chars:0};w.requestId=m.requestId;w.started=Date.now();w.error='';executing.add(w.id);lastRequest=m.requestId;record(`${w.id} started ${m.requestId} · ${jobComposerMode} · Temporary ${m.temporary?'ON':'OFF'} · ${jobModel||'auto'}${m.attachment?' · JSON':''}`);
+ w.requestOptions={composerMode:jobComposerMode,temporary:m.temporary===true,model:jobModel||'auto',hasAttachment:!!m.attachment||!!session,downloadPromptZip:workZip,freshTab:fresh,pageUrl};
+ const prepared=fresh&&m.preparedTabToken&&m.preparedTabToken===w.preparedToken&&w.preparedUrl===new URL(pageUrl).href;
+ if(m.preparedTabToken&&!prepared){reply({ok:false,error:'Prepared SRT tab changed. Open SRT again before retrying.',not_submitted:true});return;}
+ w.preparedToken=null;
+ if(fresh&&!prepared)w.tabId=null; // Release the old idle tab's binding; leave its page intact.
+ w.jobId=m.srtJobId;w.state='RUNNING';w.progress={phase:'WAITING_SETUP',updated:Date.now(),chars:0};w.requestId=m.requestId;w.started=Date.now();w.error='';executing.add(w.id);lastRequest=m.requestId;record(`${w.id} started ${m.requestId} · ${jobComposerMode} · Temporary ${m.temporary?'ON':'OFF'} · ${jobModel||'auto'}${m.attachment?' · JSON':''}`);
+ let releaseSetup=()=>{};
  try{
   await persist();
-  if(fresh||w.tabId===null){
+  releaseSetup=await acquireSetup(m.requestId);
+  if(w.state!=='RUNNING'||peer.readyState!==1)throw Error('Worker interrupted while waiting to prepare its tab');
+  w.progress={phase:'OPENING_TAB',updated:Date.now(),chars:0};await persist();
+  let continuing=false;
+  if(session&&w.textSession?.id===session&&w.textSession.pageUrl===pageUrl&&w.textSession.template===m.promptTemplate&&Number.isInteger(w.tabId)){
+   const tab=await chrome.tabs.get(w.tabId);
+   if(tab.url===w.textSession.conversationUrl&&!tab.pendingUrl){
+    // Temporary chats may stay on the home URL. A URL alone cannot prove that
+    // the page still has the TXT; reloading clears this in-page proof.
+    const state=await inspectMessage(w.tabId,{type:'ping'}).catch(()=>null);
+    const proof=state?.textSessionProof;
+    continuing=!!proof&&proof.id===session&&proof.proof===w.textSession.proof&&proof.url===tab.url;
+   }
+  }
+  const conversationUrl=continuing?w.textSession.conversationUrl:null;
+  if(!continuing)w.textSession=null;
+  w.pendingTextSession=null;
+  if((fresh&&!prepared)||w.tabId===null){
    const tab=await openWorkerWindow(w,true,pageUrl);
    w.progress={phase:'BINDING_TAB',updated:Date.now(),chars:0};
    record(`${w.id} automatically bound to new ${fresh?'SRT':'text'} tab ${tab.id}`);await persist();
   }else{
    const tab=await chrome.tabs.get(w.tabId);
    if(!tab.url?.startsWith('https://chatgpt.com/'))throw Error('Worker tab must be on ChatGPT');
-   await chrome.tabs.update(w.tabId,{url:pageUrl});
+   if(prepared){await chrome.windows.update(w.windowId,{focused:true,state:'normal'});await chrome.tabs.update(w.tabId,{active:true});}else if(!continuing)await chrome.tabs.update(w.tabId,{url:pageUrl});
   }
-  let ready=false;for(let i=0;i<60;i++){
+  const liveTab=await chrome.tabs.get(w.tabId);
+  if(Number.isInteger(liveTab.windowId??w.windowId))await chrome.windows.update(liveTab.windowId??w.windowId,{focused:true,state:'normal'});
+  await chrome.tabs.update(w.tabId,{active:true});
+  w.progress={phase:'WAITING_PAGE',updated:Date.now(),chars:0};await persist();
+  let ready=null;const readyDeadline=Date.now()+30000;
+  for(let i=0;i<60&&Date.now()<readyDeadline;i++){
    if(w.state!=='RUNNING')throw Error('Worker interrupted before submission');
    await new Promise(r=>setTimeout(r,500));const t=await chrome.tabs.get(w.tabId);
-   if(t.status==='complete'&&new URL(t.url).origin==='https://chatgpt.com'&&new URL(t.url).pathname.replace(/\/$/,'')===new URL(pageUrl).pathname.replace(/\/$/,''))try{const p=await chrome.tabs.sendMessage(w.tabId,{type:'ping'});if(p.ok){ready=true;break;}}catch{}
+   if(t.url&&!t.pendingUrl&&new URL(t.url).origin==='https://chatgpt.com'&&(continuing?t.url===conversationUrl:new URL(t.url).pathname.replace(/\/$/,'')===new URL(pageUrl).pathname.replace(/\/$/,'')))try{
+    const p=await inspectMessage(w.tabId,{type:'ping'});
+    // Resource loading can outlive the usable composer. Ask the content script
+    // itself, after focusing the window, instead of requiring tab.complete.
+    if(p?.ok&&p.inputReady!==false&&(!p.url||p.url===t.url)){ready=p;break;}
+   }catch{}
   }
-  if(!ready)throw Error('ChatGPT tab did not become ready');
+  if(!ready)throw Error('ChatGPT composer did not become ready within 30 seconds. Check sign-in, page loading and the Flowkit extension in this tab. No prompt was sent.');
   if(w.state!=='RUNNING')throw Error('Worker interrupted before submission');
-  const result=await chrome.tabs.sendMessage(w.tabId,{type:'chat',requestId:m.requestId,userMessage:m.messages[0].content,attachment:m.attachment,model:jobModel,timeout:m.timeout,newConversation:false,selectModel:true,temporary:m.temporary,composerMode:jobComposerMode,customGPT,pageUrl});
-  if(!result?.ok){const e=Error(result?.error||'No response from tab');e.code=result?.code;throw e;}
+  if(session&&ready.submissionAck!==true)throw Error('Refresh the ChatGPT tab to load Bridge 1.11.5 before retrying.');
+  if(workZip&&(ready.promptZip!==true||ready.verifiedSend!==true))throw Error('Reload the ChatGPT extension and refresh the Work tab to load Bridge 1.12.1 before retrying.');
+  const userMessage=m.messages[0].content;
+  const promptAttachment=session&&!continuing?{name:'prompt-instructions.txt',text:m.promptTemplate}:undefined;
+  const result=await chrome.tabs.sendMessage(w.tabId,{type:'chat',requestId:m.requestId,userMessage,promptAttachment,attachment:m.attachment,model:jobModel,timeout:m.timeout,newConversation:false,selectModel:!continuing,temporary:m.temporary,composerMode:jobComposerMode,customGPT,pageUrl,continueConversation:continuing,conversationUrl,textSessionId:session,textSessionProof:continuing?w.textSession.proof:null,downloadSrt:m.downloadSrt===true,downloadPromptZip:workZip});
+  if(!result?.ok){const e=Error(result?.error||'No response from tab');e.code=result?.code;e.phase=result?.phase;e.submitted=result?.submitted;e.partialResponse=result?.partialResponse;throw e;}
   if(w.state!=='RUNNING')throw Error('Late response: worker already requires review');
+  if(session){
+   try{
+   const current=await chrome.tabs.get(w.tabId),u=new URL(result.conversation_url||current.url);
+   const proof=result.textSessionProof;
+   if(u.origin==='https://chatgpt.com'&&u.href===current.url&&(u.pathname==='/'||/^\/c\/[A-Za-z0-9_-]+\/?$/.test(u.pathname))&&proof?.id===session&&proof?.proof===m.requestId&&proof?.url===current.url)
+    w.pendingTextSession={id:session,pageUrl,template:m.promptTemplate,conversationUrl:u.href,proof:proof.proof};
+   else record(w.id+' completed; conversation memory unavailable, next request will reattach TXT');
+   }catch{record(w.id+' completed; tab changed before conversation memory could be saved');}
+  }
   w.state='AWAITING_SAVE';w.progress={...w.progress,phase:'AWAITING_SAVE',updated:Date.now()};await persist();executing.delete(w.id);reply(result);record(w.id+' awaiting database confirmation');
- }catch(e){w.state='NEEDS_REVIEW';w.error=e.message;lastError=e.message;await persist();reply({ok:false,error:e.message,code:e.code});record(w.id+' failed: '+e.message);}
- finally{executing.delete(w.id);}
+ }catch(e){
+  if(w.state==='CANCELLED'||!workers.includes(w)){reply({ok:false,cancelled:true,error:'SRT job stopped by user'});}
+  else {w.state='NEEDS_REVIEW';w.error=e.message;lastError=e.message;await persist();reply({ok:false,error:e.message,code:e.code,phase:e.phase||w.progress?.phase,submitted:e.submitted,partialResponse:e.partialResponse});record(w.id+' failed: '+e.message);}
+ }
+ finally{releaseSetup();if(workers.includes(w)&&w.requestId===m.requestId)executing.delete(w.id);}
+}
+let downloadingSrt=false,downloadTail=Promise.resolve();
+async function downloadSrtFile(worker,kind='srt'){
+ const previous=downloadTail;let unlock;downloadTail=new Promise(resolve=>unlock=resolve);await previous;
+ try{return await downloadWorkerFile(worker,kind);}finally{unlock();}
+}
+async function downloadWorkerFile(worker,kind){
+ const zip=kind==='zip',label=zip?'ZIP':'SRT';
+ if(downloadingSrt)throw Error(label+' download already in progress.');
+ if(!chrome.downloads?.onDeterminingFilename)throw Error('Reload ChatGPT Bridge and allow the Downloads permission.');
+ downloadingSrt=true;
+ const token=crypto.randomUUID(),relative='flowkit-chatgpt/'+token+(zip?'/prompts.zip':'/subtitles.srt'),started=Date.now();
+ let tab;try{tab=await chrome.tabs.get(worker.tabId);}catch(error){downloadingSrt=false;throw error;}
+ let downloadId=null,conflict=false;
+ const listener=(item,suggest)=>{
+  let fromTab=false;try{const ref=new URL(item.referrer),page=new URL(tab.url);fromTab=ref.origin===page.origin&&(ref.pathname==='/'||ref.href===page.href);}catch{}
+  if(!fromTab||Date.parse(item.startTime)<started-1000||!Number.isFinite(Date.parse(item.startTime))||!(zip?/\.zip$/i:/\.srt$/i).test(item.filename||'')){suggest();return;}
+  if(downloadId!==null){conflict=true;suggest();return;}
+  downloadId=item.id;suggest({filename:relative,conflictAction:'uniquify'});
+ };
+ try{
+  chrome.downloads.onDeterminingFilename.addListener(listener);
+  const clicked=await chrome.tabs.sendMessage(worker.tabId,{type:zip?'clickPromptZipDownload':'clickSrtDownload',requestId:worker.requestId},{frameId:0});
+  if(!clicked?.ok)throw Error(clicked?.error||'Could not click the '+label+' file link.');
+  while(Date.now()-started<120000){
+   if(worker.state==='CANCELLED')throw Error(label+' job stopped. Any downloaded file is retained.');
+   if(conflict)throw Error('Multiple '+label+' downloads started. Files are retained in Chrome Downloads.');
+   if(downloadId!==null){
+    const [item]=await chrome.downloads.search({id:downloadId});
+    if(!item||item.state==='interrupted')throw Error(label+' download interrupted. Download the existing file from the ChatGPT tab.');
+    if(item.state==='complete'){
+     if(item.exists===false||!item.filename.replaceAll('\\','/').endsWith('/'+relative))throw Error(label+' download location changed. Check Chrome Downloads.');
+     return {path:item.filename,token};
+    }
+   }
+   await new Promise(resolve=>setTimeout(resolve,250));
+  }
+  throw Error(label+' download did not finish within 120 seconds. Check Chrome Downloads; the ChatGPT tab is retained.');
+ }finally{chrome.downloads.onDeterminingFilename.removeListener(listener);downloadingSrt=false;}
 }
 chrome.runtime.onMessage.addListener((m,sender,reply)=>{
+ if(m.type==='requestSubmitted'&&sender.id===chrome.runtime.id&&sender.tab&&(sender.frameId===undefined||sender.frameId===0)){
+  const w=workers.find(w=>w.tabId===sender.tab.id&&w.requestId===m.requestId&&['RUNNING','NEEDS_REVIEW'].includes(w.state));
+  if(w&&setupOwner?.requestId===m.requestId)setupOwner.release();
+  reply({ok:!!w});return false;
+ }
  if(m.type==='jobProgress'&&sender.id===chrome.runtime.id&&sender.tab&&(sender.frameId===undefined||sender.frameId===0)){
   const w=workers.find(w=>w.tabId===sender.tab.id&&w.requestId===m.requestId&&w.state==='RUNNING');
-  if(w&&phases.has(m.phase)){w.progress={phase:m.phase,updated:Date.now(),chars:Math.max(0,Math.min(2000000,Number(m.chars)||0)),lastChange:Number(m.lastChange)||null,completionEvidence:['final-assistant-marker','response-actions'].includes(m.completionEvidence)?m.completionEvidence:''};announce();}
+  if(w&&phases.has(m.phase)){w.progress={phase:m.phase,detail:typeof m.detail==='string'?m.detail.slice(0,300):'',updated:Date.now(),chars:Math.max(0,Math.min(2000000,Number(m.chars)||0)),lastChange:Number(m.lastChange)||null,completionEvidence:['final-assistant-marker','response-actions','srt-file-ready','zip-file-ready'].includes(m.completionEvidence)?m.completionEvidence:''};announce();}
   reply({ok:!!w});return false;
+ }
+ if(m.type==='downloadPromptZip'&&sender.id===chrome.runtime.id&&sender.tab&&(sender.frameId===undefined||sender.frameId===0)){
+  const w=textWorkers().find(w=>w.state==='RUNNING'&&w.tabId===sender.tab.id&&w.requestId===m.requestId&&w.requestOptions?.downloadPromptZip);
+  if(!w){reply({ok:false,error:'ZIP download does not belong to the active Work batch.'});return false;}
+  downloadSrtFile(w,'zip').then(nativeDownload=>reply({ok:true,nativeDownload}),error=>reply({ok:false,error:error.message}));return true;
+ }
+ if(m.type==='downloadSrt'&&sender.id===chrome.runtime.id&&sender.tab&&(sender.frameId===undefined||sender.frameId===0)){
+  const w=srtWorker();
+  if(!w||w.state!=='RUNNING'||w.tabId!==sender.tab.id||w.requestId!==m.requestId){reply({ok:false,error:'SRT download does not belong to the active worker.'});return false;}
+  downloadSrtFile(w).then(nativeDownload=>reply({ok:true,nativeDownload}),error=>reply({ok:false,error:error.message}));return true;
  }
  if(sender.id!==chrome.runtime.id||sender.tab)return false;
  (async()=>{

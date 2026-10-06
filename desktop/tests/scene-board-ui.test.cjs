@@ -21,7 +21,7 @@ test('scene board shows real current image thumbnails, retained older results, t
 });
 test('selected-only media retry excludes successful and running jobs and runs a scoped preflight',async()=>{
  const writes=[],s=setup(async(method,route,body)=>{if(method==='POST'){writes.push({route,body});return{ids:['new'],resumed:[],skipped:[]};}return structuredClone(record);});
- try{await s.w.sceneBoard.open();s.$('scb-target').value='image';s.$('scb-select-page').click();s.$('scb-retry').click();await tick();assert.equal(writes.length,1);assert.equal(writes[0].route,'/api/storyboard/videos/v1/retry-failed');assert.deepEqual(Array.from(writes[0].body.segment_ids),['s2']);assert.equal(writes[0].body.kind,'image');assert.equal(writes[0].body.reviewed,true);assert.equal(s.checks[0][0],'images');assert.equal(s.checks[0][1].video_id,'v1');assert.match(s.$('scb-message').textContent,/Successful results were kept/);
+ try{await s.w.sceneBoard.open();s.$('scb-target').value='image';s.$('scb-select-filtered').click();s.$('scb-retry').click();await tick();assert.equal(writes.length,1);assert.equal(writes[0].route,'/api/storyboard/videos/v1/retry-failed');assert.deepEqual(Array.from(writes[0].body.segment_ids),['s2']);assert.equal(writes[0].body.kind,'image');assert.equal(writes[0].body.reviewed,true);assert.equal(s.checks[0][0],'images');assert.equal(s.checks[0][1].video_id,'v1');assert.match(s.$('scb-message').textContent,/Successful results were kept/);
  }finally{s.dom.window.close();}
 });
 test('video prompt retry preserves an existing image prompt and selected filters are separate per video',async()=>{
@@ -45,5 +45,130 @@ test('a blocked preflight or changed video prevents retry submission',async()=>{
 test('scene retries respect unsaved or loading video production settings',async()=>{
  let writes=0;const s=setup(async(method)=>{if(method==='POST')writes++;return structuredClone(record);});
  try{await s.w.sceneBoard.open();s.$('scb-target').value='image';s.$('scb-select-failed').click();s.w.videoSettings={assertSaved:()=>{throw Error('Save video production settings in Project before starting new jobs.');}};s.$('scb-retry').click();await tick();assert.equal(writes,0);assert.match(s.$('scb-message').textContent,/Save video production settings/);
+ }finally{s.dom.window.close();}
+});
+test('Scene Board generates selected missing images using model and aspect ratio, preserving completed and active jobs',async()=>{
+ const writes=[],s=setup(async(method,route,body)=>{
+  if(route==='/api/models')return{image_models:{'Test Model':'model-test'}};
+  if(method==='POST'){writes.push({route,body});return{ids:['new'],skipped:[]};}
+  return structuredClone(record);
+ });
+ try{await s.w.sceneBoard.open();assert.equal(writes.length,0);s.$('scb-model').value='model-test';s.$('scb-ratio').value='VERTICAL';s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();
+ assert.equal(writes.length,1);assert.equal(writes[0].route,'/api/storyboard/videos/v1/generate-media');assert.deepEqual(JSON.parse(JSON.stringify(writes[0].body)),{segment_ids:['s2'],kind:'image',image_model:'model-test',orientation:'VERTICAL',regenerate:false});assert.equal(s.checks[0][0],'images');assert.match(s.$('scb-message').textContent,/2 scenes skipped/);
+ }finally{s.dom.window.close();}
+});
+test('Scene Board image settings are restored per video and default to video production settings',async()=>{
+ const s=setup(async(method,route)=>route==='/api/models'?{image_models:{Test:'test'}}:route.endsWith('v2')?{...structuredClone(record),video:{id:'v2',project_id:'p1'}}:structuredClone(record));
+ try{s.w.videoSettings={effective:()=>({media:{image_model:'test',orientation:'VERTICAL'}})};await s.w.sceneBoard.open();assert.equal(s.$('scb-model').value,'test');assert.equal(s.$('scb-ratio').value,'VERTICAL');s.$('scb-ratio').value='HORIZONTAL';s.$('scb-ratio').dispatchEvent(new s.w.Event('change'));
+ s.context({project_id:'p1',video_id:'v2'});await tick();assert.equal(s.$('scb-ratio').value,'VERTICAL');s.context({project_id:'p1',video_id:'v1'});await tick();assert.equal(s.$('scb-ratio').value,'HORIZONTAL');
+ }finally{s.dom.window.close();}
+});
+test('Scene Board does not generate with missing prompts, blocked preflight, or changed video',async()=>{
+ let writes=0,resolveCheck;const doc=structuredClone(record),s=setup(async(method,route)=>{if(method==='POST')writes++;return route==='/api/models'?{}:doc;});
+ try{doc.segments[1].ready=false;await s.w.sceneBoard.open();s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();assert.equal(writes,0);assert.match(s.$('scb-message').textContent,/current prompt/);
+ doc.segments[1].ready=true;await s.w.sceneBoard.open();s.w.production.check=async()=>false;s.$('scb-generate').click();await tick();assert.equal(writes,0);
+ s.w.production.check=async()=>new Promise(r=>resolveCheck=r);s.$('scb-generate').click();await tick();s.context({project_id:'p1',video_id:'v2'});resolveCheck(true);await tick();assert.equal(writes,0);
+ }finally{s.dom.window.close();}
+});
+test('all 300 scenes share one scrollable table; filtering and selection reach rows after the old page boundary',async()=>{
+ const doc={...structuredClone(record),segments:Array.from({length:300},(_,i)=>scene('s'+(i+1)))},s=setup(async()=>doc);
+ try{
+ s.w.localStorage.setItem('flowkit.scene-board.v1/p1/v1',JSON.stringify({page:8}));
+ await s.w.sceneBoard.open();assert.equal(s.$('scb-rows').children.length,300);assert.ok(s.$('scb-rows').querySelector('[data-segment-id="s300"]'));assert.equal(s.$('scb-next'),null);
+ s.$('scb-table-scroll').scrollTop=450;await s.w.sceneBoard.open();assert.equal(s.$('scb-table-scroll').scrollTop,450);
+ s.$('scb-select-filtered').click();assert.match(s.$('scb-count').textContent,/200 selected/);assert.equal(s.$('scb-select-all').indeterminate,true);
+ s.$('scb-clear').click();s.$('scb-search').value='Detailed image s300';s.$('scb-search').dispatchEvent(new s.w.Event('input'));assert.equal(s.$('scb-rows').children.length,1);assert.equal(s.$('scb-table-scroll').scrollTop,0);
+ s.$('scb-select-all').click();assert.match(s.$('scb-count').textContent,/1 selected/);assert.equal(s.$('scb-select-all').checked,true);assert.equal(s.$('scb-rows').querySelector('input').checked,true);
+s.$('scb-select-all').click();assert.match(s.$('scb-count').textContent,/0 selected/);assert.equal(s.$('scb-rows').querySelector('input').checked,false);
+ }finally{s.dom.window.close();}
+});
+test('Scene Board displays the numbered image folder and collects saved images without generating',async()=>{
+ const writes=[],doc={...structuredClone(record),image_output_directory:'C:/flowkit/output/scene_images/v1'},s=setup(async(method,route,body)=>{
+  if(method==='POST'){writes.push(route);return{directory:doc.image_output_directory,files:['001.png'],warnings:[]};}return doc;
+ });
+ try{await s.w.sceneBoard.open();assert.match(s.$('scb-image-folder').textContent,/scene_images\/v1/);s.$('scb-collect').click();await tick();assert.deepEqual(writes,['/api/storyboard/videos/v1/collect-images']);assert.match(s.$('scb-message').textContent,/1 images collected/);assert.equal(s.checks.length,0);
+ }finally{s.dom.window.close();}
+});
+test('Scene Board opens files for its video without sending generation',async()=>{
+ const opened=[],s=setup(async()=>structuredClone(record));
+ s.w.studio.openVideoFiles=async(project,video)=>{opened.push({project,video});return{directory:'/projects/p1/v1',warnings:[]};};
+ try{await s.w.sceneBoard.open();s.$('scb-open-files').click();await tick();assert.deepEqual(opened,[{project:'p1',video:'v1'}]);assert.match(s.$('scb-message').textContent,/projects\/p1\/v1/);assert.equal(s.checks.length,0);
+ }finally{s.dom.window.close();}
+});
+test('scene actions open the exact current job and export its existing file',async()=>{
+ const actions=[],s=setup(async()=>structuredClone(record));
+ s.w.sceneDownloads={open:()=>actions.push('open'),focus:async id=>actions.push(['details',id]),export:async id=>actions.push(['export',id])};
+ try{
+  await s.w.sceneBoard.open();s.$('scb-show-downloads').click();
+  const row=s.$('scb-rows').querySelector('[data-segment-id="s1"]');
+  [...row.querySelectorAll('button')].find(b=>b.textContent==='Export files').click();await tick();
+  [...row.querySelectorAll('button')].find(b=>b.textContent==='Job details').click();await tick();
+  const failed=s.$('scb-rows').querySelector('[data-segment-id="s2"]');
+  [...failed.querySelectorAll('button')].find(b=>b.textContent==='Job details').click();await tick();
+  assert.deepEqual(actions,['open',['export','image-1'],['details','image-1'],['details','failed-image']]);assert.equal(s.checks.length,0);
+ }finally{s.dom.window.close();}
+});
+test('saved-result recovery refreshes failed scene rows when media history changes',async()=>{
+ let latest=structuredClone(record);const s=setup(async()=>structuredClone(latest));
+ try{await s.w.sceneBoard.open();assert.match(s.$('scb-rows').querySelector('[data-segment-id="s2"]').textContent,/FAILED/);
+ latest.segments[1].media_jobs[0].state='DOWNLOADING';
+ s.w.document.dispatchEvent(new s.w.Event('media-jobs-updated'));await tick();
+ assert.match(s.$('scb-rows').querySelector('[data-segment-id="s2"]').textContent,/image · DOWNLOADING/);
+ }finally{s.dom.window.close();}
+});
+function mixedRecord(){return{video:{id:'v1',project_id:'p1',title:'Mixed'},document:{id:'d1'},segments:[scene('s1'),scene('s2',{active_concept:{image_prompt:'Still image',video_prompt:'Camera pans slowly'}})],warnings:[]};}
+function setSceneKind(s,id,kind){const el=s.$('scb-rows').querySelector('[data-scene-kind="'+id+'"]');el.value=kind;el.dispatchEvent(new s.w.Event('change'));}
+test('scenes default to images and mixed generation submits the exact image/video groups',async()=>{
+ const writes=[],s=setup(async(method,route,body)=>{if(method==='POST'){writes.push(structuredClone(body));return{ids:[body.kind],skipped:[]};}return mixedRecord();});
+ try{
+  await s.w.sceneBoard.open();assert.deepEqual([...s.$('scb-rows').querySelectorAll('[data-scene-kind]')].map(e=>e.value),['image','image']);
+  setSceneKind(s,'s2','video');s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();
+  assert.deepEqual(writes.map(b=>[b.kind,Array.from(b.segment_ids)]),[['image',['s1']],['video',['s2']]]);
+  assert.equal(writes[1].duration_mode,'srt');assert.equal(writes[1].regenerate,false);
+  assert.deepEqual(s.checks.map(c=>c[0]),['images','videos']);assert.match(s.$('scb-message').textContent,/2 media jobs queued/);
+ }finally{s.dom.window.close();}
+});
+test('row types persist per video and survive reopening the board',async()=>{
+ const s=setup(async(_m,route)=>route.endsWith('v2')?{...mixedRecord(),video:{id:'v2',project_id:'p1',title:'Second'}}:mixedRecord());
+ try{await s.w.sceneBoard.open();setSceneKind(s,'s2','video');
+ await s.w.sceneBoard.open();assert.equal(s.$('scb-rows').querySelector('[data-scene-kind="s2"]').value,'video');
+ s.context({project_id:'p1',video_id:'v2'});await tick();assert.equal(s.$('scb-rows').querySelector('[data-scene-kind="s2"]').value,'image');
+ s.context({project_id:'p1',video_id:'v1'});await tick();assert.equal(s.$('scb-rows').querySelector('[data-scene-kind="s2"]').value,'video');
+ }finally{s.dom.window.close();}
+});
+test('missing video prompts or a blocked video preflight prevent both mixed groups from submitting',async()=>{
+ const writes=[],s=setup(async(method,_route,body)=>{if(method==='POST')writes.push(body);return mixedRecord();});
+ try{await s.w.sceneBoard.open();setSceneKind(s,'s1','video');s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();assert.equal(writes.length,0);assert.match(s.$('scb-message').textContent,/001 video prompt/);
+ setSceneKind(s,'s1','image');setSceneKind(s,'s2','video');s.w.production.check=async stage=>stage!=='videos';s.$('scb-generate').click();await tick();assert.equal(writes.length,0);
+ }finally{s.dom.window.close();}
+});
+test('SRT video duration and regeneration keep active jobs and originals protected',async()=>{
+ const data=mixedRecord(),writes=[];data.segments[0].media_jobs=[{id:'active',kind:'image',current:true,state:'RUNNING',files:[]}];data.segments[1].media_jobs=[{id:'done',kind:'video',current:true,state:'COMPLETED',files:['clip.mp4']}];
+ const s=setup(async(method,_route,body)=>{if(method==='POST'){writes.push(body);return{ids:['new'],skipped:[],durations:[{short:true}]};}return data;});
+ try{await s.w.sceneBoard.open();setSceneKind(s,'s2','video');s.$('scb-select-filtered').click();s.$('scb-regenerate').checked=true;s.$('scb-generate').click();await tick();
+ assert.equal(writes.length,1);assert.deepEqual(Array.from(writes[0].segment_ids),['s2']);assert.equal(writes[0].duration,undefined);assert.equal(writes[0].duration_mode,'srt');assert.equal(writes[0].regenerate,true);assert.match(s.$('scb-message').textContent,/1 scenes skipped/);assert.match(s.$('scb-message').textContent,/hold\/loop/);
+ }finally{s.dom.window.close();}
+});
+test('a second-group error reports confirmed jobs and never automatically resubmits them',async()=>{
+ const writes=[],s=setup(async(method,_route,body)=>{if(method==='POST'){writes.push(body.kind);if(body.kind==='video')throw Error('Flow unavailable');return{ids:['image-job'],skipped:[]};}return mixedRecord();});
+ try{await s.w.sceneBoard.open();setSceneKind(s,'s2','video');s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();
+ assert.deepEqual(writes,['image','video']);assert.match(s.$('scb-message').textContent,/1 media jobs confirmed queued/);assert.match(s.$('scb-message').textContent,/Flow unavailable/);assert.equal(s.$('scb-generate').disabled,false);
+ }finally{s.dom.window.close();}
+});
+
+test('old manual duration is ignored and each video row previews its own SRT duration',async()=>{
+ const boundaries=[[1,4],[3999,4],[4000,4],[4001,6],[6000,6],[6001,8],[8000,8],[8001,10],[10000,10],[10001,10]],writes=[];
+ const data=mixedRecord();data.segments=boundaries.map(([ms],i)=>scene('s'+(i+1),{start_ms:12345,end_ms:12345+ms,active_concept:{image_prompt:'Still',video_prompt:'Motion'}}));
+ const s=setup(async(method,_route,body)=>{if(method==='POST'){writes.push(body);return{ids:['queued'],skipped:[]};}return data;});
+ try{
+  s.w.localStorage.setItem('flowkit.scene-board.v1/p1/v1',JSON.stringify({duration:'4'}));
+  await s.w.sceneBoard.open();assert.equal(s.$('scb-duration'),null);
+  for(const [i,[ms,expected]] of boundaries.entries()){
+   const id='s'+(i+1),note=s.$('scb-rows').querySelector('[data-scene-duration="'+id+'"]');assert.equal(note.hidden,true);
+   setSceneKind(s,id,'video');assert.equal(note.hidden,false);assert.equal(note.textContent,'Video: '+expected+'s'+(ms>10000?' · shorter than SRT':''));
+  }
+  s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();
+  assert.equal(writes.length,1);assert.equal(writes[0].duration_mode,'srt');assert.equal(writes[0].duration,undefined);assert.equal(writes[0].segment_ids.length,boundaries.length);
+  assert.equal(JSON.parse(s.w.localStorage.getItem('flowkit.scene-board.v1/p1/v1')).duration,undefined);
  }finally{s.dom.window.close();}
 });

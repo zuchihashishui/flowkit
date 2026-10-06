@@ -5,10 +5,9 @@
   'el-model':['tts','model'],'el-chunk-size':['tts','max_chunk_characters'],
   'wx-language':['whisperx','language'],'wx-model':['whisperx','model'],'wx-device':['whisperx','device'],
   'wx-batch':['whisperx','batch_size'],'wx-video-seconds':['whisperx','video_duration_seconds'],
-  'image-ratio':['media','orientation'],'video-ratio':['media','orientation'],'image-model':['media','image_model'],
   'srt-prompt':['srt','instructions']
  };
- const content=['el-title','el-text','image-prompt','video-prompt'],allowed=new Set([...Object.keys(fields),...content]),cache=new Map();
+ const content=['el-title','el-text'],allowed=new Set([...Object.keys(fields),...content]),cache=new Map();
  // Capture HTML defaults before service pollers or a previous video's values can
  // become another video's baseline. SRT registers its immutable template below.
  const baseline=Object.fromEntries(Object.keys(fields).map(id=>[id,$(id)?.value||'']));

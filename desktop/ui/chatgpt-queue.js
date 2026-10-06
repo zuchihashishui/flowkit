@@ -2,7 +2,7 @@
  const $=id=>document.getElementById(id),api=(method,route,body)=>window.studio.api(method,'/api/chatgpt/'+route,body);
  let jobs=[],config={},busy=false;const selected=new Set();
  const show=message=>$('chat-pool-state').textContent=message;
- const requestOptions=w=>{const o=w.requestOptions;return o?` · ${o.composerMode==='work'?'Work':'Chat'} / Temporary ${o.temporary?'ON':'OFF'} / ${o.model==='auto'?'Current model':o.model} / ${o.hasAttachment?'Text + JSON':'Text only'}${o.pageUrl?' / '+o.pageUrl:''}`:'';};
+ const requestOptions=w=>{const o=w.requestOptions;return o?` · ${o.composerMode==='work'?'Work':'Chat'} / Temporary ${o.temporary?'ON':'OFF'} / ${o.model==='auto'?'Current model':o.model} / ${o.downloadPromptZip?'Numbered rows → ZIP':o.hasAttachment?'Text + attachment':'Text only'}${o.pageUrl?' / '+o.pageUrl:''}`:'';};
  async function refresh(loadConfig=false){
   const [s,q]=await Promise.all([api('GET','status'),api('GET','queue')]);jobs=q.jobs;config=q.settings;
   if(loadConfig){$('chat-workers').value=config.workers;$('chat-timeout').value=config.timeout_seconds;$('chat-mode').value='temporary';}

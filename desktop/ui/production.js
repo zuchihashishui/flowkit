@@ -2,12 +2,12 @@
 (() => {
   const host = document.getElementById('production-dashboard');
   if (!host) return;
-  host.innerHTML = `<section class="panel production-panel"><div class="toolbar"><div><h2>Production dashboard</h2><p>Every video keeps its own sources and results. Each stage starts only when you click.</p></div><button type="button" id="pd-refresh">Refresh progress</button></div><p id="pd-message" role="status" aria-live="polite"></p><div id="pd-videos" class="production-videos"></div></section><section class="panel space"><div class="toolbar"><h2>Recovery center</h2><button type="button" id="pd-recovery-refresh">Refresh recovery</button></div><p id="pd-recovery-summary">Select a project to inspect saved work.</p><p class="muted">Saved results stay in their original video. Uncertain requests need inspection before retrying; reopening Studio does not resend them.</p><div id="pd-recovery" class="production-recovery"></div></section>`;
+  host.innerHTML = `<section class="panel production-panel"><div class="toolbar"><div><h2>Production dashboard</h2><p>Every video keeps its own sources and results. Each stage starts only when you click.</p></div><div class="actions"><button type="button" id="pd-files">Open project folder</button><button type="button" id="pd-refresh">Refresh progress</button></div></div><p id="pd-message" role="status" aria-live="polite"></p><div id="pd-videos" class="production-videos"></div></section><section class="panel space"><div class="toolbar"><h2>Recovery center</h2><button type="button" id="pd-recovery-refresh">Refresh recovery</button></div><p id="pd-recovery-summary">Select a project to inspect saved work.</p><p class="muted">Saved results stay in their original video. Uncertain requests need inspection before retrying; reopening Studio does not resend them.</p><div id="pd-recovery" class="production-recovery"></div></section>`;
   const $ = id => document.getElementById(id);
   const request = (method, path, body) => window.studio.api(method, path, body);
   const node = (tag, text, cls) => { const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el; };
   const ctx = () => window.workflow?.context() || {project_id:$('project-select')?.value || '',video_id:$('video-select')?.value || ''};
-  const pages={elevenlabs:'elevenlabs',whisperx:'whisperx',srt:'srt',image_prompts:'storyboard',video_prompts:'storyboard',images:'image',videos:'video',assembly:'assembly'};
+  const pages={elevenlabs:'elevenlabs',whisperx:'whisperx',srt:'srt',image_prompts:'storyboard',video_prompts:'storyboard',images:'scene-board',videos:'scene-board',assembly:'assembly'};
   const names={elevenlabs:'Narration',whisperx:'Word JSON',srt:'SRT',image_prompts:'Image prompts',video_prompts:'Video prompts',images:'Images',videos:'Video clips',assembly:'Final video'};
   const states={ready:'Ready',completed:'Complete',running:'Running',queued:'Queued',needs_review:'Needs review',failed:'Failed',missing:'Not started',empty:'Not started',not_started:'Not started',pending:'Not started',partial:'Partially ready',cancelled:'Cancelled',interrupted:'Interrupted',processing:'Processing',waiting_commit:'Awaiting save',submission_uncertain:'Needs review'};
   let ticket=0,loading=false,overview=null,dialog=null,checking=false;
@@ -21,10 +21,14 @@
     if(['image_prompts','video_prompts'].includes(stage)){
       const picker=$('sb-prompt-kind');if(picker){picker.value=stage==='video_prompts'?'video':'image';picker.dispatchEvent(new Event('change'));}
     }
-    if(['images','videos'].includes(stage)){
-      const kind=stage==='images'?'image':'video',picker=$(kind+'-mode');if(picker){picker.value='storyboard';picker.dispatchEvent(new Event('change'));}
-    }
     return true;
+  }
+  async function openFiles(videoId=null) {
+    const current=ctx();if(!current.project_id)throw Error('Select a project first.');
+    $('pd-message').textContent='Organizing saved files…';
+    const result=await window.studio.openVideoFiles(current.project_id,videoId);
+    if(ctx().project_id!==current.project_id)return;
+    $('pd-message').textContent=(result.directory||result.project_directory)+(result.warnings?.length?' · '+result.warnings.join(' · '):'');
   }
   function renderVideos(data) {
     $('pd-videos').replaceChildren();
@@ -32,7 +36,7 @@
     for(const video of data.videos){
       const card=node('article',undefined,'production-video');card.dataset.videoId=video.id;
       const title=node('div',undefined,'toolbar'),head=node('div');head.append(node('h3',video.title),node('small',`${video.scene_count || 0} scenes${ctx().video_id===video.id?' · Active video':''}`));
-      const actions=node('div',undefined,'actions');actions.append(button('Scene Board',()=>navigate(video.id,'scene-board')));
+      const actions=node('div',undefined,'actions');actions.append(button('Open video folder',()=>openFiles(video.id)),button('Scene Board',()=>navigate(video.id,'scene-board')));
       if(video.next_stage)actions.append(button('Check next step',async()=>{
         if(await window.selectProductionVideo?.(video.id,'projects')===false)return;
         if(ctx().video_id===video.id)await check(video.next_stage);
@@ -59,10 +63,12 @@
     const counts=data.counts || {};
     $('pd-recovery-summary').textContent=['queued','running','needs_review','failed','resumable','download_recoverable'].map(k=>`${counts[k] || 0} ${k.replace(/_/g,' ')}`).join(' · ')+(data.retained_results?` · ${data.retained_results} completed results retained`:'');
     const target=$('pd-recovery');target.replaceChildren();
-    const actionable=(data.jobs || []).filter(job=>job.action);
+    const actionable=(data.jobs || []).filter(job=>job.action).sort((a,b)=>(Number(b.created)||0)-(Number(a.created)||0));
+    if(actionable.length)$('pd-recovery-summary').textContent+=` · Showing latest ${Math.min(5,actionable.length)} of ${actionable.length} tasks`;
+    target.setAttribute('tabindex','0');target.setAttribute('aria-label','Latest five tasks requiring attention');
     if(!actionable.length){target.append(node('p','No unfinished work needs attention in this project.','muted'));return;}
     const titles=new Map((overview?.videos || []).map(v=>[v.id,v.title]));
-    for(const job of actionable){
+    for(const job of actionable.slice(0,5)){
       const row=node('article',undefined,'production-recovery-item');row.dataset.jobId=job.id;
       row.append(node('strong',`${job.title || job.kind} · ${human(job.state)}`),node('small',`${titles.get(job.video_id)||job.video_id||'Unassigned'} · ${names[job.stage]||job.stage||job.kind}`));
       if(job.message)row.append(node('p',job.message));
@@ -74,7 +80,7 @@
   }
   async function openRecovery(job){
     if(['image','video','voice'].includes(job.kind)){
-      if(await navigate(job.video_id,'queue'))await window.focusProductionJob?.(job.id);
+      if(await navigate(job.video_id,'scene-board'))await window.focusProductionJob?.(job.id);
     }else if(job.action==='inspect'&&['concept','srt'].includes(job.kind)&&['NEEDS_REVIEW','WAITING_COMMIT','SUBMISSION_UNCERTAIN'].includes(job.state)){
       if(await navigate(job.video_id,'settings')){$('cg-status')?.click();$('cg-history')?.click();$('cg-state')?.scrollIntoView?.({block:'center'});}
     }else await navigate(job.video_id,job.stage);
@@ -109,6 +115,7 @@
       return !report.blocked;
     }finally{checking=false;}
   }
+  $('pd-files').onclick=async()=>{$('pd-files').disabled=true;try{await openFiles();}catch(e){$('pd-message').textContent=e.message;}finally{$('pd-files').disabled=false;}};
   $('pd-refresh').onclick=()=>void refresh();$('pd-recovery-refresh').onclick=()=>void refresh();
   document.addEventListener('project-changed',()=>{++ticket;overview=null;$('pd-videos').replaceChildren();$('pd-recovery').replaceChildren();queueMicrotask(()=>void refresh());});
   document.addEventListener('workflow-changed',()=>{closeReport();if(overview)renderVideos(overview);});

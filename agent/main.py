@@ -133,6 +133,8 @@ async def lifespan(app: FastAPI):
     srt_task = asyncio.create_task(srt_service.run())
     from agent.services.assembly_service import service as assembly_service
     assembly_task = asyncio.create_task(assembly_service.run())
+    from agent.services import video_files
+    video_files_task = asyncio.create_task(video_files.run())
     logger.info("WS server + worker started")
 
     yield
@@ -148,7 +150,8 @@ async def lifespan(app: FastAPI):
     whisperx_task.cancel()
     srt_task.cancel()
     assembly_task.cancel()
-    await asyncio.gather(ws_task, worker_task, desktop_task, storyboard_task, chatgpt_task, elevenlabs_task, whisperx_task, srt_task, assembly_task, return_exceptions=True)
+    video_files_task.cancel()
+    await asyncio.gather(ws_task, worker_task, desktop_task, storyboard_task, chatgpt_task, elevenlabs_task, whisperx_task, srt_task, assembly_task, video_files_task, return_exceptions=True)
     await close_db()
     logger.info("Flow Kit stopped")
 

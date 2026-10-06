@@ -6,11 +6,40 @@
  let importedSources=[], whisperxSources=[];
  const recentImports=new Map(), inFlight=new Map(), sourceErrors={}, loaded=new Set();
  const say=text=>{$('srt-message').textContent=text;};
- const defaults=`Choose natural scene boundaries for the attached indexed transcript. Each scene will correspond to one image in the final video. Only JSON is attached, not audio.
+ let prepared=null,preparing=null,blockingJob=null;
+ const contextKey=()=>JSON.stringify(window.workflow?.context()||{});
+ async function prepareTab(){
+  if(preparing)return preparing;
+  window.projectSettings?.assertSaved();window.videoSettings?.assertSaved();
+  const key=contextKey();
+  say('Opening a separate ChatGPT window, binding the tab and selecting Work…');
+  const pending=(async()=>{
+   const result=await api('POST','prepare',{token:prepared?.key===key?prepared.token:undefined});
+   if(contextKey()!==key)throw Error('Active video changed. Open SRT for the selected video.');
+   if(['running','queued'].includes(result.state)){
+    prepared=null;blockingJob=result.job_id;$('srt-stop-blocking').hidden=!blockingJob;
+    $('srt-stop-blocking').textContent='Stop existing SRT job · '+(result.job_id||'').slice(0,8);
+    say(result.message);void refresh();return result;
+   }
+   blockingJob=null;$('srt-stop-blocking').hidden=true;
+   if(!result.token)throw Error('Update and restart Studio/backend/gateway, then reload ChatGPT Bridge 1.9.1.');
+   prepared={...result,key};
+   say('ChatGPT window ready · Tab selected and bound · Work selected. Choose JSON and click Create SRT to attach and send.');
+   return prepared;
+  })();
+  preparing=pending;
+  try{return await pending;}finally{if(preparing===pending)preparing=null;}
+ }
 
-Preserve the source language and every spoken word, without duplicating the transcript. Japanese / Chinese units may be characters, so group sentences and related clauses before choosing boundaries. Prefer one complete idea per scene, with 3–15 seconds including pauses. Merge short adjacent ideas when appropriate. Split long passages at natural clauses or real pauses; never cut a word or a tightly connected phrase solely to hit a target. Do not force equal scene lengths.
+ const defaults=`Convert the attached transcript JSON into a complete UTF-8 .srt file. Create the actual file and return its download link, not intermediate boundary JSON.
 
-Use only source timing and positions marked can_start_scene. Return the boundary JSON requested by Studio, never rewritten transcript text, timestamps, an SRT block or a download link. Studio preserves the source text, fills the timeline continuously from zero and writes HH:MM:SS,mmm --> HH:MM:SS,mmm timestamps itself. If duration metadata is missing, the full audio tail cannot be verified; Studio will flag this. Long silence or unavailable timing may require duration exceptions; preserve the natural grouping instead of inventing timing.`;
+Each cue represents one image scene. Preserve the original language and all spoken words in order. Use the real timestamps in units, segments[].words or word_segments; do not duplicate parallel word lists or invent timing. For Japanese or Chinese, combine characters into complete clauses and ideas.
+
+Prefer natural scenes lasting 3–15 seconds. Start at 00:00:00,000; each cue ends where the next starts. Use confirmed audio duration for the final end, or the largest transcript end if duration is unavailable, and explain that limitation outside the file. Preserve content and real timing if all constraints cannot be met, and report exceptions separately.
+
+Use consecutive numbering and HH:MM:SS,mmm --> HH:MM:SS,mmm timestamps. Separate cues with a blank line. Return the downloadable .srt file plus cue count, end time, shortest/longest duration and any exceptions. Do not return scene_end_unit_ids in place of the SRT file.`;
+ const legacyDefault="Choose natural scene boundaries for the attached indexed transcript. Each scene will correspond to one image in the final video. Only JSON is attached, not audio.\n\nPreserve the source language and every spoken word, without duplicating the transcript. Japanese / Chinese units may be characters, so group sentences and related clauses before choosing boundaries. Prefer one complete idea per scene, with 3\u201315 seconds including pauses. Merge short adjacent ideas when appropriate. Split long passages at natural clauses or real pauses; never cut a word or a tightly connected phrase solely to hit a target. Do not force equal scene lengths.\n\nUse only source timing and positions marked can_start_scene. Return the boundary JSON requested by Studio, never rewritten transcript text, timestamps, an SRT block or a download link. Studio preserves the source text, fills the timeline continuously from zero and writes HH:MM:SS,mmm --> HH:MM:SS,mmm timestamps itself. If duration metadata is missing, the full audio tail cannot be verified; Studio will flag this. Long silence or unavailable timing may require duration exceptions; preserve the natural grouping instead of inventing timing.";
+ function upgradeLegacyPrompt(){if($('srt-prompt').value===legacyDefault){$('srt-prompt').value=defaults;$('srt-prompt').dispatchEvent(new Event('input',{bubbles:true}));}}
  if(window.productionDefaults)window.productionDefaults.registerBaseline('srt-prompt',defaults);
  else {
   try{$('srt-prompt').value=localStorage.getItem('srt-prompt')||defaults;}catch{$('srt-prompt').value=defaults;}
@@ -96,7 +125,10 @@ Use only source timing and positions marked can_start_scene. Return the boundary
     }
     if(j.quality){const q=document.createElement('p');q.textContent=`Quality: ${j.quality.status}${j.quality.approved?' · Exceptions accepted':''}`;row.append(q);}
     if(j.error){const e=document.createElement('pre');e.textContent=j.error;row.append(e);}
-    if(j.state==='QUEUED')row.append(button('Cancel queued job',async()=>{await api('POST',`jobs/${j.id}/cancel`,{});void refresh();}));
+    if(['QUEUED','RUNNING','NEEDS_REVIEW'].includes(j.state))row.append(button(j.state==='QUEUED'?'Cancel queued job':'Stop job',async()=>{
+     say('Stopping SRT job…');await api('POST',`jobs/${j.id}/cancel`,{});prepared=null;
+     say('Job stopped. Existing files are retained. You can create a new SRT job.');await refresh();
+    }));
     if(j.state==='COMPLETED'){
      const assemble=button('Assemble video',async()=>window.openAssembly(j.id)),scenes=button('Import as Scenes',async()=>window.workflow?.importScenes(j.id));
      const locked=j.method==='source-boundaries-v1'&&j.quality?.status!=='PASSED'&&!j.quality?.approved;
@@ -152,20 +184,34 @@ Use only source timing and positions marked can_start_scene. Return the boundary
  };
  $('srt-refresh').onclick=()=>refresh();
  $('srt-queue-refresh').onclick=()=>refresh();
- $('srt-open-chatgpt').onclick=()=>action(()=>window.studio.chatgptAction('open'));
+ $('srt-stop-blocking').onclick=()=>action(async()=>{
+  if(!blockingJob)return;
+  const result=await api('POST',`jobs/${blockingJob}/cancel`,{});
+  blockingJob=null;prepared=null;$('srt-stop-blocking').hidden=true;
+  say(result.state==='COMPLETED'?'The job already completed. Its SRT is saved.':'Job stopped. Existing files retained. Click Create SRT to start a new job.');
+  await refresh();
+ });
+ $('srt-open-chatgpt').onclick=()=>action(prepareTab);
  $('srt-open-extension').onclick=()=>action(()=>window.studio.chatgptAction('extension'));
- $('srt-workers').onclick=()=>document.querySelector('[data-page="chatgpt"]').click();
+ $('srt-workers').onclick=()=>document.querySelector('[data-page="settings"]').click();
  $('srt-form').onsubmit=e=>{e.preventDefault();return action(async()=>{
+  upgradeLegacyPrompt();
   const source_id=$('srt-source').value,prompt=$('srt-prompt').value,model=$('srt-model').value.trim();
   if(!source_id||!prompt.trim()||!model)throw Error('Select JSON and enter a prompt and model.');
   const duration_seconds=durationValue();
-  const report=await checkSource(source_id,duration_seconds);
-  if(report.status==='BLOCKED')throw Error('Transcript checks failed. See the quality report below before generating.');
-  await api('POST','jobs',{source_id,prompt,model,timeout:Number($('srt-timeout').value)*60,duration_seconds});
-  say('Queued. Studio will open and bind a new ChatGPT tab, select Work, paste your prompt, attach indexed JSON and build subtitles.srt from verified source boundaries.');void refresh();
+  const ready=await prepareTab();
+  if(['running','queued'].includes(ready.state))return;
+  if(source_id!==$('srt-source').value||duration_seconds!==durationValue())throw Error('Source selection changed. Click Create SRT again.');
+  say('Work tab ready. Attaching the selected JSON…');
+  say('Attaching prompt and JSON in the prepared Work tab…');
+  await api('POST','jobs',{source_id,prompt,model,timeout:Number($('srt-timeout').value)*60,duration_seconds,prepared_tab_token:ready.token});
+  prepared=null;
+  say('Queued for the selected Work tab. Studio will paste your prompt, attach your original JSON, download the returned SRT file and save it to this video.');void refresh();
  });};
- document.querySelector('[data-page="srt"]').addEventListener('click',()=>refresh().catch(e=>say(e.message)));
+ // Navigation (including source handoffs) only loads saved data. Browser
+ // preparation belongs to Create SRT or the explicit Open SRT window button.
+ document.querySelector('[data-page="srt"]').addEventListener('click',()=>{upgradeLegacyPrompt();void refresh().catch(e=>say(e.message));});
  window.openSRT=source=>{if(source!==$('srt-source').value)changedSource();selected=source;document.querySelector('[data-page="srt"]').click();};
  setInterval(()=>{if(!document.querySelector('[data-view="srt"]').hidden&&!busy)refresh().catch(e=>say(e.message));},3000);
- document.addEventListener('workflow-changed',async()=>{changedSource();selected='';signature='';importedSources=[];whisperxSources=[];recentImports.clear();$('srt-jobs').replaceChildren();$('srt-preview').textContent='';renderSources();await Promise.allSettled([...inFlight.values()]);await refresh();});
+ document.addEventListener('workflow-changed',async()=>{prepared=null;changedSource();selected='';signature='';importedSources=[];whisperxSources=[];recentImports.clear();$('srt-jobs').replaceChildren();$('srt-preview').textContent='';renderSources();await Promise.allSettled([...inFlight.values()]);await refresh();});
 })();
