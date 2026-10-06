@@ -350,7 +350,7 @@ async function submitMedia(kind) {
   const pid = projectId(), vid=videoId(), batch = $(kind + '-mode').value === 'scenes';
   const inputs = batch ? chosenScenes() : [{prompt: $(kind + '-prompt').value, video_prompt: $(kind + '-prompt').value}];
   const payload = inputs.map(s => ({kind, project_id: pid, video_id:vid, scene_id: s.id || '', label: batch ? sceneLabel(s) : kind === 'video' ? 'Prompt to Video' : 'Prompt to Image', prompt: kind === 'video' ? (s.video_prompt || s.prompt || '') : (s.image_prompt || s.prompt || ''), orientation: $(kind + '-ratio').value, duration: Number($('duration').value), image_model: kind === 'image' ? $('image-model').value || null : null}));
-  if (payload.some(j => !j.prompt.trim() || j.prompt.length > 5000)) throw Error('Every prompt must contain 1–5000 characters.');
+  if (payload.some(j => !j.prompt.trim() || Array.from(j.prompt).length > 50000)) throw Error('Every image/video prompt must contain 1–50000 characters.');
   if (!confirm(`Submit ${payload.length} ${kind} job(s)? This uses Google Flow credits.`)) return;
   await api('POST', '/api/desktop/jobs', {jobs: payload}); await refreshJobs(); notice(`${payload.length} job(s) queued.`);
 }

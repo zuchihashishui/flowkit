@@ -1,14 +1,15 @@
 """Text-only concept writing using the repository's existing AI CLI adapters."""
 import json
 from pydantic import BaseModel, Field, ConfigDict, model_validator
+from agent.models.prompt_limits import MEDIA_PROMPT_MAX_CHARS
 
 
 class Concept(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     title: str = Field(min_length=1, max_length=160)
     description: str = Field(min_length=1, max_length=3000)
-    image_prompt: str = Field(default="", min_length=0, max_length=50000)
-    video_prompt: str = Field(default="", min_length=0, max_length=50000)
+    image_prompt: str = Field(default="", min_length=0, max_length=MEDIA_PROMPT_MAX_CHARS)
+    video_prompt: str = Field(default="", min_length=0, max_length=MEDIA_PROMPT_MAX_CHARS)
 
     @model_validator(mode='after')
     def at_least_one_prompt(self):

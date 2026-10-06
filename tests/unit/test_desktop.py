@@ -278,3 +278,21 @@ def test_voice_import_unwritable_directory_returns_json(tmp_path, monkeypatch):
     assert response.status_code == 500
     assert "Cannot write voice files" in response.json()["detail"]
     assert folder.read_text() == "keep"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind,size', [('image',50001),('video',50001),('voice',5001)])
+async def test_oversized_request_returns_422_without_jobs(kind, size):
+    from fastapi import FastAPI
+    from httpx import AsyncClient, ASGITransport
+    app=FastAPI();app.include_router(d.router,prefix='/api')
+    async with AsyncClient(transport=ASGITransport(app=app),base_url='http://test') as client:
+        response=await client.post('/api/desktop/jobs',json={'jobs':[{'kind':kind,'prompt':'x'*size,'project_id':str(uuid.uuid4())}]})
+    assert response.status_code == 422
+    assert d.rows() == []
+
+
+def test_voice_limit_and_saved_media_limit_are_distinct():
+    from agent.services.concept_writer import Concept
+    assert len(d.Job(kind='voice',prompt='a'*5000).prompt) == 5000
+    prompt='🌸'*50000
+    assert Concept(title='Test',description='Test',image_prompt=prompt).image_prompt == d.Job(kind='image',prompt=prompt).prompt

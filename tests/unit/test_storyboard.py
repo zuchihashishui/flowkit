@@ -506,3 +506,83 @@ async def test_batch_skips_finished_rows_and_retry_keeps_original_row_number(doc
     assert payload['ordinal']==2 and payload['text_batch_id']!=original['text_batch_id']
     assert payload['text_session_id']!=original['text_session_id']
     assert (await s.read_document(document))['segments'][0]['active_concept']['image_prompt']==CONCEPT.image_prompt
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['image', 'video'])
+@pytest.mark.parametrize('size', [5001, 50000])
+async def test_long_saved_prompts_enqueue_without_truncation(document, kind, size):
+    from fastapi import FastAPI
+    from httpx import AsyncClient, ASGITransport
+    sid = (await s.read_document(document))['segments'][0]['id']
+    prompt = '絵' * (size - 4) + '\nEND'
+    await s.save_concept(sid, CONCEPT.model_copy(update={kind + '_prompt': prompt}))
+    app = FastAPI(); app.include_router(s.router, prefix='/api')
+    async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False), base_url='http://test') as client:
+        response = await client.post('/api/storyboard/videos/' + document + '/generate-media',
+            json={'segment_ids':[sid], 'kind':kind, 'orientation':'VERTICAL', 'image_model':'TEST_MODEL'})
+    assert response.status_code == 200, response.text
+    assert len(response.json()['ids']) == 1
+    job = desktop.rows()[0]
+    assert job['state'] == 'QUEUED'
+    payload = json.loads(job['payload'])
+    assert payload['prompt'] == prompt
+    assert payload['orientation'] == 'VERTICAL'
+    assert payload['image_model'] == 'TEST_MODEL'
+    assert desktop.Job.model_validate_json(job['payload']).prompt == prompt
+
+
+@pytest.mark.asyncio
+async def test_invalid_stored_media_prompt_returns_scene_error_without_partial_queue(document):
+    from fastapi import FastAPI
+    from httpx import AsyncClient, ASGITransport
+    segments = (await s.read_document(document))['segments']
+    for segment in segments:
+        await s.save_concept(segment['id'], CONCEPT)
+    # Simulate legacy/corrupted stored data which bypassed the concept API.
+    doc = await s.read_document(document)
+    cid = doc['segments'][1]['active_concept_id']
+    db = await schema.get_db()
+    await db.execute('UPDATE scene_concept SET image_prompt=? WHERE id=?', ('x' * 50001, cid))
+    await db.commit()
+    app = FastAPI(); app.include_router(s.router, prefix='/api')
+    async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False), base_url='http://test') as client:
+        response = await client.post('/api/storyboard/videos/' + document + '/generate-media',
+            json={'segment_ids':[row['id'] for row in segments], 'kind':'image'})
+    assert response.status_code == 422, response.text
+    assert 'Scene 002' in response.json()['detail']
+    assert '50000' in response.json()['detail']
+    assert 'x' * 100 not in response.text
+    assert desktop.rows() == []
+
+@pytest.mark.asyncio
+async def test_long_image_prompt_reaches_flow_with_saved_project_url(document, monkeypatch, tmp_path):
+    from agent.services import project_settings, browser_lifecycle
+    data = await s.read_document(document)
+    remote_id = '11111111-2222-3333-4444-555555555555'
+    url = 'https://flow.google.com/project/' + remote_id
+    await project_settings.save(data['video']['project_id'], project_settings.SettingsBody(google_flow_url=url))
+    prompt = '日本語の画像プロンプト\n' * 600 + 'END'
+    sid = data['segments'][0]['id']
+    await s.save_concept(sid, CONCEPT.model_copy(update={'image_prompt':prompt}))
+    result = await s.generate_media(document, s.MediaBody(segment_ids=[sid], kind='image', image_model='TEST_MODEL', orientation='VERTICAL'))
+    captured = []
+    async def generate_images(**kwargs):
+        captured.append({**kwargs, 'page_url':project_settings.flow_page_url.get()})
+        return {'media':[{'image':{'generatedImage':{'fifeUrl':'https://flow-content.google/test.png'}}}]}
+    monkeypatch.setattr(desktop.flow, 'get_flow_client', lambda: SimpleNamespace(connected=True, generate_images=generate_images))
+    monkeypatch.setattr(desktop, 'ROOT', tmp_path/'media')
+    monkeypatch.setattr(browser_lifecycle, 'flow_started', lambda *args: None)
+    monkeypatch.setattr(browser_lifecycle, 'flow_saved', lambda *args: None)
+    async def download(url, target):
+        target.write_bytes(b'mocked-image')
+        return target
+    monkeypatch.setattr(desktop, 'download', download)
+    job = next(row for row in desktop.rows() if row['id'] == result['ids'][0])
+    await desktop.process(job)
+    assert len(captured) == 1
+    assert captured[0]['prompt'] == prompt
+    assert captured[0]['project_id'] == remote_id
+    assert captured[0]['page_url'] == url
+    assert captured[0]['image_model'] == 'TEST_MODEL'
+    assert captured[0]['aspect_ratio'] == 'IMAGE_ASPECT_RATIO_PORTRAIT'
+    assert desktop.rows()[0]['state'] == 'COMPLETED'

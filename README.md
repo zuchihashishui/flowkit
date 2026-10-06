@@ -1,3 +1,7 @@
+## Studio v0.7.80
+
+Fix Scene Board generate-media HTTP 500 for saved image/video prompts longer than 5,000 characters. Studio media jobs now accept the same 50,000-character limit as saved concepts without truncation. Invalid stored job input returns a scene-specific 422 before any batch is queued. Restart Studio and its backend after updating. See [release notes](docs/releases/0.7.80.md).
+
 ## Studio v0.7.79 / Google Flow Bridge 0.6.3
 
 Open Flow Tab now brings the Chrome window forward, restores minimized windows and displays opening/error feedback. Reload extensions/googleflow in Chrome and reopen the side panel. See [release notes](docs/releases/0.7.79.md).

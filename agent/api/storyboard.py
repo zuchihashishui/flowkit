@@ -13,7 +13,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict, model_validator, ValidationError
 from agent.db.schema import get_db, _db_lock
 from agent.config import OUTPUT_DIR
 from agent.services.concept_writer import Concept, write_concept, write_concept_batch, TEXT_BATCH_SIZE
@@ -584,7 +584,13 @@ async def generate_media(video_id: str, body: MediaBody):
             if duplicate and not body.regenerate:
                 skipped.append(sid)
                 continue
-            pending.append(desktop.Job(kind=body.kind, project_id=data['video']['project_id'], video_id=video_id, document_id=data['document']['id'], segment_id=sid, concept_id=c['id'], start_ms=s['start_ms'], end_ms=s['end_ms'], label=f"Segment {s['ordinal']:03d}", prompt=c['image_prompt'] if body.kind=='image' else c['video_prompt'], orientation=body.orientation, duration=duration, image_model=body.image_model))
+            try:
+                pending.append(desktop.Job(kind=body.kind, project_id=data['video']['project_id'], video_id=video_id, document_id=data['document']['id'], segment_id=sid, concept_id=c['id'], start_ms=s['start_ms'], end_ms=s['end_ms'], label=f"Segment {s['ordinal']:03d}", prompt=c['image_prompt'] if body.kind=='image' else c['video_prompt'], orientation=body.orientation, duration=duration, image_model=body.image_model))
+            except ValidationError as exc:
+                # Stored data can bypass request validation. Identify the scene
+                # without exposing prompt content or partially enqueueing a batch.
+                detail = '; '.join(f"{'.'.join(map(str, error['loc']))}: {error['msg']}" for error in exc.errors(include_input=False, include_url=False))
+                raise HTTPException(422, f"Scene {s['ordinal']:03d}: {detail}") from exc
         result = await desktop.enqueue(desktop.Batch(jobs=pending)) if pending else {'ids': []}
         return {**result, 'skipped': skipped, 'durations': duration_notes}
 

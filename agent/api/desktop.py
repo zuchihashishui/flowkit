@@ -13,10 +13,11 @@ from urllib.parse import urlparse
 import aiohttp
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Literal
 
 from agent.config import OUTPUT_DIR, BASE_DIR
+from agent.models.prompt_limits import MEDIA_PROMPT_MAX_CHARS, VOICE_TEXT_MAX_CHARS
 from agent.api import flow, tts
 from agent.services.flow_client import get_flow_client
 from agent.services.omni_flash import extract_omni_workflows
@@ -66,7 +67,7 @@ def update(jid, **values):
 
 class Job(BaseModel):
     kind: Literal["image", "video", "voice"]
-    prompt: str = Field(min_length=1, max_length=5000)
+    prompt: str = Field(min_length=1, max_length=MEDIA_PROMPT_MAX_CHARS)
     project_id: str = ""
     video_id: str = ""
     project_settings: dict | None = None
@@ -82,6 +83,12 @@ class Job(BaseModel):
     image_model: str | None = None
     template: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_-]{1,64}$")
     speed: float = Field(default=1, ge=0.5, le=3)
+
+    @model_validator(mode='after')
+    def voice_text_limit(self):
+        if self.kind == 'voice' and len(self.prompt) > VOICE_TEXT_MAX_CHARS:
+            raise ValueError(f'Voice text must contain at most {VOICE_TEXT_MAX_CHARS} characters.')
+        return self
 
 
 class Batch(BaseModel):
