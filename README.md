@@ -1,3 +1,7 @@
+## Studio v0.7.76 / ChatGPT Bridge 1.12.3
+
+Scene Board now provides Image Model, Aspect Ratio (16:9 / 9:16), and Generate selected images. Settings are saved per video; completed and active images are preserved. Prompt to Image remains available for standalone prompts. Retry keeps original job settings. See [release notes](docs/releases/0.7.76.md).
+
 ## Studio v0.7.75 / ChatGPT Bridge 1.12.3
 
 SRT to Prompt waits for **Send to become enabled after attaching the TXT**, then types the SRT rows and clicks Send. Filename/card detection no longer blocks either step for this workflow. Explicit upload failures still stop the request; a disabled Send still waits. Reload Bridge 1.12.3 and refresh ChatGPT tabs after updating. See [release notes](docs/releases/0.7.75.md).

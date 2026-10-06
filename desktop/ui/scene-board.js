@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const host=document.getElementById('scene-board');if(!host)return;
-  host.innerHTML=`<section class="panel"><div class="toolbar"><div><h2>Scene Board</h2><p>Review narration, prompts and current media together. Successful results are preserved when retrying failed scenes.</p></div><button id="scb-refresh" type="button">Refresh scenes</button></div><div class="scene-board-controls"><label>Show<select id="scb-filter"><option value="all">All scenes</option><option value="failed">Failed scenes</option><option value="needs_review">Needs review</option><option value="missing_image_prompt">Missing image prompt</option><option value="missing_video_prompt">Missing video prompt</option><option value="missing_image">Missing image</option><option value="missing_video">Missing video clip</option><option value="ready">Image or video saved</option></select></label><label>Search narration or prompts<input id="scb-search" type="search" placeholder="Find a scene…" maxlength="500"></label><label>Retry target<select id="scb-target"><option value="image_prompt">Image prompt</option><option value="video_prompt">Video prompt</option><option value="image">Image generation</option><option value="video">Video generation</option></select></label></div><div class="actions space"><button id="scb-select-page" type="button">Select visible scenes</button><button id="scb-select-failed" type="button">Select failed for target</button><button id="scb-clear" type="button">Clear selection</button><button id="scb-retry" type="button">Retry selected failed scenes</button><button id="scb-edit" type="button">Open SRT to Prompt</button></div><p id="scb-message" role="status" aria-live="polite">Choose a project and video in Project.</p><p id="scb-count" class="scene-board-count"></p><div class="table-wrap"><table class="scene-board-table"><thead><tr><th>Select</th><th>Scene / time</th><th>Narration</th><th>Image / video prompts</th><th>Current media</th><th>Activity / actions</th></tr></thead><tbody id="scb-rows"></tbody></table></div><div class="scene-board-pagination"><button id="scb-prev" type="button">Previous</button><span id="scb-page"></span><button id="scb-next" type="button">Next</button></div></section>`;
+  host.innerHTML=`<section class="panel"><div class="toolbar"><div><h2>Scene Board</h2><p>Review narration, prompts and current media together. Successful results are preserved when retrying failed scenes.</p></div><button id="scb-refresh" type="button">Refresh scenes</button></div><div class="scene-board-controls"><label>Show<select id="scb-filter"><option value="all">All scenes</option><option value="failed">Failed scenes</option><option value="needs_review">Needs review</option><option value="missing_image_prompt">Missing image prompt</option><option value="missing_video_prompt">Missing video prompt</option><option value="missing_image">Missing image</option><option value="missing_video">Missing video clip</option><option value="ready">Image or video saved</option></select></label><label>Search narration or prompts<input id="scb-search" type="search" placeholder="Find a scene…" maxlength="500"></label><label>Retry target<select id="scb-target"><option value="image_prompt">Image prompt</option><option value="video_prompt">Video prompt</option><option value="image">Image generation</option><option value="video">Video generation</option></select></label></div><div class="scene-board-controls"><label>Image Model<select id="scb-model"><option value="">Backend default</option></select></label><label>Aspect Ratio<select id="scb-ratio"><option value="HORIZONTAL">16:9 · Landscape</option><option value="VERTICAL">9:16 · Portrait</option></select></label></div><p>Image settings apply to new generation. Retry uses the original job settings and resumes saved remote results when available.</p><div class="actions space"><button id="scb-generate" type="button">Generate selected images</button><button id="scb-select-page" type="button">Select visible scenes</button><button id="scb-select-failed" type="button">Select failed for target</button><button id="scb-clear" type="button">Clear selection</button><button id="scb-retry" type="button">Retry selected failed scenes</button><button id="scb-edit" type="button">Open SRT to Prompt</button></div><p id="scb-message" role="status" aria-live="polite">Choose a project and video in Project.</p><p id="scb-count" class="scene-board-count"></p><div class="table-wrap"><table class="scene-board-table"><thead><tr><th>Select</th><th>Scene / time</th><th>Narration</th><th>Image / video prompts</th><th>Current media</th><th>Activity / actions</th></tr></thead><tbody id="scb-rows"></tbody></table></div><div class="scene-board-pagination"><button id="scb-prev" type="button">Previous</button><span id="scb-page"></span><button id="scb-next" type="button">Next</button></div></section>`;
   const $=id=>document.getElementById(id),node=(tag,text,cls)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el;};
   const context=()=>window.workflow?.context()||{project_id:$('project-select')?.value||'',video_id:$('video-select')?.value||''};
   const scope=c=>`${c.project_id||''}/${c.video_id||''}`;
@@ -28,8 +28,27 @@
     return filter==='ready'?Boolean(saved(s,'image')||saved(s,'video')):true;
   }
   function stateKey(){return 'flowkit.scene-board.v1/'+owner;}
-  function persist(){if(!owner)return;try{localStorage.setItem(stateKey(),JSON.stringify({filter:$('scb-filter').value,search:$('scb-search').value,target:$('scb-target').value,selected:[...selected].slice(0,200),page}));}catch{}}
-  function restore(){let stored={};try{stored=JSON.parse(localStorage.getItem(stateKey())||'{}');}catch{}for(const [id,key,fallback]of[['scb-filter','filter','all'],['scb-target','target','image_prompt']]){$(id).value=stored[key]||fallback;if(!$(id).value)$(id).value=fallback;}$('scb-search').value=String(stored.search||'').slice(0,500);selected=new Set(Array.isArray(stored.selected)?stored.selected.filter(x=>typeof x==='string').slice(0,200):[]);page=Number.isInteger(stored.page)&&stored.page>=0?stored.page:0;}
+  function persist(){if(!owner)return;try{localStorage.setItem(stateKey(),JSON.stringify({filter:$('scb-filter').value,search:$('scb-search').value,target:$('scb-target').value,image_model:$('scb-model').value,orientation:$('scb-ratio').value,selected:[...selected].slice(0,200),page}));}catch{}}
+  function restore(){let stored={};try{stored=JSON.parse(localStorage.getItem(stateKey())||'{}');}catch{}for(const [id,key,fallback]of[['scb-filter','filter','all'],['scb-target','target','image_prompt']]){$(id).value=stored[key]||fallback;if(!$(id).value)$(id).value=fallback;}setImageSettings(stored);$('scb-search').value=String(stored.search||'').slice(0,500);selected=new Set(Array.isArray(stored.selected)?stored.selected.filter(x=>typeof x==='string').slice(0,200):[]);page=Number.isInteger(stored.page)&&stored.page>=0?stored.page:0;}
+  function setImageSettings(stored={}){
+    const defaults=window.videoSettings?.effective()?.media||{};
+    const model=stored.image_model??defaults.image_model??'';
+    if(![...$('scb-model').options].some(o=>o.value===model)){$('scb-model').append(new Option(model,model));}
+    $('scb-model').value=model;
+    $('scb-ratio').value=stored.orientation??defaults.orientation??'HORIZONTAL';
+    if(!$('scb-ratio').value)$('scb-ratio').value='HORIZONTAL';
+  }
+  let modelsLoaded=false;
+  async function loadModels(){
+    if(modelsLoaded)return;
+    const result=await request('GET','/api/models');
+    const value=$('scb-model').value;
+    for(const [name,key]of Object.entries(result.image_models||{})){
+      const existing=[...$('scb-model').options].find(o=>o.value===key);
+      if(existing)existing.textContent=name;else $('scb-model').append(new Option(name,key));
+    }
+    $('scb-model').value=value;modelsLoaded=true;
+  }
   function time(ms){const n=Math.max(0,Math.round(Number(ms)||0));return [Math.floor(n/3600000),Math.floor(n/60000)%60,Math.floor(n/1000)%60].map(x=>String(x).padStart(2,'0')).join(':')+'.'+String(n%1000).padStart(3,'0');}
   function revokePreviews(){observer?.disconnect();observer=null;previewQueue=[];++renderVersion;}
   function clearThumbnailCache(){++cacheEpoch;for(const url of urls)URL.revokeObjectURL(url);urls.clear();thumbnailCache.clear();thumbnailLoads.clear();}
@@ -89,10 +108,25 @@
     $('scb-message').textContent='Loading scene status…';
     try{const result=await request('GET','/api/storyboard/videos/'+encodeURIComponent(ctx.video_id));if(version!==ticket||scope(context())!==current)return;
       if(result.video?.project_id!==ctx.project_id||result.video?.id!==ctx.video_id)throw Error('The scene source does not belong to the active video.');
-      data=result;const valid=new Set(data.segments.map(s=>s.id));selected=new Set([...selected].filter(id=>valid.has(id)));render();$('scb-message').textContent=(data.warnings||[]).join(' · ')||'Current prompts and media are matched to each scene. Existing files remain saved.';
+      await loadModels();if(version!==ticket||scope(context())!==current)return;data=result;const valid=new Set(data.segments.map(s=>s.id));selected=new Set([...selected].filter(id=>valid.has(id)));render();$('scb-message').textContent=(data.warnings||[]).join(' · ')||'Current prompts and media are matched to each scene. Existing files remain saved.';
     }catch(e){if(version===ticket&&scope(context())===current)$('scb-message').textContent=e.message;}
   }
   function selectionItems(){if(owner!==scope(context())||!data?.document)throw Error('Load the active video and import its SRT scenes first.');const items=data.segments.filter(s=>selected.has(s.id));if(!items.length||items.length>200)throw Error('Select 1–200 scenes.');return items;}
+  async function generateImages(){
+    const items=selectionItems(),ctx={...context()};
+    if(items.some(s=>!hasPrompt(s,'image')))throw Error('Every selected scene needs a current image prompt. Create it in SRT to Prompt first.');
+    const eligible=items.filter(s=>!currentJobs(s,'image').some(j=>active.has(j.state)||j.state==='COMPLETED'));
+    if(!eligible.length)throw Error('Selected scenes already have completed or active images. Existing results were kept.');
+    const body={segment_ids:eligible.map(s=>s.id),kind:'image',image_model:$('scb-model').value||null,orientation:$('scb-ratio').value,regenerate:false};
+    if(!confirm(`Generate images for ${eligible.length} selected scene(s)? This may use credits. Existing completed and active images will be kept.`))return;
+    if(window.production?.check&&!await window.production.check('images',{...ctx,segment_ids:body.segment_ids,silentOnSuccess:true}))return;
+    if(scope(context())!==scope(ctx))throw Error('The active video changed. Generate from its own Scene Board.');
+    window.projectSettings?.assertSaved();window.videoSettings?.assertSaved();
+    const result=await request('POST','/api/storyboard/videos/'+encodeURIComponent(ctx.video_id)+'/generate-media',body);
+    if(scope(context())!==scope(ctx))return;
+    await open();$('scb-message').textContent=`${result.ids?.length||0} images queued · ${(result.skipped?.length||0)+items.length-eligible.length} scenes skipped. Existing completed and active images were kept.`;
+    document.dispatchEvent(new Event('production-updated'));
+  }
   async function retry(){
     const target=$('scb-target').value,items=selectionItems().filter(s=>failed(s,target)),ctx={...context()};if(!items.length)throw Error('No selected failed scenes need retry for this target. Successful and active results are kept.');
     if(!confirm(`Retry ${items.length} failed scene(s) for ${target.replace('_',' ')}? Inspect uncertain requests and existing downloads first. New generation may use credits.`))return;
@@ -105,6 +139,7 @@
     await open();$('scb-message').textContent=`${result.ids?.length||0} retries queued · ${result.resumed?.length||0} saved remote results resumed · ${result.skipped?.length||0} scenes skipped. Successful results were kept.`;
     document.dispatchEvent(new Event('production-updated'));
   }
+  $('scb-model').onchange=persist;$('scb-ratio').onchange=persist;$('scb-generate').onclick=()=>run(generateImages,$('scb-generate'));
   $('scb-refresh').onclick=()=>run(open);$('scb-filter').onchange=()=>{page=0;render();};$('scb-search').oninput=()=>{page=0;render();};$('scb-target').onchange=persist;
   $('scb-prev').onclick=()=>{page--;render();};$('scb-next').onclick=()=>{page++;render();};
   $('scb-select-page').onclick=()=>{const items=(data?.segments||[]).filter(matches).slice(page*pageSize,(page+1)*pageSize);for(const s of items)if(!choose(s,true))break;render();};

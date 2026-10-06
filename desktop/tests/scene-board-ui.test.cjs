@@ -47,3 +47,26 @@ test('scene retries respect unsaved or loading video production settings',async(
  try{await s.w.sceneBoard.open();s.$('scb-target').value='image';s.$('scb-select-failed').click();s.w.videoSettings={assertSaved:()=>{throw Error('Save video production settings in Project before starting new jobs.');}};s.$('scb-retry').click();await tick();assert.equal(writes,0);assert.match(s.$('scb-message').textContent,/Save video production settings/);
  }finally{s.dom.window.close();}
 });
+test('Scene Board generates selected missing images using model and aspect ratio, preserving completed and active jobs',async()=>{
+ const writes=[],s=setup(async(method,route,body)=>{
+  if(route==='/api/models')return{image_models:{'Test Model':'model-test'}};
+  if(method==='POST'){writes.push({route,body});return{ids:['new'],skipped:[]};}
+  return structuredClone(record);
+ });
+ try{await s.w.sceneBoard.open();assert.equal(writes.length,0);s.$('scb-model').value='model-test';s.$('scb-ratio').value='VERTICAL';s.$('scb-select-page').click();s.$('scb-generate').click();await tick();
+ assert.equal(writes.length,1);assert.equal(writes[0].route,'/api/storyboard/videos/v1/generate-media');assert.deepEqual(JSON.parse(JSON.stringify(writes[0].body)),{segment_ids:['s2'],kind:'image',image_model:'model-test',orientation:'VERTICAL',regenerate:false});assert.equal(s.checks[0][0],'images');assert.match(s.$('scb-message').textContent,/2 scenes skipped/);
+ }finally{s.dom.window.close();}
+});
+test('Scene Board image settings are restored per video and default to video production settings',async()=>{
+ const s=setup(async(method,route)=>route==='/api/models'?{image_models:{Test:'test'}}:route.endsWith('v2')?{...structuredClone(record),video:{id:'v2',project_id:'p1'}}:structuredClone(record));
+ try{s.w.videoSettings={effective:()=>({media:{image_model:'test',orientation:'VERTICAL'}})};await s.w.sceneBoard.open();assert.equal(s.$('scb-model').value,'test');assert.equal(s.$('scb-ratio').value,'VERTICAL');s.$('scb-ratio').value='HORIZONTAL';s.$('scb-ratio').dispatchEvent(new s.w.Event('change'));
+ s.context({project_id:'p1',video_id:'v2'});await tick();assert.equal(s.$('scb-ratio').value,'VERTICAL');s.context({project_id:'p1',video_id:'v1'});await tick();assert.equal(s.$('scb-ratio').value,'HORIZONTAL');
+ }finally{s.dom.window.close();}
+});
+test('Scene Board does not generate with missing prompts, blocked preflight, or changed video',async()=>{
+ let writes=0,resolveCheck;const doc=structuredClone(record),s=setup(async(method,route)=>{if(method==='POST')writes++;return route==='/api/models'?{}:doc;});
+ try{doc.segments[1].ready=false;await s.w.sceneBoard.open();s.$('scb-select-page').click();s.$('scb-generate').click();await tick();assert.equal(writes,0);assert.match(s.$('scb-message').textContent,/current image prompt/);
+ doc.segments[1].ready=true;await s.w.sceneBoard.open();s.w.production.check=async()=>false;s.$('scb-generate').click();await tick();assert.equal(writes,0);
+ s.w.production.check=async()=>new Promise(r=>resolveCheck=r);s.$('scb-generate').click();await tick();s.context({project_id:'p1',video_id:'v2'});resolveCheck(true);await tick();assert.equal(writes,0);
+ }finally{s.dom.window.close();}
+});
