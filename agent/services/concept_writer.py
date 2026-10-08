@@ -27,13 +27,14 @@ def parse_gpt_prompt(raw, payload):
                    **{target+'_prompt':raw,('video' if target=='image' else 'image')+'_prompt':payload.get('retained_prompt','')})
 
 
-TEXT_BATCH_SIZE = 5
+TEXT_BATCH_SIZE = 10
+MAX_TEXT_BATCH_SIZE = 20
 TEXT_BATCH_CONTRACT = '''
 
 ==================================================
 QUY TẮC XỬ LÝ NHÓM DÒNG SRT
 
-Mỗi tin nhắn gồm từ 1 đến 5 dòng, dạng NNN nội dung. NNN là số dòng gốc,
+Mỗi tin nhắn gồm từ 1 đến {batch_size} dòng, dạng NNN nội dung. NNN là số dòng gốc,
 không phải số thứ tự để đánh lại từ đầu. Tạo một prompt riêng đầy đủ cho MỖI dòng,
 áp dụng các hướng dẫn thiết kế trong tài liệu này riêng cho từng dòng.
 Không gộp các dòng thành một ảnh/prompt và không bỏ dòng nào.
@@ -49,8 +50,8 @@ các hướng dẫn về nội dung, phong cách và chất lượng.
 
 
 def batch_message(payloads):
-    if not 1 <= len(payloads) <= TEXT_BATCH_SIZE:
-        raise ValueError('An SRT to Prompt batch must contain 1–5 rows.')
+    if not 1 <= len(payloads) <= MAX_TEXT_BATCH_SIZE:
+        raise ValueError('An SRT to Prompt batch must contain 1–20 rows.')
     rows = [p['ordinal'] for p in payloads]
     if any(type(row) is not int or row < 1 for row in rows) or len(set(rows)) != len(rows):
         raise ValueError('Batch row numbers must be unique positive integers.')
@@ -61,10 +62,36 @@ async def write_concept_batch(payloads, save_result=None):
     from agent.services.chatgpt_gateway import complete
     prompt = batch_message(payloads)
     first = payloads[0]
-    keys = ('provider', 'prompt_kind', 'text_session_id', 'prompt_template', 'project_settings')
+    keys = ('provider', 'prompt_kind', 'text_session_id', 'prompt_template', 'project_settings', 'composer_mode', 'instruction_type', 'text_output_id', 'batch_size', 'model')
     if not first.get('text_session_id') or first.get('provider') != 'chatgpt-web' or first.get('prompt_kind') not in {'image', 'video'} or any(any(p.get(k) != first.get(k) for k in keys) for p in payloads):
         raise ValueError('An SRT to Prompt batch must share its session, prompt instructions and project settings.')
-    template = first['prompt_template'] + TEXT_BATCH_CONTRACT
+    if first.get('video_prompt_text'):
+        if len(payloads)!=1:
+            raise ValueError('Video prompts require exactly one SRT row.')
+        async def save_text(result):
+            from agent.services.prompt_batch import session_folder
+            raw = result['choices'][0]['message']['content']
+            if not isinstance(raw,str) or not raw.strip():
+                raise ValueError('Video prompt response is empty.')
+            concept = Concept(title=first['text'][:150] or 'Scene prompt',description=first['text'][:3000],video_prompt=raw.strip(),image_prompt=first.get('retained_prompt',''))
+            folder = session_folder(first['text_output_id'], first)
+            folder.mkdir(parents=True, exist_ok=True)
+            target = folder / f"{first['ordinal']:03d}.txt"
+            temporary = target.with_suffix('.txt.part')
+            temporary.write_text(concept.video_prompt, encoding='utf-8')
+            temporary.replace(target)
+            concepts = {first['ordinal']:concept}
+            if save_result:
+                await save_result(concepts)
+            return concepts
+        return await complete(prompt + '\n\nReturn only the complete video prompt as text. Do not create a file or ZIP.', first.get('model') or 'GPT-5.6 Sol',
+            validate_payload=save_text, page_url=first['project_settings'].get('chatgpt_url','https://chatgpt.com/'),
+            composer_mode='chat', temporary=False, timeout_seconds=1800,
+            text_session_id=first['text_session_id'], prompt_template=first['prompt_template'], video_prompt_text=True)
+    if first.get('image_phase_start'):
+        from agent.services.chatgpt_gateway import close_prompt_phase
+        await close_prompt_phase()
+    template = first['prompt_template'] + TEXT_BATCH_CONTRACT.format(batch_size=first.get('batch_size', TEXT_BATCH_SIZE))
     if len(template) > 100000:
         raise ValueError('Shorten the prompt TXT to leave space for the batch output rules (100,000 characters total).')
     async def save_download(result):
@@ -73,9 +100,9 @@ async def write_concept_batch(payloads, save_result=None):
         if save_result:
             await save_result(concepts)
         return concepts
-    return await complete(prompt, 'auto', validate_payload=save_download,
+    return await complete(prompt, first.get('model') or 'GPT-5.6 Sol', validate_payload=save_download,
                           page_url=first['project_settings'].get('chatgpt_url', 'https://chatgpt.com/'),
-                          composer_mode='work', temporary=False, timeout_seconds=1800,
+                          composer_mode='chat', temporary=False, timeout_seconds=1800,
                           text_session_id=first['text_session_id'], download_prompt_zip=True,
                           prompt_template=template)
 

@@ -19,7 +19,8 @@ function setup({mixedMediaVersion=1,productionVersion=0,imageMotionVersion=1,sav
  },assemblyImport:async(kind)=>({canceled:false,assets:kind.startsWith('videos')?[{id:'v1'}]:[{id:'i1'},{id:'i2'}],errors:[]}),assemblyMedia:async(id,action)=>{calls.push({id,action});return action==='thumbnail'?'data:image/jpeg;base64,AA==':action==='save'?{path:'movie.mp4'}:{url:'http://127.0.0.1:8100/video'};}};
  if(productionDefaults)w.videoSettings={ready:async()=>{},effective:()=>({assembly:productionDefaults})};
  if(savedDraft)w.localStorage.setItem('assembly-draft:legacy',JSON.stringify(savedDraft));
- w.eval(fs.readFileSync(path.join(__dirname,'../ui/assembly.js'),'utf8'));
+ w.eval(fs.readFileSync(path.join(__dirname,'../ui/data-table.js'),'utf8'));
+    w.eval(fs.readFileSync(path.join(__dirname,'../ui/assembly.js'),'utf8'));
  return {dom,w,d,$,calls,jobs};
 }
 test('assembly UI previews mappings, invalidates edits, blocks missing images, renders and exports',async()=>{
@@ -154,4 +155,24 @@ test('reset to video defaults resets render options while preserving scene input
  assert.equal($('va-title').value,'Keep title');assert.equal($('va-srt').value,'asset:s');assert.equal($('va-audio').value,'asset:a');
  assert.equal($('va-images').selectedOptions[0].value,'i1');assert.equal($('va-render').disabled,true);
  dom.window.close();
+});
+
+test('upgrade disables legacy subtitles, sends the selected mode to render, and remembers explicit choices',async()=>{
+ const {dom,w,d,$,calls}=setup({savedDraft:{srt:'asset:s',audio:'asset:a',images:['i1'],subtitles:'burn',_settings_edited:['subtitles']},productionDefaults:{subtitles:'burn'}});
+ await $('va-refresh').onclick();
+ assert.equal($('va-subtitles').value,'off');assert.equal($('va-subtitle-font').hidden,true);
+ assert.equal($('va-subtitles').closest('.split'),null,'Subtitle choice must stay visible outside collapsed settings');
+ await $('va-preview').onclick();await $('va-render').onclick();
+ assert.equal(calls.filter(c=>c.url==='/api/assembly/jobs').at(-1).body.subtitles,'off');
+ assert.match($('va-plan-note').textContent,/Subtitles: Off/);
+ for(const mode of ['burn','soft']){
+  $('va-subtitles').value=mode;$('va-subtitles').dispatchEvent(new w.Event('change'));
+  assert.equal($('va-render').disabled,true);
+  assert.equal($('va-subtitle-font').hidden,mode!=='burn');
+  await $('va-preview').onclick();await $('va-render').onclick();
+  assert.equal(calls.filter(c=>c.url==='/api/assembly/jobs').at(-1).body.subtitles,mode);
+ }
+ const savedDraft=JSON.parse(w.localStorage.getItem('assembly-draft:legacy'));dom.window.close();
+ const reopened=setup({savedDraft,productionDefaults:{subtitles:'off'}});
+ await reopened.$('va-refresh').onclick();assert.equal(reopened.$('va-subtitles').value,'soft');reopened.dom.window.close();
 });

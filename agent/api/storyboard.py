@@ -2,6 +2,7 @@
 import asyncio
 import json
 import math
+import logging
 import re
 import shutil
 import time
@@ -13,13 +14,14 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, ConfigDict, model_validator, ValidationError
+from pydantic import BaseModel, Field, ConfigDict, model_validator, field_validator, ValidationError
 from agent.db.schema import get_db, _db_lock
 from agent.config import OUTPUT_DIR
-from agent.services.concept_writer import Concept, write_concept, write_concept_batch, TEXT_BATCH_SIZE
+from agent.services.concept_writer import Concept, write_concept, write_concept_batch
 
 router = APIRouter(prefix='/storyboard', tags=['storyboard'])
 AUDIO_DIR = OUTPUT_DIR / 'script_audio'
+_concept_tasks = {}
 
 
 def uid():
@@ -208,11 +210,15 @@ def media_is_current(video, document, segment, payload):
 async def read_document(video_id: str):
     video = await one('SELECT id,project_id,title FROM video WHERE id=?', (video_id,))
     docs = await query('SELECT * FROM script_document WHERE video_id=?', (video_id,))
+    options, instruction_files = await resolved_prompt_options(docs[0]['id'] if docs else None, video)
     if not docs:
-        return {'video': video, 'document': None, 'segments': [], 'warnings': []}
+        return {'video': video, 'document': None, 'segments': [], 'warnings': [],
+                'prompt_options': options.model_dump(), 'prompt_instruction_files': instruction_files}
     doc = docs[0]
     inputs = await query('SELECT prompt_template,prompt_name,srt_name FROM text_prompt_input WHERE document_id=?', (doc['id'],))
     doc.update(inputs[0] if inputs else {'prompt_template':'', 'prompt_name':'', 'srt_name':''})
+    doc['prompt_options'] = options.model_dump()
+    doc['prompt_instruction_files'] = instruction_files
     provenance = await query('SELECT kind,source_id,imported FROM document_source WHERE document_id=?', (doc['id'],))
     doc['source'] = provenance[0] if provenance else None
     segments = await query('SELECT * FROM script_segment WHERE document_id=? ORDER BY ordinal', (doc['id'],))
@@ -224,13 +230,14 @@ async def read_document(video_id: str):
         payload = json.loads(job.pop('payload'))
         job['prompt_kind'] = payload.get('prompt_kind', 'both')
         job['text_batch_id'] = payload.get('text_batch_id')
-        session = payload.get('text_session_id')
+        job['instruction_type'] = payload.get('instruction_type')
+        session = payload.get('text_output_id') or payload.get('text_session_id')
         if job['text_batch_id'] and session and session not in prompt_outputs:
             try:
-                folder = session_folder(session)
+                folder = session_folder(session, payload)
             except ValueError:
                 continue
-            prompt_outputs[session] = {'kind': job['prompt_kind'], 'directory': str(folder)} if folder.is_dir() else None
+            prompt_outputs[session] = {'kind': 'mixed' if payload.get('use_row_instructions') else job['prompt_kind'], 'directory': str(folder)} if folder.is_dir() else None
     from agent.api.desktop import rows
     media = rows()
     warnings = []
@@ -343,12 +350,81 @@ async def select_concept(concept_id: str):
     return {'ok': True}
 
 
+InstructionType = Literal['image', 'video_4s', 'video_6s', 'video_8s', 'video_10s']
+
+
+class InstructionFile(BaseModel):
+    text: str = Field(default='', max_length=97000)
+    name: str = Field(default='', max_length=255)
+    source: Literal['manual', 'folder'] = 'manual'
+
+
+class PromptOptions(BaseModel):
+    chatgpt_model: str = Field(default='GPT-5.6 Sol', min_length=1, max_length=100, pattern=r'^[^-\s][^\r\n]*$')
+    composer_mode: Literal['work', 'chat'] = 'chat'
+
+    @field_validator('composer_mode')
+    @classmethod
+    def chat_only(cls, value):
+        return 'chat'
+
+    batch_size: int = Field(default=10, ge=1, le=20)
+    video_row_count: int = Field(default=15, ge=0, le=1000)
+    templates: dict[InstructionType, InstructionFile] = Field(default_factory=dict)
+    row_instructions: dict[str, Literal['image','video','video_4s','video_6s','video_8s','video_10s']] = Field(default_factory=dict, max_length=1000)
+
+
+async def prompt_options(document_id):
+    options, _ = await resolved_prompt_options(document_id)
+    return options
+
+
+async def resolved_prompt_options(document_id, video=None):
+    from agent.services.prompt_instructions import discover
+    rows = await query('SELECT settings FROM text_prompt_options WHERE document_id=?', (document_id,)) if document_id else []
+    options = PromptOptions.model_validate_json(rows[0]['settings']) if rows else PromptOptions()
+    if document_id and 'image' not in options.templates:
+        legacy = await query('SELECT prompt_template,prompt_name FROM text_prompt_input WHERE document_id=?', (document_id,))
+        if legacy and legacy[0]['prompt_template'].strip():
+            options.templates['image'] = InstructionFile(text=legacy[0]['prompt_template'], name=legacy[0]['prompt_name'])
+    if video is None:
+        video = await one('SELECT v.id,v.project_id FROM video v JOIN script_document d ON d.video_id=v.id WHERE d.id=?', (document_id,))
+    files = await asyncio.to_thread(discover, {'video_id': video['id'], 'project_id': video['project_id']}, options.templates)
+    # Never use a stale snapshot after an auto-loaded file is removed or invalid.
+    options.templates = {key: (InstructionFile(name=value.name, source='folder') if value.source == 'folder' else value)
+                         for key, value in options.templates.items()}
+    for key, value in files.pop('templates').items():
+        options.templates[key] = InstructionFile(**value)
+    return options, files
+
+
+@router.put('/videos/{video_id}/prompt-options')
+async def save_prompt_options(video_id: str, body: PromptOptions):
+    async with transaction() as db:
+        doc = await one('SELECT id FROM script_document WHERE video_id=?', (video_id,))
+        ids = {r['id'] for r in await query('SELECT id FROM script_segment WHERE document_id=?', (doc['id'],))}
+        if not set(body.row_instructions).issubset(ids):
+            raise HTTPException(400, 'Instruction choices must belong to this video.')
+        await db.execute('INSERT INTO text_prompt_options VALUES(?,?) ON CONFLICT(document_id) DO UPDATE SET settings=excluded.settings', (doc['id'], body.model_dump_json()))
+    return body.model_dump()
+
+
 class GenerateBody(BaseModel):
+    fresh_start: bool = False
     segment_ids: list[str] = Field(min_length=1, max_length=1000)
     provider: Literal['codex','claude','agy','chatgpt-web'] = 'codex'
     model: str | None = Field(default=None, max_length=100, pattern=r'^[^-\s][^\r\n]*$')
     regenerate: bool = False
     prompt_kind: Literal['both','image','video'] = 'both'
+    use_row_instructions: bool = False
+    batch_size: int = Field(default=10, ge=1, le=20)
+    composer_mode: Literal['work','chat'] = 'chat'
+
+    @field_validator('composer_mode')
+    @classmethod
+    def chat_only(cls, value):
+        return 'chat'
+
 
 
 @router.post('/videos/{video_id}/generate-concepts')
@@ -358,22 +434,28 @@ async def generate_concepts(video_id: str, body: GenerateBody):
         info = await status()
         if not info.get('available') or not info.get('extensionConnected') or info.get('enabled') is False:
             raise HTTPException(503, 'Connect ChatGPT Web and turn on the extension first.')
+        if body.composer_mode=='chat' and 'chat-prompt-zip-v1' not in info.get('capabilities',[]):
+            raise HTTPException(503, 'Reload ChatGPT Bridge 1.13.0 and restart the gateway to use the Chat tab for ZIP batches.')
         if info.get('needsReview'):
             raise HTTPException(503, 'ChatGPT reported an account rate limit. Wait and resume after the limit clears.')
     elif not shutil.which(body.provider):
         raise HTTPException(503, f'{body.provider} CLI is not installed or not on PATH. Install and sign in to it before creating concepts.')
     project_settings = None
-    if body.provider=='chatgpt-web' and body.prompt_kind in {'image','video'}:
-        from agent.services.chatgpt_gateway import ensure_project_workers
+    if body.provider=='chatgpt-web' and (body.use_row_instructions or body.prompt_kind in {'image','video'}):
+        from agent.services.chatgpt_gateway import ensure_project_workers, open_text_tab
         from agent.services.project_settings import get
         video=await one('SELECT project_id FROM video WHERE id=?',(video_id,))
         project_settings=await get(video['project_id'])
         try:
-            await ensure_project_workers()
+            if body.fresh_start:
+                await open_text_tab()
+            else:
+                await ensure_project_workers()
         except ValueError as error:
             raise HTTPException(503,str(error)) from error
     ids, skipped, batches = [], [], []
     session_id = uid()
+    group_sessions, group_counts, group_batches = {}, {}, {}
     async with transaction() as db:
         doc = await one('SELECT * FROM script_document WHERE video_id=?', (video_id,))
         segments = await query('SELECT * FROM script_segment WHERE document_id=? ORDER BY ordinal', (doc['id'],))
@@ -382,29 +464,69 @@ async def generate_concepts(video_id: str, body: GenerateBody):
         prompt_template = inputs[0]['prompt_template'] if inputs else ''
         if any(sid not in mapping for sid in body.segment_ids):
             raise HTTPException(400, 'All selected segments must belong to this collection.')
-        for sid in sorted(set(body.segment_ids), key=lambda sid: mapping[sid][0]):
+        options = await prompt_options(doc['id'])
+        if body.provider=='chatgpt-web' and not body.model:
+            body.model=options.chatgpt_model
+        choices = {sid: ('image' if options.row_instructions.get(sid,'video' if row['ordinal']<=options.video_row_count else 'image')=='image' else 'video_'+str(next((n for n in (4,6,8,10) if row['end_ms']-row['start_ms']<=n*1000),10))+'s') for sid,(_,row) in mapping.items()} if body.use_row_instructions else {}
+        if body.use_row_instructions:
+            for sid in set(body.segment_ids):
+                instruction = choices.get(sid, 'image')
+                template = options.templates.get(instruction, InstructionFile(text=prompt_template if instruction=='image' else ''))
+                if not template.text.strip():
+                    raise HTTPException(400, f'Scene {mapping[sid][1]["ordinal"]:03d}: load prompt_instructions_{instruction}.txt first.')
+        ordered = sorted(set(body.segment_ids), key=lambda sid: (((1 if choices.get(sid,'image')=='image' else 0) if body.use_row_instructions else 0), mapping[sid][0]))
+        for sid in ordered:
+            instruction = choices.get(sid, 'image') if body.use_row_instructions else body.prompt_kind
+            target = ('image' if instruction=='image' else 'video') if body.use_row_instructions else body.prompt_kind
+            row_template = options.templates.get(instruction, InstructionFile(text=prompt_template if instruction=='image' else '')).text if body.use_row_instructions else prompt_template
             i,s = mapping[sid]
             active = await query('SELECT * FROM scene_concept WHERE id=?', (s['active_concept_id'],))
             ready = active and active[0]['segment_revision'] == s['revision'] and active[0]['document_revision'] == doc['revision']
             pending = await query("SELECT id FROM concept_job WHERE segment_id=? AND state IN ('QUEUED','RUNNING')", (sid,))
-            target_ready=ready and (bool(active[0][body.prompt_kind+'_prompt'].strip()) if body.prompt_kind!='both' else bool(active[0]['image_prompt'].strip() and active[0]['video_prompt'].strip()))
+            target_ready=ready and (bool(active[0][target+'_prompt'].strip()) if target!='both' else bool(active[0]['image_prompt'].strip() and active[0]['video_prompt'].strip()))
+            if target_ready and body.use_row_instructions:
+                prior = await query("SELECT payload FROM concept_job WHERE segment_id=? AND state='COMPLETED' ORDER BY created DESC", (sid,))
+                matching = next((json.loads(j['payload']) for j in prior if json.loads(j['payload']).get('prompt_kind')==target), None)
+                if matching and (matching.get('instruction_type', target)!=instruction or matching.get('prompt_template')!=row_template):
+                    target_ready = False
             if pending or (target_ready and not body.regenerate):
                 skipped.append(sid)
                 continue
-            payload = {**body.model_dump(exclude={'segment_ids','regenerate'}), 'ordinal': s['ordinal'], 'text': s['text'], 'start_ms': s['start_ms'], 'end_ms': s['end_ms'], 'segment_revision': s['revision'], 'document_revision': doc['revision'], 'active_concept_id': s['active_concept_id'], 'visual_style': doc['visual_style'], 'script_context': doc['script_text'][:8000], 'previous_text': segments[i-1]['text'][:1000] if i else '', 'next_text': segments[i+1]['text'][:1000] if i+1<len(segments) else ''}
+            payload = {'video_id': video_id, **body.model_dump(exclude={'segment_ids','regenerate'}), 'ordinal': s['ordinal'], 'text': s['text'], 'start_ms': s['start_ms'], 'end_ms': s['end_ms'], 'segment_revision': s['revision'], 'document_revision': doc['revision'], 'active_concept_id': s['active_concept_id'], 'visual_style': doc['visual_style'], 'script_context': doc['script_text'][:8000], 'previous_text': segments[i-1]['text'][:1000] if i else '', 'next_text': segments[i+1]['text'][:1000] if i+1<len(segments) else ''}
+            payload.update(prompt_kind=target, instruction_type=instruction)
             if project_settings is not None:
                 payload['project_settings']=project_settings
-                payload['retained_prompt']=active[0]['video_prompt' if body.prompt_kind=='image' else 'image_prompt'] if ready else ''
-                if prompt_template.strip():
-                    payload['prompt_template'] = prompt_template
-                    payload['text_session_id'] = session_id
-                    if len(ids) % TEXT_BATCH_SIZE == 0:
-                        batches.append(uid())
-                    payload['text_batch_id'] = batches[-1]
+                payload['retained_prompt']=active[0]['video_prompt' if target=='image' else 'image_prompt'] if ready else ''
+                if row_template.strip():
+                    payload['prompt_template'] = row_template
+                    payload['text_output_id'] = session_id
+                    payload['text_session_id'] = group_sessions.setdefault('video' if target=='video' else instruction, uid())
+                    if target=='video':
+                        payload['video_prompt_text'] = True
+                        payload['batch_size'] = 1
+                    elif body.use_row_instructions:
+                        payload['image_phase_start'] = group_counts.get('image',0)==0 and any(k.startswith('video') for k in group_counts)
+                    count = group_counts.get(instruction, 0)
+                    if target=='video' or count % body.batch_size == 0:
+                        group_batches[instruction] = uid()
+                        batches.append(group_batches[instruction])
+                    group_counts[instruction] = count + 1
+                    payload['text_batch_id'] = group_batches[instruction]
             jid = uid()
             await db.execute("INSERT INTO concept_job(id,segment_id,state,payload,created) VALUES(?,?,'QUEUED',?,?)", (jid, sid, json.dumps(payload), time.time()))
             ids.append(jid)
-    return {'ids': ids, 'skipped': skipped, 'batch_count': len(batches), 'batch_size': TEXT_BATCH_SIZE if batches else 1}
+    return {'ids': ids, 'skipped': skipped, 'batch_count': len(batches), 'batch_size': body.batch_size if batches else 1}
+
+
+@router.post('/videos/{video_id}/restart-text')
+async def restart_text(video_id: str):
+    await one('SELECT id FROM video WHERE id=?', (video_id,))
+    from agent.services.chatgpt_gateway import open_text_tab
+    try:
+        return await open_text_tab()
+    except ValueError as error:
+        logging.getLogger(__name__).warning('SRT to Prompt Start blocked video=%s: %s', video_id, error)
+        raise HTTPException(409, str(error)) from error
 
 
 @router.post('/videos/{video_id}/cancel-concepts')
@@ -480,12 +602,13 @@ async def run():
     async with transaction() as db:
         await db.execute("UPDATE concept_job SET state='NEEDS_REVIEW',error='App stopped during AI generation. Check before submitting again.' WHERE state='RUNNING'")
         await db.execute("UPDATE concept_job SET state='NEEDS_REVIEW',error='Queued by an older version. Retry selected rows to use one Work tab and ZIP batches.' WHERE state='QUEUED' AND json_extract(payload,'$.provider')='chatgpt-web' AND json_extract(payload,'$.text_session_id') IS NOT NULL AND json_extract(payload,'$.text_batch_id') IS NULL")
-    tasks = {}
+    tasks = _concept_tasks
     try:
         while True:
             for jid, task in list(tasks.items()):
                 if task.done():
-                    task.result()
+                    if not task.cancelled():
+                        task.result()
                     del tasks[jid]
             from agent.services.chatgpt_gateway import status
             info = await status()
@@ -495,6 +618,10 @@ async def run():
                 if tasks:
                     break
                 payload = json.loads(job['payload'])
+                if payload.get('prompt_kind')=='image' and payload.get('text_output_id'):
+                    waiting = await query("SELECT 1 FROM concept_job WHERE json_extract(payload,'$.text_output_id')=? AND json_extract(payload,'$.video_prompt_text')=1 AND state NOT IN ('COMPLETED','STALE') LIMIT 1", (payload['text_output_id'],))
+                    if waiting:
+                        continue
                 task_id = payload.get('text_batch_id') or job['id']
                 if task_id in tasks:
                     continue
@@ -504,12 +631,17 @@ async def run():
                     slots -= 1
                 elif tasks:
                     continue
+                from agent.services import chatgpt_gateway
+                if payload.get('provider') == 'chatgpt-web' and chatgpt_gateway._restarting_text:
+                    continue
                 tasks[task_id] = asyncio.create_task(process_concept(job))
+                tasks[task_id].text_provider = payload.get('provider') == 'chatgpt-web'
             await asyncio.sleep(1)
     finally:
         for task in tasks.values():
             task.cancel()
         await asyncio.gather(*tasks.values(),return_exceptions=True)
+        tasks.clear()
 
 
 @router.post('/videos/{video_id}/audio')
@@ -519,7 +651,9 @@ async def upload_audio(video_id: str, audio: UploadFile = File(...)):
     if suffix not in ('.mp3','.wav','.m4a','.flac','.ogg','.aac','.mp4'):
         raise HTTPException(400, 'Choose an MP3, WAV, M4A, FLAC, OGG, AAC or MP4 audio file.')
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-    dest = AUDIO_DIR / (uid() + suffix)
+    from agent.services.output_paths import owned_path
+    dest = owned_path(AUDIO_DIR / (uid() + suffix), {'video_id': video_id}, 'audio/' + uid() + suffix)
+    dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         size = 0
         with dest.open('wb') as out:
@@ -550,7 +684,8 @@ async def upload_audio(video_id: str, audio: UploadFile = File(...)):
 async def get_audio(video_id: str):
     doc = await one('SELECT * FROM script_document WHERE video_id=?', (video_id,))
     path = Path(doc['audio_path'] or '').resolve()
-    if not path.is_relative_to(AUDIO_DIR.resolve()) or not path.is_file():
+    from agent.services.output_paths import allowed
+    if not allowed(path, AUDIO_DIR) or not path.is_file():
         raise HTTPException(404, 'Audio is not available')
     return FileResponse(path)
 
@@ -621,14 +756,16 @@ async def retry_failed(video_id: str, body: RetryBody):
         raise HTTPException(400, 'All scenes must belong to the active project.')
     terminal = {'FAILED','NEEDS_REVIEW','INTERRUPTED','CANCELLED'}
     if body.kind == 'concept':
+        options = await prompt_options(data['document']['id'])
         def failed(sid):
             segment=segments[sid]
-            job=segment['prompt_jobs'].get(body.prompt_kind) if body.prompt_kind!='both' else segment['job']
+            target = ('image' if options.row_instructions.get(sid,'video' if segment['ordinal']<=options.video_row_count else 'image')=='image' else 'video') if body.use_row_instructions else body.prompt_kind
+            job=segment['prompt_jobs'].get(target) if target!='both' else segment['job']
             return job and job['state'] in terminal
         eligible = [sid for sid in selected if failed(sid)]
         if eligible and not body.reviewed:
             raise HTTPException(409, 'Review failed ChatGPT requests before retrying. A new request may use credits.')
-        result = await generate_concepts(video_id, GenerateBody(segment_ids=eligible, provider=body.provider, model=body.model, prompt_kind=body.prompt_kind, regenerate=True)) if eligible else {'ids':[], 'skipped':[]}
+        result = await generate_concepts(video_id, GenerateBody(segment_ids=eligible, provider=body.provider, model=body.model, prompt_kind=body.prompt_kind, regenerate=True, use_row_instructions=body.use_row_instructions, batch_size=body.batch_size, composer_mode=body.composer_mode)) if eligible else {'ids':[], 'skipped':[]}
         return {**result, 'skipped':list(set(selected)-set(eligible)) + result.get('skipped',[]), 'resumed':[]}
     async with _db_lock:
         data = await read_document(video_id)

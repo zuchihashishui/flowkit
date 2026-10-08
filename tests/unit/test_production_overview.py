@@ -319,6 +319,45 @@ async def test_whisperx_check_error_is_actionable_and_never_enqueues(env, monkey
 
 
 @pytest.mark.asyncio
+async def test_whisperx_cold_check_can_exceed_twenty_seconds(env, monkeypatch):
+    import sys
+    from agent.services import whisperx_service
+    runner = env.root / 'slow_check.py'
+    runner.write_text('import time\ntime.sleep(21)\nprint(\'FLOWKIT_CHECK {"ok":true,"cuda_available":true}\',flush=True)\n')
+    monkeypatch.setattr(whisperx_service, 'RUNNER', runner)
+    monkeypatch.setattr(whisperx_service, 'python_bin', lambda:sys.executable)
+    source = audio(env, env.a)
+    response = await env.client.post('/api/production/preflight', json={**env.a, 'stage':'whisperx', 'source_id':source, 'device':'cuda'})
+    assert response.status_code == 200
+    check = next(c for c in response.json()['checks'] if c['id']=='whisperx_environment')
+    assert check['status'] == 'pass', response.text
+    assert not env.wx.jobs()  # Checking the environment never submits a job.
+
+
+@pytest.mark.asyncio
+async def test_slow_source_catalog_does_not_block_health_during_preflight(env, monkeypatch):
+    import asyncio
+    from agent.main import health
+    env.client._transport.app.add_api_route('/health', health)
+    source = audio(env, env.a)
+    monkeypatch.setattr(env.wx, 'check', AsyncMock(return_value={'ok':True, 'cuda_available':True}))
+    original = overview.scope.catalog
+    def slow_catalog():
+        time.sleep(1)
+        return original()
+    monkeypatch.setattr(overview.scope, 'catalog', slow_catalog)
+    start = time.monotonic()
+    pending = asyncio.create_task(env.client.post('/api/production/preflight', json={**env.a, 'stage':'whisperx', 'source_id':source, 'device':'cuda'}))
+    try:
+        await asyncio.sleep(.05)
+        assert (await env.client.get('/health')).status_code == 200
+        assert time.monotonic()-start < .5
+    finally:
+        response = await pending
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_unexpected_preflight_error_returns_json_detail_and_logs_traceback(env, monkeypatch, caplog):
     async def fail(_body):
         raise RuntimeError('fixture diagnostic failure')

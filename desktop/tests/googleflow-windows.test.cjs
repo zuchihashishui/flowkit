@@ -84,3 +84,11 @@ test('Open Flow Tab revives a discarded tab and refuses requests from web conten
  assert.equal((await b.message({type:'OPEN_FLOW_TAB'})).ok,true);assert.equal(b.tabs.get(2).discarded,false);
  const result=await b.message({type:'OPEN_FLOW_TAB'},{tab:{id:3}});assert.match(result.error,/Extension page required/);
 });
+
+test('concurrent scene jobs reuse the project tab opened by Electron',async()=>{
+ const b=await setup(),url='https://flow.google.com/project/11111111-2222-3333-4444-555555555555';
+ b.tabs.set(50,{id:50,windowId:50,url});
+ const result=await b.run(`Promise.all([openFlowWindow({url:${JSON.stringify(url)}}),openFlowWindow({url:${JSON.stringify(url)}}),openFlowWindow({url:${JSON.stringify(url)}})])`);
+ assert.ok(result.every(t=>t.id===50));assert.equal(b.windows.length,0);
+ await b.run('closeSavedFlowTabs()');assert.ok(b.tabs.has(50));
+});

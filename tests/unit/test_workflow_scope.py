@@ -31,6 +31,8 @@ async def env(tmp_path, monkeypatch):
     await schema.close_db()
     monkeypatch.setattr(schema, 'DB_PATH', tmp_path / 'main.db')
     monkeypatch.setattr(desktop, 'STORE', tmp_path / 'media.db')
+    from agent.services import video_files
+    monkeypatch.setattr(video_files, 'ROOT', tmp_path / 'projects')
     await schema.init_db()
     p = await crud.create_project(name='Project A')
     v = await crud.create_video(project_id=p['id'], title='Video A')
@@ -75,7 +77,8 @@ def finish_json(env, jid):
 
 
 def finish_srt(env, jid):
-    folder = env.srt.output / jid
+    from agent.services.output_paths import job_directory
+    folder = job_directory(env.srt, 'srt', jid)
     folder.mkdir(parents=True, exist_ok=True)
     (folder/'subtitles.srt').write_text(SRT, encoding='utf-8')
     env.srt.update(jid, 'COMPLETED', cues=1)
@@ -192,6 +195,7 @@ async def test_import_picker_context_and_assembly_keep_upstream_ids(env):
     # Optional clips are project-scoped inputs and remain in immutable render lineage.
     from agent.services.assembly_service import command
     clip_path = env.va.output/'scope-test.mp4'
+    clip_path.parent.mkdir(parents=True, exist_ok=True)
     await command(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=red:s=64x36:r=24:d=0.5',
                    '-c:v','libx264','-threads','1',clip_path])
     other_clip = await env.client.post('/api/assembly/import/video', data=env.b, files={'file':('001.mp4',clip_path.read_bytes())})

@@ -125,3 +125,28 @@ async def test_project_settings_shared_by_videos_isolated_and_revision_safe(proj
     remote='11111111-2222-3333-4444-555555555555'
     for url in ['https://flow.google.com/project/'+remote,'https://labs.google/fx/tools/flow/project/'+remote]:
         assert settings.flow_project(settings.validate_url('google_flow_url',url),'local')==remote
+
+@pytest.mark.asyncio
+async def test_table_delete_only_allows_empty_records(project, monkeypatch):
+    from agent.services import workflow_scope
+    from agent.api import storyboard
+    monkeypatch.setattr(workflow_scope, 'has_owned_resources', lambda **_: False)
+    video=await crud.create_video(project_id=project['id'],title='Keep script')
+    with pytest.raises(HTTPException) as error:
+        await projects.delete(project['id'])
+    assert error.value.status_code==409
+    await storyboard.save_document(video['id'],storyboard.DocumentBody(script_text='Keep this text'))
+    with pytest.raises(HTTPException) as error:
+        await videos.delete(video['id'])
+    assert error.value.status_code==409
+    media_video=await crud.create_video(project_id=project['id'],title='Keep media')
+    with desktop.connection() as db:
+        db.execute("INSERT INTO jobs(id,payload,state,created) VALUES(?,?,?,?)",('j',json.dumps({'video_id':media_video['id']}),'COMPLETED',1))
+    with pytest.raises(HTTPException) as error:
+        await videos.delete(media_video['id'])
+    assert error.value.status_code==409
+    empty_project=await crud.create_project(name='Empty')
+    empty_video=await crud.create_video(project_id=empty_project['id'],title='Empty')
+    assert await videos.delete(empty_video['id'])=={'ok':True}
+    assert await projects.delete(empty_project['id'])=={'ok':True}
+    assert await crud.get_video(video['id']) and await crud.get_video(media_video['id'])

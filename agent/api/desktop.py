@@ -1,4 +1,6 @@
 """Durable desktop jobs. No automatic resubmission of uncertain generations."""
+from agent.services import output_paths
+
 import asyncio
 import json
 import logging
@@ -63,6 +65,9 @@ def update(jid, **values):
     values["updated"] = time.time()
     with connection() as db:
         db.execute("UPDATE jobs SET " + ",".join(f"{k}=?" for k in values) + " WHERE id=?", [*values.values(), jid])
+
+    if "stage" in values:
+        logger.info("Media job %s stage=%s", jid, values["stage"])
 
 
 class Job(BaseModel):
@@ -144,6 +149,9 @@ async def enqueue_jobs(body: Batch, *, preserve_settings: bool = False):
             jid = str(uuid.uuid4())
             db.execute("INSERT INTO jobs(id,payload,state,created) VALUES(?,?,?,?)", (jid, j.model_dump_json(), "QUEUED", time.time()))
             ids.append(jid)
+    for jid, job in zip(ids, body.jobs):
+        logger.info("Media job queued job=%s project=%s video=%s segment=%s kind=%s",
+                    jid, job.project_id, job.video_id, job.segment_id, job.kind)
     return {"ids": ids}
 
 
@@ -233,7 +241,7 @@ async def file(jid: str, index: int):
     if index < 0 or index >= len(files):
         raise HTTPException(404, "File not found")
     path = Path(files[index]).resolve()
-    if not path.is_relative_to(ROOT.resolve()) or not path.is_file():
+    if not output_paths.allowed(path, ROOT) or not path.is_file():
         raise HTTPException(404, "File not available")
     return FileResponse(path)
 
@@ -304,6 +312,8 @@ async def process(job):
     page_url=(body.project_settings or {}).get('google_flow_url')
     url_token=flow_page_url.set(page_url)
     provider_project_id=flow_project(page_url,body.project_id)
+    logger.info("Media job starting job=%s project=%s video=%s segment=%s kind=%s flow_project=%s",
+                jid, body.project_id, body.video_id, body.segment_id, body.kind, provider_project_id)
     remote = json.loads(job["remote"]) if job["remote"] else None
     from agent.services.browser_lifecycle import flow_started, flow_saved
     if body.kind != "voice":
@@ -341,7 +351,8 @@ async def process(job):
             else:
                 raise TimeoutError("Polling timed out. Resume to check the same video; no new generation is submitted.")
         update(jid, state="DOWNLOADING")
-        folder = ROOT / jid
+        from agent.services.output_paths import owned_path
+        folder = owned_path(ROOT / jid, {'project_id': body.project_id, 'video_id': body.video_id}, f'scene_board/{body.kind}/{jid}')
         folder.mkdir(parents=True, exist_ok=True)
         files = []
         if body.kind == "voice":
@@ -373,6 +384,8 @@ async def process(job):
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        logger.exception("Media job failed job=%s project=%s video=%s segment=%s kind=%s flow_project=%s",
+                         jid, body.project_id, body.video_id, body.segment_id, body.kind, provider_project_id)
         update(jid, state="FAILED", error=str(getattr(exc, "detail", None) or exc)[:1500])
 
     finally:

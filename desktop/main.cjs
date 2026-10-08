@@ -38,7 +38,7 @@ async function requireWorkflow(){
   }).finally(()=>{workflowCheck=null;});
   await workflowCheck;
 }
-const storyboardAllowed = /^\/api\/storyboard\/(providers|videos\/[a-zA-Z0-9_-]+(?:\/(segments|prompt-input|generate-concepts|cancel-concepts|generate-media|retry-failed|collect-images))?|segments\/[a-zA-Z0-9_-]+(?:\/concepts)?|concepts\/[a-zA-Z0-9_-]+\/select)$/;
+const storyboardAllowed = /^\/api\/storyboard\/(providers|videos\/[a-zA-Z0-9_-]+(?:\/(segments|prompt-input|prompt-options|restart-text|generate-concepts|cancel-concepts|generate-media|retry-failed|collect-images))?|segments\/[a-zA-Z0-9_-]+(?:\/concepts)?|concepts\/[a-zA-Z0-9_-]+\/select)$/;
 const allowed = /^\/(health|api\/(projects(?:\/[a-zA-Z0-9_-]+(?:\/settings)?)?|videos(?:\/[a-zA-Z0-9_-]+)?|scenes(?:\/[a-zA-Z0-9_-]+)?|models|materials|flow\/status|tts\/templates(?:\/[a-zA-Z0-9_-]+)?|desktop\/(jobs(?:\/cancel|\/[a-f0-9-]+\/resume)?|pause|diagnostics|flow-progress)))(\?[^#]*)?$/;
 function whisperxAllowed(method, route) {
   return method === 'GET' && /^\/api\/whisperx\/(status|jobs\/[a-f0-9-]{36}\/preview(?:\/(full|video|image))?)$/.test(route)
@@ -50,7 +50,7 @@ function srtAllowed(method, route) {
 }
 function assemblyAllowed(method, route) {
   return method === 'GET' && route === '/api/assembly/status'
-    || method === 'POST' && /^\/api\/assembly\/(source|preview|preflight|scene-media|jobs|jobs\/[a-f0-9-]{36}\/(cancel|resume))$/.test(route);
+    || method === 'POST' && /^\/api\/assembly\/(source|project-sources|preview|preflight|scene-media|jobs|jobs\/[a-f0-9-]{36}\/(cancel|resume))$/.test(route);
 }
 function elevenlabsAllowed(method, route) {
   return method === 'GET' && /^\/api\/elevenlabs\/(status|jobs(?:\/[a-f0-9-]{36})?)$/.test(route)
@@ -75,9 +75,21 @@ async function readBackendResponse(response, route) {
 async function request(method, route, body, timeoutMs) {
   if(timeoutMs===undefined && route==='/api/srt/prepare')timeoutMs=130000;
   if(timeoutMs===undefined && method==='GET' && ['/api/srt/status','/api/whisperx/status','/api/chatgpt/status','/api/workflow/resources'].includes(route.split('?')[0]))timeoutMs=10000;
-  if(timeoutMs===undefined && method==='POST' && /^\/api\/assembly\/(preflight|scene-media|jobs)$/.test(route))timeoutMs=1800000;
-  const response = await fetch(BASE + route, {method, headers:body ? {'Content-Type':'application/json'} : {}, body: body ? JSON.stringify(body) : undefined, signal:AbortSignal.timeout(timeoutMs ?? (route.startsWith('/api/chatgpt/')?720000:120000))});
-  return readBackendResponse(response, route);
+  if(timeoutMs===undefined && method==='POST' && /^\/api\/assembly\/(preflight|scene-media|project-sources|jobs)$/.test(route))timeoutMs=1800000;
+  const limit=timeoutMs ?? (route.startsWith('/api/chatgpt/')?720000:120000);
+  const routeLabel=route.split('?')[0],started=Date.now();
+  try {
+    const response = await fetch(BASE + route, {method, headers:body ? {'Content-Type':'application/json'} : {}, body: body ? JSON.stringify(body) : undefined, signal:AbortSignal.timeout(limit)});
+    return await readBackendResponse(response, route);
+  } catch(error) {
+    if(error?.name==='TimeoutError'||error?.name==='AbortError'){
+      const uncertain=method!=='GET'?' The backend may still be processing this request. Refresh row/job status before submitting again.':'';
+      const message=`Backend timeout: ${method} ${routeLabel} after ${Math.round((Date.now()-started)/1000)}s (limit ${limit/1000}s).${uncertain} Check backend.log.`;
+      console.error('[Backend Timeout]',message);
+      throw Error(message);
+    }
+    throw error;
+  }
 }
 function handle(name, fn) { ipcMain.handle(name, async (event,...args) => {
   if(event.sender !== win.webContents || event.senderFrame.url !== entry) throw Error('Untrusted caller');
@@ -144,10 +156,10 @@ app.whenReady().then(async()=>{
   win.webContents.on('will-navigate',e=>e.preventDefault());
   require(path.join(__dirname,'maintenance.cjs'))({handle,dialog,getWindow:()=>win,root:ROOT,base:BASE,request,saveResponse:saveAudioResponse,fetch:(...args)=>fetch(...args),getOutput:()=>settings.output});
   handle('api',async(method,route,body)=>{
-    if(!['GET','POST','PATCH','PUT'].includes(method)||typeof route!=='string'||!(productionAllowed(method,route)||workflowAllowed(method,route)||assemblyAllowed(method,route)||srtAllowed(method,route)||whisperxAllowed(method,route)||elevenlabsAllowed(method,route)||allowed.test(route)||storyboardAllowed.test(route)||/^\/api\/chatgpt\/(status|history|test|resume|message|queue|config|cancel|retry|preflight|models)$/.test(route))||route.includes('..')||route.includes('\\')) throw Error('Unsupported API operation');
+    if(!(['GET','POST','PATCH','PUT'].includes(method)||(method==='DELETE'&&/^\/api\/(projects|videos)\/[a-zA-Z0-9_-]+(?:\?cascade=true)?$/.test(route)))||typeof route!=='string'||!(productionAllowed(method,route)||workflowAllowed(method,route)||assemblyAllowed(method,route)||srtAllowed(method,route)||whisperxAllowed(method,route)||elevenlabsAllowed(method,route)||allowed.test(route)||storyboardAllowed.test(route)||/^\/api\/chatgpt\/(status|history|test|resume|message|queue|config|cancel|retry|preflight|models)$/.test(route))||route.includes('..')||route.includes('\\')) throw Error(`Unsupported API operation: ${method} ${String(route).split('?')[0]}`);
     if (method !== 'GET' && runtime.isRestarting()) throw Error('The backend is restarting. Wait for it to become ready.');
     if(route.startsWith('/api/workflow/')||(method!=='GET'&&/^\/api\/videos(?:\/|$)/.test(route))||(workflowAllowed(method,route)&&route.includes('?'))||(method==='POST'&&body?.video_id&&/^\/api\/(elevenlabs|whisperx|srt|assembly)\//.test(route)))await requireWorkflow();
-    if(/^\/api\/projects\/[^/]+\/settings$/.test(route)||(method==='POST'&&(/^\/api\/storyboard\/videos\/[^/]+\/(generate-concepts|generate-media|retry-failed)$/.test(route)||(route==='/api/desktop/jobs'&&body?.jobs?.some(j=>j.video_id)))))await requireWorkflow();
+    if(/^\/api\/projects\/[^/]+\/settings$/.test(route)||(method==='POST'&&(/^\/api\/storyboard\/videos\/[^/]+\/(generate-concepts|restart-text|generate-media|retry-failed)$/.test(route)||(route==='/api/desktop/jobs'&&body?.jobs?.some(j=>j.video_id)))))await requireWorkflow();
     if(productionAllowed(method,route)||(method==='PUT'&&/^\/api\/projects\/[^/]+\/settings$/.test(route)&&body?.production)||(method==='POST'&&/^\/api\/assembly\/(preview|preflight|jobs)$/.test(route)&&body?.image_motion&&body.image_motion!=='none'))await requireProduction();
     if(route.startsWith('/api/elevenlabs/')) {
       let issue = '', health;

@@ -309,3 +309,30 @@ async def test_zip_batch_awaits_file_and_row_save_before_ack(monkeypatch,fail_sa
         with pytest.raises(g.GatewayReviewRequired):await task
     else:assert await task=='rows saved'
     assert json.loads(calls[-1].content)['ok'] is (not fail_save)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('reply,finished', [({'ok': True}, True), ({'ok': True, 'skipped': True}, False)])
+async def test_cleanup_uses_live_gateway_checks_not_historical_review(monkeypatch, reply, finished):
+    from agent.api import storyboard
+    async def empty_query(*args):
+        return []
+    monkeypatch.setattr(storyboard, 'query', empty_query)
+    with g.db() as c:
+        c.execute("INSERT INTO requests(id,state) VALUES('old','NEEDS_REVIEW')")
+    g._cleanup_pending = True
+    calls = transport(monkeypatch, reply)
+    await g.close_idle_text_workers()
+    assert [r.url.path for r in calls] == ['/workers/close']
+    assert g._cleanup_pending is not finished
+
+@pytest.mark.asyncio
+async def test_failed_cleanup_keeps_retry_pending(monkeypatch):
+    from agent.api import storyboard
+    async def empty_query(*args):
+        return []
+    monkeypatch.setattr(storyboard, 'query', empty_query)
+    g._cleanup_pending = True
+    transport(monkeypatch, {'error': 'Tab close failed'}, 409)
+    with pytest.raises(httpx.HTTPStatusError):
+        await g.close_idle_text_workers()
+    assert g._cleanup_pending

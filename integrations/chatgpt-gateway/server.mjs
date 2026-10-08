@@ -4,6 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {WebSocketServer} from 'ws';
 const port=Number(process.env.CHATGPT_GATEWAY_PORT||18790);
 let capabilities=[], extension=null, workers=[], enabled=false, accountPaused=false,inspectionActive=false,extensionInspecting=false,textCleanupActive=false;
+let restartPromise=null, extensionVersion='unknown';
 const active=new Map(), held=new Map(), controls=new Map();
 const SRT_WORKER_ID='srt-worker';
 const isSrt=w=>w.kind==='srt';
@@ -27,16 +28,35 @@ function control(type,body={},timeout=5000){return new Promise((resolve,reject)=
  controls.set(controlId,{resolve:r=>{clearTimeout(timer);controls.delete(controlId);r.ok?resolve(r):reject(Error(r.error));}});
  try{send({type,controlId,...body});}catch(e){clearTimeout(timer);controls.delete(controlId);reject(e);}
 });}
+async function restartTextWorkers(){
+ // Reserve restart immediately, then let an existing close/inspection finish.
+ // Never reset its flags while it still owns tabs.
+ const deadline=Date.now()+30000;
+ while(textCleanupActive||inspectionActive||extensionInspecting){
+  if(extension?.readyState!==1)throw Error('Extension disconnected while waiting to restart. Reconnect ChatGPT Bridge.');
+  if(Date.now()>=deadline)throw Error('Text cleanup or inspection did not finish within 30s. Reload ChatGPT Bridge 1.15.1 and retry Start.');
+  await new Promise(resolve=>setTimeout(resolve,50));
+ }
+ textCleanupActive=true;
+ try{
+  await control('restartText',{},15000);
+  for(const [id,r] of [...active])if(!isSrt(r.worker))finish(id,{ok:false,cancelled:true,error:'Previous text run stopped by Start.'});
+  for(const [id,h] of [...held])if(!isSrt(h.worker))held.delete(id);
+  workers=workers.filter(isSrt);
+  return {ok:true};
+ }finally{textCleanupActive=false;}
+}
 const server=createServer(async(req,res)=>{
  if(req.headers.origin)return json(res,403,{error:'Browser HTTP origins are not allowed'});
  if(req.method==='GET'&&req.url==='/health'){
   const ws=pool(),text=ws.filter(w=>!isSrt(w)),srtWorker=ws.find(isSrt)||null;
   const ready=enabled&&!accountPaused&&!inspectionActive&&!extensionInspecting;
-  return json(res,200,{service:'flowkit-chatgpt-gateway',protocol:2,capabilities,extensionConnected:extension?.readyState===1,enabled,inspecting:inspectionActive||extensionInspecting,workers:text,srtWorker,availableSlots:ready?text.filter(w=>w.state==='IDLE').length:0,availableSrtSlots:ready&&capabilities.includes('dedicated-srt-v1')&&(!srtWorker||srtWorker.state==='IDLE')?1:0,busy:active.size>0,activeRequests:active.size,needsReview:accountPaused,reviewWorkers:ws.filter(w=>w.state==='NEEDS_REVIEW').length});
+  return json(res,200,{service:'flowkit-chatgpt-gateway',gatewayVersion:'0.7.122',extensionVersion,protocol:2,capabilities,extensionConnected:extension?.readyState===1,enabled,restarting:!!restartPromise,inspecting:inspectionActive||extensionInspecting,workers:text,srtWorker,availableSlots:ready&&!restartPromise?text.filter(w=>w.state==='IDLE').length:0,availableSrtSlots:ready&&capabilities.includes('dedicated-srt-v1')&&(!srtWorker||srtWorker.state==='IDLE')?1:0,busy:active.size>0,activeRequests:active.size,needsReview:accountPaused,reviewWorkers:ws.filter(w=>w.state==='NEEDS_REVIEW').length});
  }
  let p={};try{let body='';for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>24*1024*1024)return json(res,413,{error:'Request too large'});}if(body)p=JSON.parse(body);}catch{return json(res,400,{error:'Invalid JSON'});}
  if(!p||typeof p!=='object'||Array.isArray(p))return json(res,400,{error:'Expected a JSON object'});
  if(req.method!=='POST')return json(res,404,{error:'Not found'});
+ if(restartPromise&&['/inspect','/review/reset','/workers/ensure','/workers/close'].includes(req.url))return json(res,409,{code:'TEXT_RESTARTING',error:'Start is restarting text workers; wait for it to finish.'});
  if(req.url==='/inspect'){
   if(!['discoverModels','preflight'].includes(p.kind))return json(res,400,{error:'Unknown inspection type'});
   if(p.composerMode!==undefined&&!['chat','work'].includes(p.composerMode))return json(res,400,{error:'Invalid composer mode'});
@@ -93,6 +113,27 @@ const server=createServer(async(req,res)=>{
    return json(res,200,{ok:true});
   }catch(e){return json(res,409,{error:e.message});}finally{textCleanupActive=false;}
  }
+ if(req.url==='/workers/open'){
+  if(!capabilities.includes('fresh-text-tab-v1'))return json(res,409,{error:'Reload Flowkit ChatGPT Gateway 1.16.0 from the new extensions/chatgpt folder. Running extension: '+extensionVersion});
+  if(!enabled)return json(res,409,{error:'Turn on the ChatGPT extension.'});
+  if(accountPaused)return json(res,409,{error:'ChatGPT reported an account rate limit. Wait until it clears.'});
+  if(restartPromise)return json(res,409,{error:'A new Chat tab is already opening.'});
+  restartPromise=(async()=>{
+   await control('openText',{},30000);
+   for(const [id,r] of [...active])if(!isSrt(r.worker))finish(id,{ok:false,cancelled:true,error:'Replaced by a new Chat tab.'});
+   for(const [id,h] of [...held])if(!isSrt(h.worker))held.delete(id);
+   return {ok:true};
+  })().finally(()=>{restartPromise=null;});
+  try{return json(res,200,await restartPromise);}
+  catch(error){console.warn('[workers/open]',error.message);return json(res,409,{error:error.message});}
+ }
+ if(req.url==='/workers/restart'){
+  if(!capabilities.includes('restart-text-v1'))return json(res,409,{code:'UPDATE_EXTENSION',error:'Reload ChatGPT Bridge 1.15.1 before starting a fresh run.'});
+  if(!restartPromise)restartPromise=restartTextWorkers().finally(()=>{restartPromise=null;});
+  try{
+   return json(res,200,await restartPromise);
+  }catch(e){console.warn('[workers/restart]',e.message);return json(res,409,{code:'TEXT_RESTART_FAILED',error:e.message});}
+ }
  if(req.url==='/workers/close'){
   if(!capabilities.includes('worker-lifecycle-v1'))return json(res,200,{ok:true,skipped:true});
   if(textCleanupActive||inspectionActive||extensionInspecting||[...active.values(),...held.values()].some(r=>!isSrt(r.worker)))return json(res,409,{error:'Text workers still busy or require review'});
@@ -110,9 +151,11 @@ const server=createServer(async(req,res)=>{
   }catch(e){return json(res,409,{error:e.message});}
  }
  if(req.url!=='/v1/chat/completions')return json(res,404,{error:'Not found'});
- if(p.downloadPromptZip===true&&(!p.textSessionId||p.composerMode!=='work'||p.temporary!==false||p.workers!==1||!capabilities.includes('work-prompt-zip-v1')||!capabilities.includes('verified-send-v1')))return json(res,400,{error:'Prompt ZIP batches require one Work worker and Bridge 1.12.1.',not_submitted:true});
+ if(p.videoPromptText===true&&(!capabilities.includes('video-prompt-text-v1')||p.workers!==1||!p.textSessionId||p.downloadPromptZip===true))return json(res,400,{error:'Reload ChatGPT Bridge 1.14.0 for single video prompts.',not_submitted:true});
+ if(p.downloadPromptZip===true&&(!p.textSessionId||!['work','chat'].includes(p.composerMode)||p.temporary!==false||p.workers!==1||!capabilities.includes('work-prompt-zip-v1')||!capabilities.includes('verified-send-v1')))return json(res,400,{error:'Prompt ZIP batches require one Work worker and Bridge 1.12.1.',not_submitted:true});
+ if(p.downloadPromptZip===true&&p.composerMode==='chat'&&!capabilities.includes('chat-prompt-zip-v1'))return json(res,400,{error:'Reload ChatGPT Bridge 1.13.0 for Chat prompt ZIP batches.',not_submitted:true});
  if(p.textSessionId!==undefined){
-  if(typeof p.textSessionId!=='string'||!/^[a-f0-9-]{36}$/.test(p.textSessionId)||typeof p.promptTemplate!=='string'||!p.promptTemplate.trim()||p.promptTemplate.length>100000||(p.downloadPromptZip===true?(p.temporary!==false||p.composerMode!=='work'):(p.temporary!==true||p.composerMode!=='chat'))||p.freshTab||p.attachment)return json(res,400,{error:'Invalid text conversation session',not_submitted:true});
+  if(typeof p.textSessionId!=='string'||!/^[a-f0-9-]{36}$/.test(p.textSessionId)||typeof p.promptTemplate!=='string'||!p.promptTemplate.trim()||p.promptTemplate.length>100000||((p.downloadPromptZip===true||p.videoPromptText===true)?(p.temporary!==false||!['work','chat'].includes(p.composerMode)):(p.temporary!==true||p.composerMode!=='chat'))||p.freshTab||p.attachment)return json(res,400,{error:'Invalid text conversation session',not_submitted:true});
   if(!capabilities.includes('temporary-text-session-v1')||!capabilities.includes('txt-prompt-attachment-v1')||!capabilities.includes('serialized-submission-v1'))return json(res,400,{error:'Reload ChatGPT Bridge 1.11.4 for coordinated text tab submission.',not_submitted:true});
  }
  if(p.pageUrl!==undefined){
@@ -141,14 +184,14 @@ const server=createServer(async(req,res)=>{
  const srt=current.find(isSrt);
  const worker=p.freshTab?(srt?.state==='IDLE'?srt:!srt?{id:SRT_WORKER_ID,kind:'srt',tabId:null,state:'IDLE'}:null):current.filter(w=>!isSrt(w)).slice(0,limit).find(w=>w.state==='IDLE');
  const running=[...active.values()].filter(r=>isSrt(r.worker)===!!p.freshTab).length;
- if((textCleanupActive&&!p.freshTab)||inspectionActive||extensionInspecting||!enabled||accountPaused||!worker||running>=limit)return json(res,409,{error:'No available worker or account paused',not_submitted:true});
- const requestId=randomUUID(),timeout=Math.min((p.attachment||p.downloadPromptZip===true)?1800000:600000,Math.max(30000,Number(p.timeout)||180000));
+ if(((textCleanupActive||restartPromise)&&!p.freshTab)||inspectionActive||extensionInspecting||!enabled||accountPaused||!worker||running>=limit)return json(res,409,{error:'No available worker or account paused',not_submitted:true});
+ const requestId=randomUUID(),timeout=Math.min((p.attachment||p.downloadPromptZip===true||p.videoPromptText===true)?1800000:600000,Math.max(30000,Number(p.timeout)||180000));
  held.set(worker.id,{requestId,worker,jobId:p.srtJobId,state:'RUNNING'});
  const result=await new Promise(resolve=>{
   const timer=setTimeout(()=>fail(requestId,'Response deadline exceeded; review the worker tab.'),timeout+(p.attachment?1050000:660000));
   active.set(requestId,{resolve,timer,worker,jobId:p.srtJobId});
   res.on('close',()=>{if(!res.writableEnded)fail(requestId,'Client disconnected; submission may have completed.');});
-  try{send({type:'chat',requestId,workerId:worker.id,messages:p.messages,model:p.model||'auto',timeout,temporary:p.temporary!==false,attachment:p.attachment,composerMode:p.composerMode,freshTab:p.freshTab===true,preparedTabToken:p.preparedTabToken,pageUrl:p.pageUrl,downloadSrt:p.downloadSrt===true,downloadPromptZip:p.downloadPromptZip===true,srtJobId:p.srtJobId,textSessionId:p.textSessionId,promptTemplate:p.promptTemplate});}catch(e){fail(requestId,e.message);}
+  try{send({type:'chat',requestId,workerId:worker.id,messages:p.messages,model:p.model||'auto',timeout,temporary:p.temporary!==false,attachment:p.attachment,composerMode:p.composerMode,freshTab:p.freshTab===true,preparedTabToken:p.preparedTabToken,pageUrl:p.pageUrl,downloadSrt:p.downloadSrt===true,downloadPromptZip:p.downloadPromptZip===true,videoPromptText:p.videoPromptText===true,srtJobId:p.srtJobId,textSessionId:p.textSessionId,promptTemplate:p.promptTemplate});}catch(e){fail(requestId,e.message);}
  });
  if(result.not_submitted)return json(res,409,result);
  if(!result.ok)return json(res,502,result);
@@ -166,7 +209,7 @@ wss.on('connection',ws=>{
  ws.on('message',raw=>{
   let m;try{m=JSON.parse(raw);}catch{return;}
   if(m.type==='pool'&&m.protocol===2){
-   capabilities=Array.isArray(m.capabilities)?m.capabilities.filter(x=>['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1','srt-prepare-v1','srt-download-v1','srt-cancel-v1','temporary-text-session-v1','text-worker-recovery-v1','txt-prompt-attachment-v1','serialized-submission-v1','work-prompt-zip-v1','verified-send-v1'].includes(x)):[];
+   capabilities=Array.isArray(m.capabilities)?m.capabilities.filter(x=>['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1','srt-prepare-v1','srt-download-v1','srt-cancel-v1','temporary-text-session-v1','text-worker-recovery-v1','txt-prompt-attachment-v1','serialized-submission-v1','work-prompt-zip-v1','chat-prompt-zip-v1','video-prompt-text-v1','restart-text-v1','fresh-text-tab-v1','verified-send-v1'].includes(x)):[];
    const seen=new Set(),ids=new Set();workers=(Array.isArray(m.workers)?m.workers:[]).filter(w=>{
     if(!w||typeof w.id!=='string'||w.id===SRT_WORKER_ID||w.kind==='srt'||(!Number.isInteger(w.tabId)&&w.tabId!==null)||ids.has(w.id))return false;
     if(w.tabId!==null&&seen.has(w.tabId))return false;
@@ -174,7 +217,7 @@ wss.on('connection',ws=>{
    }).slice(0,3).map(w=>({...w,kind:'text'}));
    const s=m.srtWorker;
    if(capabilities.includes('dedicated-srt-v1')&&s?.id===SRT_WORKER_ID&&(s.tabId===null||Number.isInteger(s.tabId)&&!seen.has(s.tabId)))workers.push({...s,kind:'srt'});
-   enabled=m.enabled===true;extensionInspecting=m.inspecting===true;
+   enabled=m.enabled===true;extensionInspecting=m.inspecting===true;extensionVersion=typeof m.extensionVersion==='string'?m.extensionVersion:'unknown';
   }else if(m.type==='response'&&active.get(m.requestId)?.worker.id===m.workerId)finish(m.requestId,m);
   else if(m.type==='controlResult')controls.get(m.controlId)?.resolve(m);
  });

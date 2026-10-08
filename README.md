@@ -1,3 +1,51 @@
+## Studio v0.7.124
+
+Merge Audio + SRT + Media mặc định không thêm phụ đề vào MP4. Tùy chọn **Subtitles in output video** hiển thị ngay đầu màn hình. Xem [hướng dẫn](docs/releases/0.7.124.md).
+
+## Studio v0.7.123
+
+Merge Audio + SRT + Media tự nạp nguồn theo project/video đang chọn và lưu MP4 vào `output/projects/<project>/<video>/exports/<job-id>/video.mp4`. Xem [hướng dẫn cập nhật](docs/releases/0.7.123.md).
+
+## Studio v0.7.98
+
+Prompt to Media explicitly opens the saved project Google Flow URL before preflight and job submission. See [release notes](docs/releases/0.7.98.md).
+
+## Studio v0.7.97
+
+Prompt to Media now shows persistent generation progress and inline preflight failures. Automatic refresh no longer erases action errors. See [release notes](docs/releases/0.7.97.md).
+
+## Studio v0.7.96
+
+App connections, export settings, ChatGPT diagnostics and system checks are now under Project → Project Settings → App connections & output settings. The separate Settings menu is removed. See [release notes](docs/releases/0.7.96.md).
+
+## Studio v0.7.95
+
+Rename Scene Board to Prompt to Media. Verify assembled video frame count and stream duration against the SRT timeline, including a real 8-second clip trimmed to a 7.2-second scene. See [release notes](docs/releases/0.7.95.md).
+
+## Studio v0.7.94 / ChatGPT Bridge 1.14.0
+
+SRT to Prompt runs Video first: one row plus duration-specific TXT each message, plain-text results saved per scene. Then it closes the video tab and opens a fresh Image tab, retaining numbered ZIP batches and first-message-only instructions. Reload the extension and restart Studio/gateway. See [release notes](docs/releases/0.7.94.md).
+
+## Studio v0.7.93
+
+SRT to Prompt lets you set how many opening SRT rows use Video (default 15). Remaining rows use Image. Individual rows remain editable. See [release notes](docs/releases/0.7.93.md).
+
+## Studio v0.7.92
+
+SRT to Prompt has five separate TXT upload slots. Rows choose Image or Video; Video automatically selects the 4s/6s/8s/10s instructions from SRT duration. See [release notes](docs/releases/0.7.92.md).
+
+## Studio v0.7.91
+
+New owned jobs write directly to `output/projects/<project>/<video>/`: ElevenLabs, WhisperX, SRT, TXT/ZIP prompt runs, and Scene Board media. Existing jobs keep readable paths; their per-video copies remain available. Use **Open video folder** in Scene Board. See [release notes](docs/releases/0.7.91.md).
+
+## Studio v0.7.90 / ChatGPT Bridge 1.13.1
+
+SRT to Prompt defaults to Chat; saved Work choices remain available. Finished prompt runs retry failed tab closure and historical backend review entries no longer block idle-worker cleanup. Reload the ChatGPT extension and restart Studio. See [release notes](docs/releases/0.7.90.md).
+
+## Studio v0.7.89 / ChatGPT Bridge 1.13.0
+
+SRT to Prompt supports one Work or one Chat tab, configurable groups of 1–20 rows (default 10), and five instruction TXT slots: Image, Video 4s/6s/8s/10s. Each row defaults to Image and can choose another instruction. Reload the updated ChatGPT extension, refresh its tabs, and restart Studio/gateway. See [release notes](docs/releases/0.7.89.md).
+
 ## Studio v0.7.88
 
 WhisperX no longer opens the Word JSON preflight popup. Create word JSON continues immediately when checks pass; failures appear in the WhisperX message area. See [release notes](docs/releases/0.7.88.md).

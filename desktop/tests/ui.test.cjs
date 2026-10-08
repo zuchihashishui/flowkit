@@ -36,6 +36,7 @@ test('English UI routes project, scene, generation and voice actions to the brid
   const tick = () => new Promise(resolve=>setImmediate(resolve));
   const form = async id => {w.document.getElementById(id).dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();};
   try {
+    w.eval(fs.readFileSync(path.join(__dirname,'../ui/data-table.js'),'utf8'));
     w.eval(fs.readFileSync(path.join(__dirname, '../ui/app.js'), 'utf8'));
     await tick();
     assert.match(w.document.getElementById('notice').textContent,/Ready/);
@@ -62,4 +63,17 @@ test('English UI routes project, scene, generation and voice actions to the brid
     assert.equal(w.document.documentElement.lang,'en');
     assert.equal(w.document.getElementById('notice').classList.contains('error'),false);
   } finally {dom.window.close();}
+});
+
+test('Project contains shared app settings and Settings navigation is removed',()=>{
+ const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'../ui/index.html'),'utf8'));
+ const d=dom.window.document;
+ assert.equal(d.querySelector('[data-page="settings"]'),null);
+ assert.equal(d.querySelector('[data-view="settings"]'),null);
+ for(const id of ['project-settings-form','project-app-settings','output-dir','auto-export','extension-folder','cg-status','cg-history','diagnostics']){
+  assert.ok(d.getElementById(id).closest('[data-view="projects"]'),id);
+  assert.equal(d.querySelectorAll('#'+id).length,1);
+ }
+ assert.equal(d.getElementById('project-app-settings').closest('form'),null);
+ dom.window.close();
 });

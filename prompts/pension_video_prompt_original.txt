@@ -329,3 +329,37 @@ Tự đếm và xử lý đầy đủ các mục được cung cấp, không m�
 Chỉ viết prompt; không tạo video hoặc ảnh thực tế.
 Đóng gói tất cả TXT vào video_prompts.zip và trả link tải ZIP thực tế.
 Nếu có mâu thuẫn về số lượng file, đặt tên hoặc cách giao kết quả ở phần trên, áp dụng quy tắc này.
+
+==================================================
+BỔ SUNG — NGÔN NGỮ VÀ SỐ THỨ TỰ KHÔNG ĐƯỢC LẪN VÀO ẢNH
+==================================================
+
+1. Quy tắc tạo TXT và ZIP chỉ thay đổi cách lưu và giao file. Không dùng quy tắc này để thay đổi phong cách, bố cục, độ chi tiết hoặc cách xây dựng nội dung theo hướng dẫn gốc.
+
+2. Trong các file prompt ảnh đầu ra:
+- Giữ nguyên tên các trường bằng tiếng Anh theo mẫu gốc.
+- VISUAL FRAME và VISUAL MESSAGE viết bằng tiếng Nhật.
+- Các phần mô tả còn lại, AI IMAGE PROMPT và NEGATIVE PROMPT viết bằng tiếng Anh.
+- Chữ được yêu cầu xuất hiện trên ảnh chỉ dùng tiếng Nhật, cùng số liệu và ký hiệu thực sự cần thiết theo nội dung gốc.
+- Không viết tiếng Việt trong file prompt ảnh đầu ra.
+
+3. Số thứ tự đầu vào chỉ dùng để đặt tên file và đối chiếu Scene.
+Ví dụ: mục 021 → 021.txt.
+Không chèn 021, SCENE 021 hoặc số thứ tự tương tự vào VISUAL FRAME, tiêu đề ảnh, nhãn trên ảnh hoặc nội dung AI IMAGE PROMPT.
+Quy định này không cấm các số liệu thực tế có trong nội dung cần minh họa.
+
+4. VISUAL FRAME chỉ chứa tên ngắn bằng tiếng Nhật, không có tiền tố số thứ tự.
+VISUAL FRAME là thông tin mô tả, không mặc định là chữ phải xuất hiện trên ảnh.
+Chỉ đưa tên này lên ảnh nếu nó được chỉ định rõ trong TEXT ON IMAGE.
+
+5. TEXT ON IMAGE là danh sách đầy đủ các chữ được phép xuất hiện trên ảnh. AI IMAGE PROMPT phải nhắc lại chính xác các chữ đó và vị trí của chúng. Không tự đưa tên trường, phần giải thích hoặc tên file lên ảnh.
+
+6. Cuối mỗi AI IMAGE PROMPT, thêm:
+Render only the exact Japanese text explicitly specified in TEXT ON IMAGE, together with any explicitly specified numerical values and symbols. All other content is instruction, not visible text. Do not render Vietnamese text, field headings, scene identifiers, filenames, or descriptive metadata.
+
+7. Bổ sung vào NEGATIVE PROMPT:
+Vietnamese text, visible scene identifiers, filenames, prompt field headings, instruction text rendered on the image
+
+8. Trước khi tạo ZIP, kiểm tra từng TXT: không có tiếng Việt, VISUAL FRAME không chứa số thứ tự Scene, và chữ được yêu cầu trong AI IMAGE PROMPT khớp chính xác TEXT ON IMAGE.
+
+Phần bổ sung này được ưu tiên nếu có hướng dẫn khác yêu cầu viết tiếng Việt trong file prompt ảnh đầu ra.

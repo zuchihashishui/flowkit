@@ -38,11 +38,12 @@ function syncProjectContext() {
     row.querySelector('button').textContent=row.dataset.projectId===loadedProject?'Selected':'Select project';
   });
   const page=document.querySelector('[data-page].active')?.dataset.page;
-  const shared=['chatgpt','settings'].includes(page);
+  const shared=page==='chatgpt';
   $('project-scope-note').hidden=!shared;
   $('project-scope-note').textContent='Active project is shared across Studio. This tool currently uses a shared library/history; its existing records are not filtered by project.';
 }
 function notice(text, error = false) {
+  document.dispatchEvent(new CustomEvent('studio-notice',{detail:{text,error}}));
   $('notice').textContent = text;
   $('notice').classList.toggle('error', error);
 }
@@ -109,6 +110,31 @@ function discardSceneEdit() {
   if (editorDirty && !confirm('Discard unsaved scene changes?')) return false;
   $('scene-editor').hidden = true; editingScene = null; editorDirty = false; return true;
 }
+function canDeleteSelection(project=false){
+  if(sceneSaving)throw Error('Wait for scene changes to finish saving before deleting.');
+  if(window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo())throw Error('Finish the Prompt to Media action before deleting.');
+  if(window.videoSettings?.canChangeVideo&&!window.videoSettings.canChangeVideo(''))return false;
+  if(window.storyboard?.canChangeVideo&&!window.storyboard.canChangeVideo(''))return false;
+  if(project&&window.projectSettings?.canChangeProject&&!window.projectSettings.canChangeProject(''))return false;
+  return true;
+}
+function deletionNotice(result,label){
+  const pending=result.cleanup_pending||[];
+  notice(pending.length?label+' records deleted, but some files are still locked. Restart Studio to retry cleanup: '+pending.join(', '):label+' and related data/files deleted.',!!pending.length);
+}
+window.deleteProductionVideo=async id=>{
+  const video=videos.find(v=>v.id===id),pid=loadedProject;
+  if(!video)throw Error('Video is no longer in this project. Refresh Projects.');
+  if(!confirm('Permanently delete video "'+video.title+'" and its scripts, scenes, prompts, job history and managed output files? This cannot be undone.'))return false;
+  if(loadedCollection===id&&!canDeleteSelection())return false;
+  const result=await api('DELETE','/api/videos/'+id+'?cascade=true');
+  try{if(localStorage.getItem('active-video:'+pid)===id)localStorage.removeItem('active-video:'+pid);}catch{}
+  if(loadedProject===pid){
+    if(loadedCollection===id){editorDirty=false;discardSceneEdit();}
+    await refreshVideos(undefined,true);
+  }
+  await refreshJobs();deletionNotice(result,'Video');return true;
+};
 async function refreshProjects() {
   projects = await api('GET', '/api/projects');
   let previous = $('project-select').value;
@@ -117,25 +143,35 @@ async function refreshProjects() {
   if (projects.some(p => p.id === previous)) $('project-select').value = previous;
   $('project-list').replaceChildren();
   for (const p of projects) {
-    const row = element('div', undefined, 'item');
-    row.dataset.projectId=p.id;
-    row.append(element('strong', p.name), element('small', p.id), button('Select project', async () => {
-      $('project-select').value = p.id; await selectProject();
-    }));
+    const row = element('tr');row.dataset.projectId=p.id;
+    for(const text of [p.name,p.flow_project_id||'Not configured',p.updated_at||p.created_at||'—'])row.append(element('td',text));
+    const actions=element('td');actions.className='table-actions';
+    actions.append(button('Select project', async () => {$('project-select').value=p.id;await selectProject();}),button('Edit / settings',async()=>{
+      $('project-select').value=p.id;await selectProject();if(loadedProject===p.id)window.workspaceUI?.projectSettings();
+    }),button('Delete',async()=>{
+      if(!confirm('Permanently delete project "'+p.name+'" and ALL its videos, scripts, scenes, prompts, job history and managed output files? This cannot be undone.'))return;
+      if(loadedProject===p.id&&!canDeleteSelection(true))return;
+      const result=await api('DELETE','/api/projects/'+p.id+'?cascade=true');
+      try{localStorage.removeItem('active-video:'+p.id);}catch{}
+      if(loadedProject===p.id){editorDirty=false;$('project-select').value='';await selectProject(false,true);}
+      await refreshProjects();await refreshJobs();deletionNotice(result,'Project');
+    }));row.append(actions);
     $('project-list').append(row);
   }
   if (!projects.length) $('project-list').textContent = 'No projects yet. Connect Flow, then create your first project.';
   syncProjectFilter();
   syncProjectContext();
 }
-async function selectProject(reload=false) {
+async function selectProject(reload=false,deleted=false) {
+  if(!deleted){
   if(!reload&&$('project-select').value===loadedProject){syncProjectContext();return;}
-  if(window.sceneBoard?.canChangeProject&&!window.sceneBoard.canChangeProject()){$('project-select').value=loadedProject;notice('Wait for the Scene Board action to finish before changing projects.',true);return;}
+  if(window.sceneBoard?.canChangeProject&&!window.sceneBoard.canChangeProject()){$('project-select').value=loadedProject;notice('Wait for the Prompt to Media action to finish before changing projects.',true);return;}
   if(window.videoSettings&&!window.videoSettings.canChangeProject($('project-select').value)){$('project-select').value=loadedProject;return;}
   if(window.projectSettings&&!window.projectSettings.canChangeProject($('project-select').value)){$('project-select').value=loadedProject;return;}
   if(sceneSaving){$('project-select').value=loadedProject;notice('Wait for the scene to finish saving.',true);return;}
   if(editorDirty&&!confirm('Discard unsaved scene changes?')){$('project-select').value=loadedProject;return;}
   if (window.storyboard && !window.storyboard.canChangeProject()) { $('project-select').value = loadedProject; return; }
+  }
   editorDirty=false;
   discardSceneEdit();
   window.storyboard?.projectChanged();
@@ -159,13 +195,16 @@ async function selectProject(reload=false) {
 }
 function renderVideos(){
   $('project-videos').replaceChildren(...videos.map(v=>{
-    const row=element('div',undefined,'item');row.dataset.videoId=v.id;
-    row.append(element('strong',v.title),element('small',v.status+' · '+v.id),button(v.id===$('video-select').value?'Selected':'Select video',()=>selectVideo(v.id)));
+    const row=element('tr');row.dataset.videoId=v.id;row.dataset.active=String(v.id===$('video-select').value);
+    for(const text of [v.title,v.orientation||'—',v.status||'—'])row.append(element('td',text));
+    const actions=element('td');actions.className='table-actions';actions.append(button(v.id===$('video-select').value?'Selected':'Select video',()=>selectVideo(v.id)),button('Edit',async()=>{await selectVideo(v.id);if(loadedCollection===v.id)window.workspaceUI?.editVideo();}),button('Delete',async()=>{
+      await window.deleteProductionVideo(v.id);
+    }));row.append(actions);
     return row;
   }));
   if(!videos.length)$('project-videos').textContent=loadedProject?'No videos yet. Create the first video.':'Select a project first.';
 }
-async function refreshVideos(preferred){
+async function refreshVideos(preferred,deleted=false){
   const pid=loadedProject,request=projectRequest;
   if(!pid)return;
   const workspace=await api('POST','/api/workflow/project',{project_id:pid});
@@ -176,10 +215,10 @@ async function refreshVideos(preferred){
   videos=workspace.videos;
   $('video-select').replaceChildren(option('','Select a video'),...videos.map(v=>option(v.id,v.title)));
   $('video-select').value=videos.some(v=>v.id===previous)?previous:workspace.video_id||'';
-  await loadScenes();renderVideos();syncProjectContext();
+  await loadScenes(deleted);renderVideos();syncProjectContext();document.dispatchEvent(new Event('production-updated'));
 }
 async function selectVideo(id){
-  if(id!==loadedCollection&&window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){$('video-select').value=loadedCollection;notice('Wait for the Scene Board action to finish before changing videos.',true);return;}
+  if(id!==loadedCollection&&window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){$('video-select').value=loadedCollection;notice('Wait for the Prompt to Media action to finish before changing videos.',true);return;}
   if(!discardSceneEdit())return;
   $('video-select').value=id;
   await loadScenes();renderVideos();
@@ -206,12 +245,12 @@ window.focusProductionJob=async id=>{
 window.sceneDownloads={focus:window.focusProductionJob,export:async id=>{await exportJob(id);renderJobs();},open:()=>{$('scene-downloads-title').focus({preventScroll:true});$('scene-downloads').scrollIntoView?.({block:'start'});}};
 window.refreshStudioProjects=refreshProjects;
 
-async function loadScenes() {
+async function loadScenes(deleted=false) {
   const id = $('video-select').value;
-  if(id!==loadedCollection&&window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){$('video-select').value=loadedCollection;notice('Wait for the Scene Board action to finish before changing videos.',true);return;}
+  if(!deleted&&id!==loadedCollection&&window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){$('video-select').value=loadedCollection;notice('Wait for the Prompt to Media action to finish before changing videos.',true);return;}
   const request = ++sceneRequest;
-  if(window.videoSettings&&!window.videoSettings.canChangeVideo(id)){$('video-select').value=loadedCollection;return;}
-  if(id!==loadedCollection&&window.storyboard?.canChangeVideo&&!window.storyboard.canChangeVideo(id)){$('video-select').value=loadedCollection;return;}
+  if(!deleted&&window.videoSettings&&!window.videoSettings.canChangeVideo(id)){$('video-select').value=loadedCollection;return;}
+  if(!deleted&&id!==loadedCollection&&window.storyboard?.canChangeVideo&&!window.storyboard.canChangeVideo(id)){$('video-select').value=loadedCollection;return;}
   if(loadedCollection!==id){
     detailId=null;clearDownloadPreview();
     for(const kind of ['voice']){
@@ -339,7 +378,7 @@ function renderJobs() {
     if (job.state === 'COMPLETED') controls.append(button('Preview', () => preview(job)), button(exported.has(job.id) ? 'Exported · export files' : 'Export files', () => exportJob(job.id)));
     if (job.can_resume) controls.append(button('Resume saved result', async () => { await api('POST', `/api/desktop/jobs/${job.id}/resume`, {}); await refreshJobs(); }));
     if (job.state === 'QUEUED') controls.append(button('Cancel', () => cancelJobs([job.id])));
-    row.append(controls); lists[key].append(row);
+    row.append(controls); lists[key].append(key==='all'&&window.studioTables?window.studioTables.jobRow(row,[job.payload.label,job.payload.kind,job.state,new Date(job.created*1000).toLocaleString()],job.id,job.state):row);
   }
   for (const e of Object.values(lists)) if (!e.children.length) e.textContent = e === lists.all ? 'No jobs match these filters.' : 'No jobs yet.';
   const counts = [['Queued', scoped.filter(j => j.state === 'QUEUED').length], ['In progress', scoped.filter(j => ACTIVE.includes(j.state)).length], ['Completed', scoped.filter(j => j.state === 'COMPLETED').length], ['Need attention', scoped.filter(j => ['FAILED', 'NEEDS_REVIEW'].includes(j.state)).length], ['Cancelled', scoped.filter(j => j.state === 'CANCELLED').length]];
@@ -369,13 +408,14 @@ onForm('project-form', async () => {
   if (!discardSceneEdit()) return;
   const body = {name: $('project-name').value, description: $('project-description').value, material: $('material').value};
   if ($('flow-id').value.trim()) body.flow_project_id = $('flow-id').value.trim();
-  const p = await api('POST', '/api/projects', body); await refreshProjects(); $('project-select').value = p.id; await selectProject(); notice('Project created.');
+  const p = await api('POST', '/api/projects', body);document.dispatchEvent(new CustomEvent('studio-record-created',{detail:{kind:'project'}})); await refreshProjects(); $('project-select').value = p.id; await selectProject(); notice('Project created.');
 });
 onForm('edit-project', async () => { await api('PATCH', '/api/projects/' + projectId(), {name: $('edit-name').value}); await refreshProjects(); notice('Project updated.'); });
 onForm('create-video',async()=>{
-  const pid=projectId();if(window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){notice('Wait for the Scene Board action to finish before creating a video.',true);return;}if(!discardSceneEdit()||window.storyboard?.canChangeVideo&&!window.storyboard.canChangeVideo(''))return;
+  const pid=projectId();if(window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){notice('Wait for the Prompt to Media action to finish before creating a video.',true);return;}if(!discardSceneEdit()||window.storyboard?.canChangeVideo&&!window.storyboard.canChangeVideo(''))return;
   const title=$('new-video-title').value.trim();if(!title)throw Error('Enter a video title.');
   const created=await api('POST','/api/videos',{project_id:pid,title,orientation:$('new-video-orientation').value});
+  document.dispatchEvent(new CustomEvent('studio-record-created',{detail:{kind:'video'}}));
   if(pid!==loadedProject){notice('Video created in its original project.');return;}
   $('new-video-title').value='';await refreshVideos(created.id);notice('Video created and selected.');
 });
@@ -386,7 +426,7 @@ onForm('edit-video',async()=>{
   if(pid!==loadedProject)return;
   const row=videos.find(v=>v.id===id);if(row)row.title=title;
   const opt=[...$('video-select').options].find(o=>o.value===id);if(opt)opt.textContent=title;
-  renderVideos();syncProjectContext();syncProjectFilter();notice('Video title saved.');
+  renderVideos();syncProjectContext();syncProjectFilter();document.dispatchEvent(new Event('production-updated'));notice('Video title saved.');
 });
 onForm('scene-editor', async () => {
   if (sceneSaving) return;
@@ -426,7 +466,7 @@ onForm('voice-form', async () => {
   await api('POST', '/api/desktop/jobs', {jobs: payload}); await refreshJobs(); notice(`${payload.length} narration job(s) queued.`);
 });
 $('project-select').onchange = () => action(selectProject);
-$('video-select').onchange = () => action(async () => { if($('video-select').value!==loadedCollection&&window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){$('video-select').value=loadedCollection;notice('Wait for the Scene Board action to finish before changing videos.',true);return;} if (!discardSceneEdit()) { $('video-select').value = loadedCollection; return; } await loadScenes(); });
+$('video-select').onchange = () => action(async () => { if($('video-select').value!==loadedCollection&&window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){$('video-select').value=loadedCollection;notice('Wait for the Prompt to Media action to finish before changing videos.',true);return;} if (!discardSceneEdit()) { $('video-select').value = loadedCollection; return; } await loadScenes(); });
 $('refresh-projects').onclick = () => action(refreshProjects);
 $('refresh-videos').onclick=()=>action(async()=>{if(discardSceneEdit())await refreshVideos();},$('refresh-videos'));
 $('refresh-jobs').onclick = () => action(refreshJobs);

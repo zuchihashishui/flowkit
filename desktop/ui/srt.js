@@ -136,7 +136,7 @@ Use consecutive numbering and HH:MM:SS,mmm --> HH:MM:SS,mmm timestamps. Separate
      row.append(assemble,button('Preview SRT',async()=>{$('srt-preview').textContent=(await api('GET',`jobs/${j.id}/preview`)).text;if(j.method==='source-boundaries-v1')await showQuality(j.id);}),scenes,button('Save SRT as…',async()=>{const r=await window.studio.srtSave(j.id);say(r.canceled?'Save cancelled.':'SRT saved: '+r.path);}));
     }
     if(j.method==='source-boundaries-v1')row.append(button('Quality report',()=>showQuality(j.id)));
-    return row;
+    return window.studioTables?.jobRow(row,[j.title,j.cues||'—',j.state,j.model],j.id,j.state)||row;
    }));
  }
  function refreshPart(name,request,render){
@@ -193,7 +193,7 @@ Use consecutive numbering and HH:MM:SS,mmm --> HH:MM:SS,mmm timestamps. Separate
  });
  $('srt-open-chatgpt').onclick=()=>action(prepareTab);
  $('srt-open-extension').onclick=()=>action(()=>window.studio.chatgptAction('extension'));
- $('srt-workers').onclick=()=>document.querySelector('[data-page="settings"]').click();
+ $('srt-workers').onclick=()=>{document.querySelector('[data-page="projects"]').click();const panel=$('project-app-settings');panel.open=true;panel.scrollIntoView?.({block:'start'});};
  $('srt-form').onsubmit=e=>{e.preventDefault();return action(async()=>{
   upgradeLegacyPrompt();
   const source_id=$('srt-source').value,prompt=$('srt-prompt').value,model=$('srt-model').value.trim();

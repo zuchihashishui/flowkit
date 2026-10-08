@@ -67,7 +67,7 @@
   if(refreshing)return;
   refreshing=true;
   try {
-   const [state,audio]=await Promise.all([api('GET','status'),(window.workflow?.api||window.studio.api)('GET','/api/elevenlabs/jobs')]);
+   const [state,audio]=await Promise.all([api('GET','status'),(window.workflow?.api||window.studio.api)('GET','/api/elevenlabs/jobs').catch(error=>({jobs:[],sourceError:error.message}))]);
    splitSupported=state.transcript_split_version===1;
    const selected=wantedSource || $('wx-source').value;
    const sources=[...(audio.jobs || []).filter(j=>j.merged_url), ...(state.imported_sources || []).map(j=>({...j,title:'File: '+j.title}))];
@@ -87,6 +87,10 @@
     $('wx-auto').checked=false;loaded=true;
    }
    showActivity(state.jobs);
+   $('wx-worker-status').textContent=state.worker?.error?'Queue error: '+state.worker.error:state.worker?.running===false?'WhisperX queue worker is not running. Restart Studio/backend.':state.active_id&&activityJob?.state==='QUEUED'&&state.active_id!==activityJob.id?'Waiting: another video is using the transcription worker.':audio.sourceError?'Audio source list unavailable: '+audio.sourceError:'';
+   const log=$('wx-live-log'),atEnd=log.scrollHeight-log.scrollTop-log.clientHeight<40;
+   log.textContent=state.activity_log?.job_id===activityJob?.id?state.activity_log?.text||'Waiting for worker output.':'Waiting for worker output.';
+   if(atEnd)log.scrollTop=log.scrollHeight;
    $('wx-jobs').replaceChildren(...state.jobs.map(job=>{
     const row=document.createElement('div');row.className='job';
     const text=document.createElement('p');text.textContent=`${job.title} · ${job.state} · ${job.phase} · ${job.options.model} / ${job.options.device}`;
@@ -110,13 +114,14 @@
       await refresh();
      }));
     }
-    return row;
+    return window.studioTables?.jobRow(row,[job.title,job.options.model+' / '+job.options.device,job.state,job.phase],job.id,job.state)||row;
    }));
   }finally{refreshing=false;}
  }
  $('wx-form').onsubmit=e=>{e.preventDefault();return action(async()=>{
   if(!$('wx-source').value)throw Error('Select a merged narration or choose an audio file first.');
   if(!splitSupported)throw Error('Update the complete source and restart Studio/backend to save all three transcript files.');
+  say('Checking WhisperX environment and selected audio before starting…');
   await api('POST','jobs',{source_id:$('wx-source').value,...options()});
   say('Transcription queued. Studio will save the original, video and image JSON files. Follow the job stages below.');await refresh();
  });};
@@ -132,8 +137,9 @@
   }else {await api('POST','settings',{...options(),auto:false});say('Settings saved. Stages stay manual. Click Create word JSON when ready.');}
  });
  $('wx-check').onclick=()=>action(async()=>{
+  say('Checking Python, Torch and WhisperX imports (up to 90 seconds)…');
   $('wx-environment').textContent='Checking imports (up to 90 seconds)…';
-  try {const r=await api('POST','check',{});$('wx-environment').textContent=JSON.stringify(r,null,2);}
+  try {const r=await api('POST','check',{});$('wx-environment').textContent=JSON.stringify(r,null,2);say(r.ok?'WhisperX environment check passed.':r.error||'WhisperX environment check failed. See environment details.');}
   catch(e){$('wx-environment').textContent=e.message;throw e;}
  });
  $('wx-choose').onclick=()=>action(async()=>{

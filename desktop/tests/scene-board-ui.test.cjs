@@ -9,9 +9,10 @@ const record={video:{id:'v1',project_id:'p1',title:'Episode One'},document:{id:'
 function setup(api){
  const dom=new JSDOM('<button data-page="scene-board">Scene Board</button><section data-view="scene-board"><div id="scene-board"></div></section>',{runScripts:'outside-only',url:'http://localhost/'}),w=dom.window,$=id=>w.document.getElementById(id),previews=[],checks=[],urls=[];
  let context={project_id:'p1',video_id:'v1'};w.workflow={context:()=>({...context})};w.confirm=()=>true;w.URL.createObjectURL=()=>{const url='blob:test'+urls.length;urls.push(url);return url;};w.URL.revokeObjectURL=()=>{};
- w.studio={api,preview:async(id,index)=>{previews.push({id,index});return{bytes:new Uint8Array([1,2]),mime:'image/png',kind:'image'};}};
+ w.studio={api,openProjectPage:async()=>{},preview:async(id,index)=>{previews.push({id,index});return{bytes:new Uint8Array([1,2]),mime:'image/png',kind:'image'};}};
  w.production={check:async(...args)=>{checks.push(args);return true;}};w.projectSettings={assertSaved:()=>{}};w.selectProductionVideo=async()=>true;
- w.eval(fs.readFileSync(path.join(__dirname,'../ui/scene-board.js'),'utf8'));
+ w.eval(fs.readFileSync(path.join(__dirname,'../ui/data-table.js'),'utf8'));
+    w.eval(fs.readFileSync(path.join(__dirname,'../ui/scene-board.js'),'utf8'));
  return{dom,w,$,previews,checks,context:next=>{context=next;w.document.dispatchEvent(new w.CustomEvent('workflow-changed'));}};
 }
 test('scene board shows real current image thumbnails, retained older results, timings and safe narration text',async()=>{
@@ -66,7 +67,7 @@ test('Scene Board image settings are restored per video and default to video pro
 test('Scene Board does not generate with missing prompts, blocked preflight, or changed video',async()=>{
  let writes=0,resolveCheck;const doc=structuredClone(record),s=setup(async(method,route)=>{if(method==='POST')writes++;return route==='/api/models'?{}:doc;});
  try{doc.segments[1].ready=false;await s.w.sceneBoard.open();s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();assert.equal(writes,0);assert.match(s.$('scb-message').textContent,/current prompt/);
- doc.segments[1].ready=true;await s.w.sceneBoard.open();s.w.production.check=async()=>false;s.$('scb-generate').click();await tick();assert.equal(writes,0);
+ doc.segments[1].ready=true;await s.w.sceneBoard.open();s.w.production.check=async()=>false;s.$('scb-generate').click();await tick();assert.equal(writes,0);assert.match(s.$('scb-message').textContent,/Generation blocked/);await s.w.sceneBoard.open();assert.match(s.$('scb-message').textContent,/Generation blocked/);
  s.w.production.check=async()=>new Promise(r=>resolveCheck=r);s.$('scb-generate').click();await tick();s.context({project_id:'p1',video_id:'v2'});resolveCheck(true);await tick();assert.equal(writes,0);
  }finally{s.dom.window.close();}
 });
@@ -170,5 +171,44 @@ test('old manual duration is ignored and each video row previews its own SRT dur
   s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();
   assert.equal(writes.length,1);assert.equal(writes[0].duration_mode,'srt');assert.equal(writes[0].duration,undefined);assert.equal(writes[0].segment_ids.length,boundaries.length);
   assert.equal(JSON.parse(s.w.localStorage.getItem('flowkit.scene-board.v1/p1/v1')).duration,undefined);
+ }finally{s.dom.window.close();}
+});
+
+test('Generate opens saved Flow project before preflight and enqueue; opening failure stops submission',async()=>{
+ const events=[],s=setup(async(method,route)=>{if(method==='POST'){events.push('enqueue');return{ids:['new']};}return route==='/api/models'?{}:structuredClone(record);});
+ try{
+  s.w.studio.openProjectPage=async(pid,key)=>{assert.equal(pid,'p1');assert.equal(key,'google_flow_url');events.push('open');};
+  s.w.production.check=async()=>{events.push('check');return true;};
+  await s.w.sceneBoard.open();assert.deepEqual(events,[]);s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();await tick();
+  assert.deepEqual(events,['open','check','enqueue']);
+  events.length=0;s.w.studio.openProjectPage=async()=>{throw Error('Cannot open saved Flow URL');};
+  s.$('scb-generate').click();await tick();assert.deepEqual(events,[]);assert.match(s.$('scb-message').textContent,/Cannot open saved Flow URL/);
+ }finally{s.dom.window.close();}
+});
+
+for(const kind of ['image','video'])test('prompt cell edits full '+kind+' text and preserves the other prompt',async()=>{
+ const doc=mixedRecord(),writes=[];doc.segments[1].active_concept.image_prompt='Long image prompt\n'.repeat(300);doc.segments[1].active_concept.video_prompt='Long video prompt\n'.repeat(300);
+ const s=setup(async(method,route,body)=>{if(method==='POST'){writes.push({route,body:structuredClone(body)});return{id:'new-concept'};}return structuredClone(doc);});
+ try{
+  s.w.eval(fs.readFileSync(path.join(__dirname,'../ui/popups.js'),'utf8'));
+  await s.w.sceneBoard.open();const viewport=s.$('scb-table-scroll');viewport.scrollTop=340;
+  s.$('scb-rows').querySelector('[aria-label="Edit '+kind+' prompt for scene 2"]').click();await tick();
+  const popup=s.w.document.querySelector('.scene-prompt-popup[open]'),input=popup.querySelector('textarea');
+  assert.equal(input.value,doc.segments[1].active_concept[kind+'_prompt']);assert.equal(input.disabled,false);assert.equal(viewport.scrollTop,340);
+  input.value='Edited '+kind+'\n日本語';input.dispatchEvent(new s.w.Event('input'));
+  await s.w.sceneBoard.open();assert.equal(input.value,'Edited '+kind+'\n日本語','status refresh does not reset the draft');
+  popup.querySelector('form').dispatchEvent(new s.w.Event('submit',{cancelable:true}));await tick();
+  assert.equal(writes.length,1);assert.equal(writes[0].route,'/api/storyboard/segments/s2/concepts');
+  assert.equal(writes[0].body[kind+'_prompt'],'Edited '+kind+'\n日本語');const other=kind==='image'?'video':'image';assert.equal(writes[0].body[other+'_prompt'],doc.segments[1].active_concept[other+'_prompt']);
+  assert.equal(s.w.document.querySelector('.scene-prompt-popup'),null);assert.equal(viewport.scrollTop,340);
+ }finally{s.dom.window.close();}
+});
+test('prompt editor retains edits on save failure and confirms discard',async()=>{
+ const s=setup(async(method)=>{if(method==='POST')throw Error('Save failed');return mixedRecord();});
+ try{s.w.eval(fs.readFileSync(path.join(__dirname,'../ui/popups.js'),'utf8'));await s.w.sceneBoard.open();s.$('scb-rows').querySelector('[aria-label="Edit image prompt for scene 2"]').click();await tick();
+ const popup=s.w.document.querySelector('.scene-prompt-popup'),input=popup.querySelector('textarea');input.value='Keep draft';
+ popup.querySelector('form').dispatchEvent(new s.w.Event('submit',{cancelable:true}));await tick();assert.match(popup.textContent,/Save failed/);assert.equal(input.value,'Keep draft');assert.equal(input.disabled,false);
+ s.w.confirm=()=>false;assert.equal(s.w.sceneBoard.canChangeVideo(),false);assert.ok(popup.open);
+ s.w.confirm=()=>true;assert.equal(s.w.sceneBoard.canChangeVideo(),true);assert.equal(popup.isConnected,false);
  }finally{s.dom.window.close();}
 });

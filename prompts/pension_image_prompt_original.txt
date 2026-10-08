@@ -1574,82 +1574,64 @@ Clarity comes before decoration.
 One image communicates one core idea.
 
 ==================================================
-QUY TẮC ƯU TIÊN CHO NHIỀU SCENE VÀ XUẤT FILE ZIP
+QUY TẮC BỔ SUNG — MỖI MỤC MỘT FILE TXT, XUẤT ZIP
 ==================================================
 
-Nếu có mâu thuẫn với hướng dẫn phía trên, áp dụng phần này cho việc chia Scene, đặt tên file, tạo file và trả kết quả.
-Các nguyên tắc về phong cách, tính chính xác tài chính, nhân vật và thiết kế hình ảnh phía trên vẫn áp dụng cho từng Scene.
+Phần này chỉ bổ sung cách xử lý nhiều mục và giao file. Giữ nguyên các hướng dẫn về sáng tạo, phong cách, ngôn ngữ và cấu trúc nội dung phía trên. Nếu có mâu thuẫn về số Scene, số file, tên file hoặc cách trả kết quả, áp dụng phần bổ sung này.
 
-1. XÁC ĐỊNH ĐẦU VÀO
+1. Mỗi mục được đánh số trong nội dung người dùng gửi là một Scene độc lập. Áp dụng toàn bộ hướng dẫn gốc riêng cho từng mục. Quy định “chỉ thiết kế MỘT ảnh” phía trên áp dụng cho từng mục, không áp dụng cho toàn bộ danh sách.
 
-Nội dung cần xử lý được người dùng gửi riêng trong tin nhắn hoặc file nội dung đính kèm.
-File hướng dẫn này không phải nội dung Scene.
-Không sử dụng các ví dụ trong hướng dẫn làm Scene đầu vào.
+2. Tự đếm số mục đầu vào. Có bao nhiêu mục thì tạo đúng bấy nhiêu prompt ảnh và file TXT. Không gộp các mục; không tách một mục thành nhiều Scene, kể cả khi mục đó có nhiều câu hoặc xuống dòng.
 
-Mỗi mục có số thứ tự là một Scene độc lập.
-Một mục có thể chứa một hoặc nhiều câu, nhiều dòng; vẫn chỉ tạo một prompt ảnh.
-Không gộp nhiều mục. Không tự tách một mục thành nhiều Scene.
-Tự đếm tổng số mục thực tế; không mặc định là 3 hoặc bất kỳ số lượng cố định nào.
-Nếu chỉ có một đoạn nội dung không đánh số, coi là một Scene và đặt tên 1.txt.
-Nếu số thứ tự trùng lặp khiến hai mục có cùng tên file hoặc ranh giới mục không xác định được, yêu cầu làm rõ; không ghi đè hay âm thầm bỏ mục.
+3. Mỗi file chứa đầy đủ cấu trúc từ IMAGE TYPE đến NEGATIVE PROMPT theo hướng dẫn gốc, dành riêng cho mục tương ứng. Quy định bắt đầu và kết thúc output phía trên áp dụng cho nội dung của từng file TXT. Sau khi hoàn thành một file, tiếp tục các mục còn lại cho đến khi đủ.
 
-2. MỘT MỤC TƯƠNG ỨNG MỘT FILE
+4. Đặt tên file theo đúng số thứ tự đầu vào:
+Mục 1 → 1.txt.
+Mục 2 → 2.txt.
+Mục 001 → 001.txt.
+Mục 021 → 021.txt.
+Giữ nguyên số 0 ở đầu nếu có. Không đánh số lại từ đầu. Nếu số thứ tự bị trùng, yêu cầu làm rõ, không ghi đè hoặc bỏ mục.
 
-Giữ nguyên số thứ tự của đầu vào khi đặt tên file.
-Ví dụ: mục 1 tạo 1.txt; mục 2 tạo 2.txt; mục 3 tạo 3.txt.
-Nếu đầu vào là các mục 21, 22, 23 thì tạo 21.txt, 22.txt, 23.txt, không đánh lại từ 1.
-Nếu số thứ tự có số 0 ở đầu, giữ nguyên: mục 001 tạo 001.txt.
-Không thêm tiền tố Scene, prompt hoặc nội dung câu vào tên file.
+5. Tạo các file TXT thực tế, mã hóa UTF-8. Không chỉ hiển thị nội dung trong chat hoặc đưa mã để người dùng tự chạy.
 
-Số file TXT phải bằng số mục đầu vào, mỗi file chỉ chứa một prompt tương ứng.
-Không tạo thêm file tổng hợp, README hoặc file giải thích.
+6. Đóng gói tất cả các TXT của lần yêu cầu hiện tại vào một file image_prompts.zip. ZIP chứa trực tiếp các file TXT ở thư mục gốc, không có thư mục con, file tổng hợp hoặc file phụ.
 
-3. NGỮ CẢNH VÀ TÍNH ĐỘC LẬP
+7. Kiểm tra số file bằng số mục đầu vào; tên file khớp từng mục; mỗi file có đầy đủ AI IMAGE PROMPT và NEGATIVE PROMPT, đúng nội dung của mục tương ứng, đọc được bằng UTF-8; ZIP mở được. Sửa lỗi trước khi giao.
 
-Đọc toàn bộ danh sách để hiểu ngữ cảnh và giữ tính nhất quán.
-Mỗi Scene chỉ minh họa ý chính của mục tương ứng, không đưa toàn bộ nội dung các mục khác vào ảnh.
-Không tự bổ sung tình tiết hoặc dữ kiện tài chính ngoài đầu vào.
+8. Phản hồi cuối trong chat chỉ cần một câu ngắn và link tải image_prompts.zip. Không dán toàn bộ nội dung prompt vào chat. Quy định plain text phía trên áp dụng bên trong các TXT; link tải ZIP được phép dùng trong phản hồi cuối.
 
-Mỗi AI IMAGE PROMPT phải sử dụng độc lập được.
-Không tham chiếu “như ảnh trước”, “same character”, “same style”, “as above” hoặc yêu cầu đọc file khác.
-Khi có nhân vật, lặp lại đầy đủ CHARACTER CONSISTENCY PHRASE và mô tả cụ thể vị trí, kích thước, tư thế, biểu cảm, hướng nhìn.
-Khi không cần nhân vật, được dùng infographic không có nhân vật.
-Lặp lại đầy đủ mô tả phong cách và tỷ lệ ảnh trong từng AI IMAGE PROMPT.
-Giữ nhất quán thiết kế nhân vật, trang phục, bảng màu, nét vẽ và hệ thống icon nhưng không ép mọi Scene dùng cùng bố cục.
+9. Chỉ tạo prompt bằng văn bản, không tạo ảnh thực tế. Không dùng các ví dụ trong file hướng dẫn làm nội dung đầu vào. Không bịa file hoặc link tải nếu chưa tạo thành công.
 
-4. NGÔN NGỮ VÀ CẤU TRÚC
+==================================================
+BỔ SUNG — NGÔN NGỮ VÀ SỐ THỨ TỰ KHÔNG ĐƯỢC LẪN VÀO ẢNH
+==================================================
 
-Mỗi file phải có đầy đủ các trường theo OUTPUT FORMAT — STATIC IMAGE, từ IMAGE TYPE đến NEGATIVE PROMPT.
-AI IMAGE PROMPT viết bằng tiếng Anh, thành một mô tả hoàn chỉnh để dùng trực tiếp với công cụ tạo ảnh.
-NEGATIVE PROMPT viết bằng tiếng Anh và phù hợp với Scene.
-Các phần phân tích, bố cục và mô tả hỗ trợ viết bằng tiếng Việt, ngoại trừ nhãn trường chuẩn và mô tả nhân vật chuẩn bằng tiếng Anh.
-Chữ cần xuất hiện trong ảnh dùng tiếng Nhật, giữ ngắn và đúng nội dung.
-Nếu một trường không cần thiết, ghi None. Không bỏ trường.
-Không tạo ảnh, video hoặc gọi công cụ sinh ảnh trong nhiệm vụ này.
+1. Quy tắc tạo TXT và ZIP chỉ thay đổi cách lưu và giao file. Không dùng quy tắc này để thay đổi phong cách, bố cục, độ chi tiết hoặc cách xây dựng nội dung theo hướng dẫn gốc.
 
-5. TẠO FILE VÀ ĐÓNG GÓI
+2. Trong các file prompt ảnh đầu ra:
+- Giữ nguyên tên các trường bằng tiếng Anh theo mẫu gốc.
+- VISUAL FRAME và VISUAL MESSAGE viết bằng tiếng Nhật.
+- Các phần mô tả còn lại, AI IMAGE PROMPT và NEGATIVE PROMPT viết bằng tiếng Anh.
+- Chữ được yêu cầu xuất hiện trên ảnh chỉ dùng tiếng Nhật, cùng số liệu và ký hiệu thực sự cần thiết theo nội dung gốc.
+- Không viết tiếng Việt trong file prompt ảnh đầu ra.
 
-Tạo các file TXT thực tế, mã hóa UTF-8, không chỉ mô phỏng tên file trong tin nhắn.
-Đóng gói toàn bộ file TXT thành một file image_prompts.zip.
-Các file TXT phải nằm trực tiếp ở thư mục gốc của ZIP.
-Không có thư mục con, file ẩn, file phụ, mã xử lý hoặc bản tổng hợp trong ZIP.
-Thêm các file vào ZIP theo thứ tự các mục đầu vào.
-Nếu xử lý nội bộ theo nhiều nhóm, vẫn phải hoàn thành đủ tất cả các mục trước khi trả ZIP cuối cùng; không coi một nhóm là kết quả đầy đủ.
+3. Số thứ tự đầu vào chỉ dùng để đặt tên file và đối chiếu Scene.
+Ví dụ: mục 021 → 021.txt.
+Không chèn 021, SCENE 021 hoặc số thứ tự tương tự vào VISUAL FRAME, tiêu đề ảnh, nhãn trên ảnh hoặc nội dung AI IMAGE PROMPT.
+Quy định này không cấm các số liệu thực tế có trong nội dung cần minh họa.
 
-6. KIỂM TRA TRƯỚC KHI TRẢ KẾT QUẢ
+4. VISUAL FRAME chỉ chứa tên ngắn bằng tiếng Nhật, không có tiền tố số thứ tự.
+VISUAL FRAME là thông tin mô tả, không mặc định là chữ phải xuất hiện trên ảnh.
+Chỉ đưa tên này lên ảnh nếu nó được chỉ định rõ trong TEXT ON IMAGE.
 
-Xác nhận số file TXT bằng số mục đầu vào.
-Xác nhận tên file khớp chính xác với số thứ tự từng mục.
-Xác nhận mỗi file minh họa đúng nội dung của mục tương ứng, không vô tình sao chép toàn bộ prompt của mục khác. Các mô tả nhân vật và phong cách được phép lặp lại để giữ nhất quán.
-Xác nhận mọi file có đủ cấu trúc, đặc biệt AI IMAGE PROMPT và NEGATIVE PROMPT.
-Xác nhận từng AI IMAGE PROMPT là độc lập, không dùng tham chiếu tới Scene khác.
-Xác nhận không có số tiền, tỷ lệ hoặc thời điểm bị tự bịa.
-Xác nhận mọi file đọc được bằng UTF-8 và ZIP mở được, có đúng danh sách file yêu cầu.
-Nếu phát hiện thiếu hoặc sai, sửa trước khi trả kết quả.
+5. TEXT ON IMAGE là danh sách đầy đủ các chữ được phép xuất hiện trên ảnh. AI IMAGE PROMPT phải nhắc lại chính xác các chữ đó và vị trí của chúng. Không tự đưa tên trường, phần giải thích hoặc tên file lên ảnh.
 
-7. PHẢN HỒI CUỐI
+6. Cuối mỗi AI IMAGE PROMPT, thêm:
+Render only the exact Japanese text explicitly specified in TEXT ON IMAGE, together with any explicitly specified numerical values and symbols. All other content is instruction, not visible text. Do not render Vietnamese text, field headings, scene identifiers, filenames, or descriptive metadata.
 
-Chỉ trả một câu ngắn thông báo đã tạo bao nhiêu file TXT và link tải image_prompts.zip.
-Không dán toàn bộ prompt vào tin nhắn.
-Không chỉ cung cấp hướng dẫn hoặc mã để người dùng tự chạy.
-Không bịa file hoặc link tải. Nếu không thể tạo file thực tế, thông báo rõ thay vì tuyên bố hoàn thành.
+7. Bổ sung vào NEGATIVE PROMPT:
+Vietnamese text, visible scene identifiers, filenames, prompt field headings, instruction text rendered on the image
+
+8. Trước khi tạo ZIP, kiểm tra từng TXT: không có tiếng Việt, VISUAL FRAME không chứa số thứ tự Scene, và chữ được yêu cầu trong AI IMAGE PROMPT khớp chính xác TEXT ON IMAGE.
+
+Phần bổ sung này được ưu tiên nếu có hướng dẫn khác yêu cầu viết tiếng Việt trong file prompt ảnh đầu ra.
