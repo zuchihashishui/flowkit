@@ -137,11 +137,12 @@ def resolve(context=None, sources=(), parents=None):
     return context
 
 
-def catalog():
+def catalog(filters=None):
     result = []
     for kind, (service, table) in providers().items():
+        where, params = job_filter(kind, 'id', filters)
         with service.db() as db:
-            result.extend(describe(db, kind, row) for row in db.execute(f'SELECT * FROM {table} ORDER BY created DESC'))
+            result.extend(describe(db, kind, row) for row in db.execute(f'SELECT * FROM {table} {where} ORDER BY created DESC', params))
     result.sort(key=lambda r: r['created'] or 0, reverse=True)
     return result
 

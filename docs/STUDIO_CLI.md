@@ -80,7 +80,7 @@ Mixed scenes, video for cues whose start is before 100 seconds and images for th
 "assembly": {"image_motion": "zoom_out"}
 ```
 
-Alternatively specify `"video_scene_ordinals": [1, 2, 5]` instead of the cutoff. These are SRT scene numbers. No unrelated video intro is added. Clips shorter than a scene use the assembly `clip_end` choice (`freeze` or `loop`). The generated media duration still follows Flow's supported durations.
+Alternatively specify `"video_scene_ordinals": [1, 2, 5]` instead of the cutoff. These are SRT scene numbers. No unrelated video intro is added. Clips shorter than a scene use the assembly `clip_end` choice (`slow` by default, or `freeze` / `loop`). The generated media duration still follows Flow's supported durations.
 
 Allowed override groups:
 

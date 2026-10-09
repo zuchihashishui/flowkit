@@ -242,7 +242,7 @@ def validate_options(config):
         'whisperx': {'model': {'tiny','base','small','medium','large-v2','large-v3'}, 'device': {'auto','cpu','cuda'}},
         'media': {'orientation': {'HORIZONTAL','VERTICAL'}, 'duration_mode': {'manual','srt'}, 'duration': {4,6,8,10}},
         'assembly': {'size': {'1080p','720p','vertical'}, 'fps': {24,30,60}, 'fit': {'fit','crop'},
-            'image_motion': {'none','zoom_in','zoom_out'}, 'subtitles': {'burn','soft','off'}, 'clip_end': {'freeze','loop'}},
+            'image_motion': {'none','zoom_in','zoom_out'}, 'subtitles': {'burn','soft','off'}, 'clip_end': {'slow','freeze','loop'}},
     }
     for group, fields in choices.items():
         for name, allowed in fields.items():

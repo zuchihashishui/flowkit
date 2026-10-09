@@ -45,7 +45,8 @@ async def check(service, body):
             if scene['kind'] == 'video':
                 target = scene['frames']/body['fps']
                 if info['duration']+.001 < target:
-                    messages.append(f"Clip {info['duration']:.3f}s → scene {target:.3f}s: {'loop' if body.get('clip_end')=='loop' else 'hold last frame'}.");status='WARNING'
+                    action = {'slow': f"slow down to {info['duration']/target:.3f}x speed", 'loop': 'loop', 'freeze': 'hold last frame'}[plan['clip_end']]
+                    messages.append(f"Clip {info['duration']:.3f}s → scene {target:.3f}s: {action}.");status='WARNING'
                 elif info['duration'] > target+.001:
                     messages.append(f"Trim clip {info['duration']:.3f}s to {target:.3f}s.")
             if not messages:messages.append('File is readable and ready.')

@@ -124,9 +124,10 @@ class AssemblyService:
         finally:
             db.close()
 
-    def assets(self):
+    def assets(self, filters=None):
+        where, params = scope.job_filter('asset', 'id', filters)
         with self.db() as db:
-            return [{**dict(r), 'metadata': json.loads(r['metadata'])} for r in db.execute('SELECT * FROM assembly_assets ORDER BY created DESC')]
+            return [{**dict(r), 'metadata': json.loads(r['metadata'])} for r in db.execute(f'SELECT * FROM assembly_assets {where} ORDER BY created DESC', params)]
 
     def asset(self, aid, kind=None):
         with self.db() as db:
@@ -253,6 +254,9 @@ class AssemblyService:
             return await self.import_upload(kind, Reader(), context, [parent])
 
     def plan(self, body):
+        clip_end = body.get('clip_end', 'slow')
+        if clip_end not in {'slow', 'freeze', 'loop'}:
+            raise ValueError('Choose Slow down to fit, Hold last frame or Loop clip.')
         image_motion = body.get('image_motion', 'none')
         if image_motion not in {'none', 'zoom_in', 'zoom_out'}:
             raise ValueError('Choose None, Slow zoom in or Slow zoom out for still images.')
@@ -297,21 +301,25 @@ class AssemblyService:
             asset = assets.get(aid, {})
             kind = asset.get('kind')
             clip_action = None
+            playback_speed = 1.0
             if kind == 'video':
-                clip_action = body.get('clip_end', 'freeze') if asset['metadata']['duration'] < (end-start)/body['fps'] else 'trim'
+                clip_action = clip_end if asset['metadata']['duration'] < (end-start)/body['fps'] else 'trim'
                 if clip_action != 'trim':
-                    warnings.append(f'Scene {key}: short clip will {"hold its last frame" if clip_action == "freeze" else "loop"}.')
+                    if clip_action == 'slow':
+                        playback_speed = asset['metadata']['duration'] / ((end-start)/body['fps'])
+                    action = {'slow': f'slow down to {playback_speed:.3f}x speed', 'freeze': 'hold its last frame', 'loop': 'loop'}[clip_action]
+                    warnings.append(f'Scene {key}: short clip will {action}.')
             scenes.append({**cue, 'scene_key': key, 'asset_id': aid, 'kind': kind, 'allowed_kind': 'image' if mode == 'images' else 'any',
-                'image_id': aid if kind == 'image' else None, 'clip_action': clip_action,
+                'image_id': aid if kind == 'image' else None, 'clip_action': clip_action, 'playback_speed': playback_speed,
                 'image_motion': image_motion if kind == 'image' else 'none',
                 'start_frame': start, 'frames': end-start, 'visual_start': start/body['fps'], 'visual_end': end/body['fps'],
                 'image_start': start/body['fps'], 'image_end': end/body['fps']})
         used = {c['asset_id'] for c in scenes}
-        return {**body, 'image_motion': image_motion, 'duration': duration, 'audio_title': audio['title'], 'srt_title': subtitle['title'],
+        return {**body, 'clip_end': clip_end, 'image_motion': image_motion, 'duration': duration, 'audio_title': audio['title'], 'srt_title': subtitle['title'],
             'scenes': scenes, 'missing': [c['index'] for c in scenes if not c['asset_id']],
             'unused': [a['title'] for a in visuals if a['id'] not in used], 'warnings': warnings,
             'timeline_note': 'Each SRT scene uses one image or video. Visuals cover the full narration; each stays until the next cue starts. The SRT is unchanged. Boundaries are rounded to the frame rate. Clip audio is muted; only narration is used.' +
-                (f' Still images use slow zoom {"in" if image_motion == "zoom_in" else "out"}; video clips keep their original motion.' if image_motion != 'none' else '')}
+                (f' Still images use slow zoom {"in" if image_motion == "zoom_in" else "out"}; zoom applies only to still images.' if image_motion != 'none' else '')}
 
     def enqueue(self, body, context=None):
         plan = self.plan(body)
@@ -372,6 +380,8 @@ class AssemblyService:
 
     async def render(self, jid, plan):
         from agent.services.assembly_preflight import check
+        # Saved jobs from before clip options existed retain their original behavior.
+        plan = {**plan, 'clip_end': plan.get('clip_end', 'freeze')}
         checked = await check(self, plan)
         if checked['blocked']:
             raise ValueError('Preflight failed: ' + '; '.join(m for c in checked['checks'] if c['status']=='ERROR' for m in c['messages']))
@@ -410,10 +420,17 @@ class AssemblyService:
                 elif plan.get('clip_end', 'freeze') == 'loop':
                     args += ['-stream_loop', '-1']
                 args += ['-i', self.path(asset), '-map', '0:v:0', '-an', '-sn', '-dn']
-                vf = f"setpts=PTS-STARTPTS,{scale},fps={plan['fps']},format=yuv420p"
+                pts = 'PTS-STARTPTS'
+                if cue['kind'] == 'video' and plan['clip_end'] == 'slow':
+                    source_duration = next(c['duration'] for c in checked['checks'] if c.get('asset_id') == asset['id'])
+                    stretch = max(1.0, (cue['frames']/plan['fps']) / source_duration)
+                    pts = f'(PTS-STARTPTS)*{stretch:.12f}'
+                vf = f"setpts={pts},{scale},fps={plan['fps']},format=yuv420p"
                 if cue['kind'] == 'image' and plan.get('image_motion', 'none') != 'none':
                     vf = image_motion_filter(width, height, plan['fps'], cue['frames'], mode, plan['image_motion'])
-                if cue['kind'] == 'video' and plan.get('clip_end', 'freeze') == 'freeze':
+                if cue['kind'] == 'video' and plan['clip_end'] in {'slow', 'freeze'}:
+                    # After slowing, cover any final fractional-frame gap. The
+                    # frame limit below still fixes the exact scene boundary.
                     vf += f",tpad=stop_mode=clone:stop_duration={cue['frames']/plan['fps']}"
                 args += ['-vf', vf, '-filter_threads', '2', '-frames:v', str(cue['frames']),
                          '-c:v', 'libx264', '-preset', 'fast', '-crf', '20', '-threads', '4',

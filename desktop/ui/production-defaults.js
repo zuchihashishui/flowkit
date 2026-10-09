@@ -33,7 +33,7 @@
   el.value=value;return changed;
  }
  function resolved(id){
-  if(Object.hasOwn(edits,id))return edits[id];
+  if(Object.hasOwn(edits,id)&&!(id==='srt-prompt'&&window.projectInstructions))return edits[id];
   if(content.includes(id))return '';
   const route=fields[id],value=effective[route[0]]?.[route[1]];
   return id==='srt-prompt'&&!value?baseline[id]:(value??baseline[id]);

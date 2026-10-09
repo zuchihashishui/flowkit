@@ -147,7 +147,7 @@ test('SRT video duration and regeneration keep active jobs and originals protect
  const data=mixedRecord(),writes=[];data.segments[0].media_jobs=[{id:'active',kind:'image',current:true,state:'RUNNING',files:[]}];data.segments[1].media_jobs=[{id:'done',kind:'video',current:true,state:'COMPLETED',files:['clip.mp4']}];
  const s=setup(async(method,_route,body)=>{if(method==='POST'){writes.push(body);return{ids:['new'],skipped:[],durations:[{short:true}]};}return data;});
  try{await s.w.sceneBoard.open();setSceneKind(s,'s2','video');s.$('scb-select-filtered').click();s.$('scb-regenerate').checked=true;s.$('scb-generate').click();await tick();
- assert.equal(writes.length,1);assert.deepEqual(Array.from(writes[0].segment_ids),['s2']);assert.equal(writes[0].duration,undefined);assert.equal(writes[0].duration_mode,'srt');assert.equal(writes[0].regenerate,true);assert.match(s.$('scb-message').textContent,/1 scenes skipped/);assert.match(s.$('scb-message').textContent,/hold\/loop/);
+ assert.equal(writes.length,1);assert.deepEqual(Array.from(writes[0].segment_ids),['s2']);assert.equal(writes[0].duration,undefined);assert.equal(writes[0].duration_mode,'srt');assert.equal(writes[0].regenerate,true);assert.match(s.$('scb-message').textContent,/1 scenes skipped/);assert.match(s.$('scb-message').textContent,/Slow down to fit/);
  }finally{s.dom.window.close();}
 });
 test('a second-group error reports confirmed jobs and never automatically resubmits them',async()=>{
@@ -210,5 +210,48 @@ test('prompt editor retains edits on save failure and confirms discard',async()=
  popup.querySelector('form').dispatchEvent(new s.w.Event('submit',{cancelable:true}));await tick();assert.match(popup.textContent,/Save failed/);assert.equal(input.value,'Keep draft');assert.equal(input.disabled,false);
  s.w.confirm=()=>false;assert.equal(s.w.sceneBoard.canChangeVideo(),false);assert.ok(popup.open);
  s.w.confirm=()=>true;assert.equal(s.w.sceneBoard.canChangeVideo(),true);assert.equal(popup.isConnected,false);
+ }finally{s.dom.window.close();}
+});
+
+test('saved SRT types seed media choices and submit image plus duration-based video groups',async()=>{
+ const data=mixedRecord(),writes=[];data.document.prompt_options={video_row_count:1,row_instructions:{s2:'image'}};
+ data.segments[0].active_concept.video_prompt='Video scene one';
+ const s=setup(async(method,route,body)=>{if(method==='POST'){writes.push(structuredClone(body));return {ids:[body.kind],skipped:[]};}return structuredClone(data);});
+ try{await s.w.sceneBoard.open();
+  assert.deepEqual([...s.$('scb-rows').querySelectorAll('[data-scene-kind]')].map(e=>e.value),['video','image']);
+  s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();
+  assert.deepEqual(writes.map(b=>[b.kind,Array.from(b.segment_ids)]),[['image',['s2']],['video',['s1']]]);
+  assert.equal(writes[1].duration_mode,'srt');
+ }finally{s.dom.window.close();}
+});
+test('explicit image/video types and duration-specific choices override the first-row default',async()=>{
+ const data=mixedRecord();data.document.prompt_options={video_row_count:15,row_instructions:{s1:'image',s2:'video_10s'}};
+ const s=setup(async()=>structuredClone(data));
+ try{await s.w.sceneBoard.open();assert.deepEqual([...s.$('scb-rows').querySelectorAll('[data-scene-kind]')].map(e=>e.value),['image','video']);
+  data.document.prompt_options={video_row_count:0,row_instructions:{s1:'video',s2:'image'}};await s.w.sceneBoard.open();
+  assert.deepEqual([...s.$('scb-rows').querySelectorAll('[data-scene-kind]')].map(e=>e.value),['video','image']);
+ }finally{s.dom.window.close();}
+});
+test('manual media overrides persist but upstream type changes take precedence',async()=>{
+ const data=mixedRecord();data.document.prompt_options={video_row_count:0,row_instructions:{s1:'video',s2:'image'}};
+ const s=setup(async()=>structuredClone(data));
+ try{await s.w.sceneBoard.open();setSceneKind(s,'s1','image');setSceneKind(s,'s2','video');await s.w.sceneBoard.open();
+  assert.deepEqual([...s.$('scb-rows').querySelectorAll('[data-scene-kind]')].map(e=>e.value),['image','video']);
+  data.document.prompt_options.row_instructions={s1:'image',s2:'video'};await s.w.sceneBoard.open();
+  assert.deepEqual(JSON.parse(s.w.localStorage.getItem('flowkit.scene-board.v1/p1/v1')).media_types,{});
+  data.document.prompt_options.row_instructions={s1:'video',s2:'image'};await s.w.sceneBoard.open();
+  assert.deepEqual([...s.$('scb-rows').querySelectorAll('[data-scene-kind]')].map(e=>e.value),['video','image']);
+ }finally{s.dom.window.close();}
+});
+
+test('loaded document types take priority over top-level fallback settings',async()=>{
+ const data=mixedRecord();data.prompt_options={video_row_count:0,row_instructions:{}};
+ data.document.prompt_options={video_row_count:15,row_instructions:{s2:'image'}};
+ const s=setup(async()=>structuredClone(data));
+ try{
+  s.w.localStorage.setItem('flowkit.scene-board.v1/p1/v1',JSON.stringify({media_types:{},media_sources:{s1:'image',s2:'image'}}));
+  await s.w.sceneBoard.open();
+  assert.deepEqual([...s.$('scb-rows').querySelectorAll('[data-scene-kind]')].map(e=>e.value),['video','image']);
+  assert.equal(s.$('scb-rows').querySelector('[data-scene-duration="s1"]').textContent,'Video: 6s');
  }finally{s.dom.window.close();}
 });

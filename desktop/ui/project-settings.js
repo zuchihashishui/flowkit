@@ -6,7 +6,7 @@
    ['model','Model','text','Eleven v4',100],['expected_voice','Expected voice label (optional)','text','',200],
    ['max_chunk_characters','Maximum characters per chunk','number',3000,100,3000]
   ],'Choose the voice on ElevenLabs, or use a supported voice parameter in its saved URL. The optional label checks the selected voice; it does not select a voice.'],
-  ['whisperx','WhisperX',[
+  ['whisperx','Speech to JSON',[
    ['model','Speech model',['tiny','base','small','medium','large-v2','large-v3'],'large-v3'],
    ['device','Device',['cuda','cpu','auto'],'cuda'],['language','Language code (blank = detect)','text','',3],
    ['batch_size','Batch size','number',8,1,32],['video_duration_seconds','Video transcript boundary (seconds)','number',100,0,86400]
@@ -28,6 +28,7 @@
  function createEditor(host,prefix,partial=false){
   const controls=[],sections=[];let locked=false;
   for(const [section,title,fields,note] of definitions){
+   if(section==='srt'&&window.projectInstructionEditor)continue;
    const box=node('fieldset'),legend=node('legend',title),grid=node('div');grid.className='grid two';box.append(legend);
    if(note)box.append(node('p',note));
    for(const [key,label,type,defaultValue,min,max] of fields){
@@ -60,16 +61,17 @@
  window.productionSettingsEditor={create:createEditor};
  const form=$('project-settings-form');if(!form)return;
  let host=$('ps-production');if(!host){host=node('div');host.id='ps-production';form.append(host);}
+ const instructions=window.projectInstructionEditor?.create(form);
  const editor=createEditor(host,'ps'),message=text=>{$('ps-message').textContent=text;};
- let owner='',revision=0,dirty=false,busy=false,ticket=0;
+ let owner='',revision=0,dirty=false,busy=false,ticket=0,production={};
  function lock(value){for(const el of form.querySelectorAll('input,button,select,textarea'))el.disabled=value;editor.lock(value);}
  async function load(pid){
-  const turn=++ticket;owner=pid;dirty=false;revision=0;lock(true);editor.reset();for(const k of keys)$('ps-'+k).value='';
+  const turn=++ticket;owner=pid;dirty=false;revision=0;lock(true);editor.reset();instructions?.load(null,pid);for(const k of keys)$('ps-'+k).value='';
   if(!pid){message('Select a project to edit its settings.');return;}
   try{
    const settings=await window.studio.api('GET','/api/projects/'+pid+'/settings');
    if(turn!==ticket)return;
-   for(const k of keys)$('ps-'+k).value=settings[k];revision=settings.revision;editor.load(settings.production||{});
+   for(const k of keys)$('ps-'+k).value=settings[k];revision=settings.revision;production=settings.production||{};editor.load(production);instructions?.load(settings.instruction_files,pid);
    message('Saved project settings · Revision '+revision);lock(false);
   }catch(e){if(turn===ticket){message(e.message);$('ps-reload').disabled=false;}}
  }
@@ -77,11 +79,11 @@
  form.onchange=form.oninput;
  form.onsubmit=async event=>{
   event.preventDefault();if(busy||!owner)return;
-  const body={revision,production:editor.read()};for(const k of keys)body[k]=$('ps-'+k).value.trim();
+  const body={revision,production:{...production,...editor.read()}};const instructionUpdate=instructions?.read();if(instructionUpdate)body.instruction_update=instructionUpdate;for(const k of keys)body[k]=$('ps-'+k).value.trim();
   busy=true;lock(true);const pid=owner;
   try{
    const saved=await window.studio.api('PUT','/api/projects/'+pid+'/settings',body);
-   revision=saved.revision;dirty=false;editor.load(saved.production||body.production);
+   revision=saved.revision;dirty=false;production=saved.production||body.production;editor.load(production);instructions?.load(saved.instruction_files,pid);
    message('Saved for every video in this project. Video overrides and existing jobs are preserved.');
    document.dispatchEvent(new CustomEvent('project-settings-saved',{detail:{project_id:pid,settings:saved}}));
   }catch(e){message(e.message);}finally{busy=false;lock(false);}

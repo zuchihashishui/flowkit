@@ -50,7 +50,7 @@ test('video is optional; clip-only and mixed requests include media settings and
  assert.equal($('va-video-options').hidden,false);assert.equal($('va-intro-options'),null);
  await $('va-import-videos').onclick();await $('va-preview').onclick();
  const request=calls.filter(c=>c.url==='/api/assembly/preview').at(-1).body;
- assert.deepEqual(request.image_ids,[]);assert.deepEqual(request.video_ids,['v1']);assert.equal(request.clip_end,'freeze');
+ assert.deepEqual(request.image_ids,[]);assert.deepEqual(request.video_ids,['v1']);assert.equal(request.clip_end,'slow');
  assert.equal($('va-render').disabled,false);
  await $('va-scenes').querySelector('button').onclick();assert.equal($('va-clip-preview').hidden,false);
  assert.equal(calls.at(-1).action,'clip-preview');
@@ -175,4 +175,16 @@ test('upgrade disables legacy subtitles, sends the selected mode to render, and 
  const savedDraft=JSON.parse(w.localStorage.getItem('assembly-draft:legacy'));dom.window.close();
  const reopened=setup({savedDraft,productionDefaults:{subtitles:'off'}});
  await reopened.$('va-refresh').onclick();assert.equal(reopened.$('va-subtitles').value,'soft');reopened.dom.window.close();
+});
+
+for(const mode of ['slow','freeze','loop'])test('clip option persists after choosing '+mode,async()=>{
+ const {dom,w,$}=setup({savedDraft:{'clip-end':mode,_clip_options_version:1}});
+ await $('va-refresh').onclick();assert.equal($('va-clip-end').value,mode);
+ assert.deepEqual([...$('va-clip-end').options].map(o=>o.value),['slow','freeze','loop']);
+ $('va-clip-end').dispatchEvent(new w.Event('change'));
+ assert.equal(JSON.parse(w.localStorage.getItem('assembly-draft:legacy'))['clip-end'],mode);dom.window.close();
+});
+test('old clip draft switches to slow once',async()=>{
+ const {dom,$}=setup({savedDraft:{'clip-end':'freeze'}});
+ await $('va-refresh').onclick();assert.equal($('va-clip-end').value,'slow');dom.window.close();
 });

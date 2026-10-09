@@ -382,6 +382,7 @@ async def duplicate_project(project_id, name):
             raise ValueError('Project not found.')
         settings = await project_settings.get(project_id)
         settings.pop('revision', None)
+        shared_instructions = settings.pop('instruction_files', None)
         url = settings['google_flow_url']
         effective_remote = project_settings.flow_project(url, project_id)
         if '/project/' not in url:
@@ -397,6 +398,11 @@ async def duplicate_project(project_id, name):
         try:
             await db.execute('INSERT INTO project(id,name,' + ','.join(fields) + ') VALUES(' + ','.join('?' for _ in range(len(fields)+2)) + ')', (new_id, name, *(source[k] for k in fields)))
             await db.execute('INSERT INTO project_settings(project_id,value,revision) VALUES(?,?,1)', (new_id, json.dumps(settings)))
+            if shared_instructions and shared_instructions['configured']:
+                from agent.services import project_instructions
+                fresh = await asyncio.to_thread(project_instructions.read, new_id, name)
+                await asyncio.to_thread(project_instructions.write, new_id, name, project_instructions.InstructionUpdate(
+                    revision=fresh['revision'], templates={k: v['text'] for k, v in shared_instructions['templates'].items()}))
             await db.commit()
         except BaseException:
             await db.rollback()

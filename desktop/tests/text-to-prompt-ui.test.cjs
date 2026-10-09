@@ -9,6 +9,7 @@ test('SRT + TXT import, row filters, errors, retry and selection survive refresh
  w.action=async fn=>{try{return await fn();}catch(error){notices.push(error.message);}};
  w.api=async(method,route,body)=>{
   calls.push({method,route,body});
+  if(route.endsWith('/saved-srt'))return {name:'saved.srt',text:'Saved SRT',source_kind:'srt',source_id:'source1'};
   if(route.endsWith('/restart-text'))return {ok:true};
   if(route==='/api/chatgpt/status')return {available:true,extensionConnected:true,workers:[{id:'worker-1',tabId:101,state:'RUNNING',progress:{phase:'ATTACHING_FILE'}},{id:'worker-2',tabId:102,state:'RUNNING',progress:{phase:'WAITING_SETUP'}},{id:'worker-3',tabId:103,state:'NEEDS_REVIEW',error:'Upload failed <script>unsafe()</script>'}]};
   if(route.startsWith('/api/videos'))return [data.video];
@@ -29,6 +30,7 @@ test('SRT + TXT import, row filters, errors, retry and selection survive refresh
  $('project-select').append(w.option('p1','Project'));$('project-select').value='p1';$('video-select').append(w.option('v1','Video'));$('video-select').value='v1';
  try{
   new vm.Script(fs.readFileSync(path.join(__dirname,'../ui/storyboard.js'),'utf8')).runInContext(dom.getInternalVMContext());await w.storyboard.open();
+  assert.equal($('sb-srt-file').textContent,'saved.srt · Auto-loaded');
   assert.equal($('sb-provider').querySelector('option[value="chatgpt-web"]'),null);
   await $('sb-choose-srt').onclick();await $('sb-choose-prompt').onclick();
   $('sb-inputs').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();

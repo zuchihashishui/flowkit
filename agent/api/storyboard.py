@@ -155,7 +155,34 @@ async def save_document(video_id: str, body: DocumentBody):
     return await read_document(video_id)
 
 
+@router.get('/videos/{video_id}/saved-srt')
+async def saved_srt(video_id: str):
+    """Offer an existing source without replacing saved scenes."""
+    from agent.services import workflow_scope as scope
+    from agent.api.srt import service as srt
+    from agent.api.assembly import service as assembly
+    video = await one('SELECT id,project_id FROM video WHERE id=?', (video_id,))
+    ctx = {'project_id': video['project_id'], 'video_id': video_id}
+    for item in scope.select(scope.catalog(), **ctx):
+        kind = item['resource_kind']
+        if not (kind == 'srt' and item['state'] == 'COMPLETED' or kind == 'asset' and item['asset_type'] == 'srt'):
+            continue
+        try:
+            path = srt.result_path(item['id'], require_approved=True) if kind == 'srt' else assembly.path(assembly.asset(item['id'], 'srt'))
+            if path.stat().st_size > 2000000:
+                continue
+            text = path.read_text(encoding='utf-8-sig')
+            parse_segments(ImportBody(format='srt', content=text))
+            return {'name': (item['title'] or 'scenes')[:251] + ('' if (item['title'] or '').lower().endswith('.srt') else '.srt'),
+                    'text': text, 'source_kind': kind, 'source_id': item['id']}
+        except (ValueError, OSError, UnicodeError):
+            continue
+    return None
+
+
 class PromptInputBody(BaseModel):
+    source_kind: Literal['srt', 'asset'] | None = None
+    source_id: str | None = None
     srt_content: str = Field(min_length=1, max_length=2000000)
     srt_name: str = Field(min_length=1, max_length=255)
     prompt_template: str = Field(min_length=1, max_length=100000)
@@ -166,6 +193,20 @@ class PromptInputBody(BaseModel):
 async def import_prompt_input(video_id: str, body: PromptInputBody):
     """Import the two inputs atomically, preserving one row per SRT cue."""
     await one('SELECT id FROM video WHERE id=?', (video_id,))
+    if body.source_kind or body.source_id:
+        from agent.services import workflow_scope as scope
+        from agent.api.srt import service as srt
+        from agent.api.assembly import service as assembly
+        video = await one('SELECT project_id FROM video WHERE id=?', (video_id,))
+        try:
+            if not body.source_kind or not body.source_id:
+                raise ValueError('Incomplete SRT source.')
+            scope.resolve({'project_id': video['project_id'], 'video_id': video_id}, [scope.ref(body.source_kind, body.source_id)])
+            source_path = srt.result_path(body.source_id, require_approved=True) if body.source_kind == 'srt' else assembly.path(assembly.asset(body.source_id, 'srt'))
+            if source_path.read_text(encoding='utf-8-sig') != body.srt_content:
+                raise ValueError('The saved SRT changed. Reopen SRT to Prompt to reload it.')
+        except (ValueError, OSError) as exc:
+            raise HTTPException(409, str(exc)) from exc
     if not body.prompt_template.strip():
         raise HTTPException(400, 'The prompt TXT is empty.')
     try:
@@ -183,7 +224,7 @@ async def import_prompt_input(video_id: str, body: PromptInputBody):
             doc = {'id': uid()}
             await db.execute('INSERT INTO script_document(id,video_id,created,updated) VALUES(?,?,?,?)', (doc['id'], video_id, time.time(), time.time()))
         await db.executemany('INSERT INTO script_segment(id,document_id,ordinal,start_ms,end_ms,text) VALUES(?,?,?,?,?,?)', [(uid(), doc['id'], i+1, s.start_ms, s.end_ms, s.text) for i, s in enumerate(items)])
-        await db.execute('INSERT INTO document_source VALUES(?,?,?,?,?)', (doc['id'], 'external', None, body.srt_content, time.time()))
+        await db.execute('INSERT INTO document_source VALUES(?,?,?,?,?)', (doc['id'], body.source_kind or 'external', body.source_id, body.srt_content, time.time()))
         await db.execute('INSERT INTO text_prompt_input VALUES(?,?,?,?) ON CONFLICT(document_id) DO UPDATE SET prompt_template=excluded.prompt_template,prompt_name=excluded.prompt_name,srt_name=excluded.srt_name', (doc['id'], body.prompt_template, body.prompt_name, body.srt_name))
     return await read_document(video_id)
 
@@ -224,6 +265,13 @@ async def read_document(video_id: str):
     segments = await query('SELECT * FROM script_segment WHERE document_id=? ORDER BY ordinal', (doc['id'],))
     concepts = await query('SELECT c.* FROM scene_concept c JOIN script_segment s ON s.id=c.segment_id WHERE s.document_id=? ORDER BY c.version DESC', (doc['id'],))
     jobs = await query('SELECT j.id,j.segment_id,j.state,j.error,j.created,j.payload FROM concept_job j JOIN script_segment s ON s.id=j.segment_id WHERE s.document_id=? ORDER BY j.created DESC', (doc['id'],))
+    # Parsing large saved instruction snapshots and querying the synchronous
+    # media store must not block /health, WebSocket replies or queue dispatch.
+    return await asyncio.to_thread(_document_snapshot, video, doc, segments, concepts, jobs)
+
+
+def _document_snapshot(video, doc, segments, concepts, jobs):
+    from collections import defaultdict
     from agent.services.prompt_batch import session_folder
     prompt_outputs = {}
     for job in jobs:
@@ -239,23 +287,31 @@ async def read_document(video_id: str):
                 continue
             prompt_outputs[session] = {'kind': 'mixed' if payload.get('use_row_instructions') else job['prompt_kind'], 'directory': str(folder)} if folder.is_dir() else None
     from agent.api.desktop import rows
-    media = rows()
+    media_by_segment = defaultdict(list)
+    for job in rows(video['project_id'], video['id']):
+        payload = json.loads(job['payload'])
+        if payload.get('segment_id'):
+            media_by_segment[payload['segment_id']].append((job, payload))
+    concepts_by_segment, jobs_by_segment = defaultdict(list), defaultdict(list)
+    for concept in concepts:
+        concepts_by_segment[concept['segment_id']].append(concept)
+    for job in jobs:
+        jobs_by_segment[job['segment_id']].append(job)
     warnings = []
     previous_end = 0
     for s in segments:
-        s['concepts'] = [c for c in concepts if c['segment_id'] == s['id']]
+        s['concepts'] = concepts_by_segment[s['id']]
         active = next((c for c in s['concepts'] if c['id'] == s['active_concept_id']), None)
         s['active_concept'] = active
         s['ready'] = bool(active and active['segment_revision'] == s['revision'] and active['document_revision'] == doc['revision'])
         s['image_ready']=bool(s['ready'] and active['image_prompt'].strip())
         s['video_ready']=bool(s['ready'] and active['video_prompt'].strip())
-        s['job'] = next((j for j in jobs if j['segment_id'] == s['id']), None)
-        s['prompt_jobs'] = {kind: next((j for j in jobs if j['segment_id']==s['id'] and j['prompt_kind'] in {kind,'both'}), None) for kind in ('image','video')}
+        scene_jobs = jobs_by_segment[s['id']]
+        s['job'] = scene_jobs[0] if scene_jobs else None
+        s['prompt_jobs'] = {kind: next((j for j in scene_jobs if j['prompt_kind'] in {kind,'both'}), None) for kind in ('image','video')}
         s['media_jobs'] = []
-        for j in media:
-            payload = json.loads(j['payload'])
-            if payload.get('segment_id') == s['id']:
-                s['media_jobs'].append({'id': j['id'], 'state': j['state'], 'kind': payload['kind'], 'concept_id': payload.get('concept_id'), 'current': media_is_current(video, doc, s, payload), 'files': json.loads(j['files']), 'error': j['error'], 'can_resume': bool(j['remote'])})
+        for j, payload in media_by_segment[s['id']]:
+            s['media_jobs'].append({'id': j['id'], 'state': j['state'], 'kind': payload['kind'], 'concept_id': payload.get('concept_id'), 'current': media_is_current(video, doc, s, payload), 'files': json.loads(j['files']), 'error': j['error'], 'can_resume': bool(j['remote'])})
         if s['start_ms'] > previous_end:
             warnings.append(f"Gap before segment {s['ordinal']}: {s['start_ms'] - previous_end} ms. Timestamps are preserved.")
         previous_end = s['end_ms']
@@ -265,7 +321,7 @@ async def read_document(video_id: str):
         warnings.append(f"Audio continues {doc['audio_duration_ms'] - previous_end} ms after the last segment.")
     from agent.services.scene_images import image_folder
     return {'video': video, 'document': doc, 'segments': segments, 'warnings': warnings,
-            'image_output_directory': str(image_folder(video_id)),
+            'image_output_directory': str(image_folder(video['id'])),
             'prompt_outputs': [item for item in prompt_outputs.values() if item]}
 
 
@@ -356,7 +412,7 @@ InstructionType = Literal['image', 'video_4s', 'video_6s', 'video_8s', 'video_10
 class InstructionFile(BaseModel):
     text: str = Field(default='', max_length=97000)
     name: str = Field(default='', max_length=255)
-    source: Literal['manual', 'folder'] = 'manual'
+    source: Literal['manual', 'folder', 'project'] = 'manual'
 
 
 class PromptOptions(BaseModel):
@@ -389,6 +445,12 @@ async def resolved_prompt_options(document_id, video=None):
             options.templates['image'] = InstructionFile(text=legacy[0]['prompt_template'], name=legacy[0]['prompt_name'])
     if video is None:
         video = await one('SELECT v.id,v.project_id FROM video v JOIN script_document d ON d.video_id=v.id WHERE d.id=?', (document_id,))
+    from agent.services.project_settings import get as project_settings
+    shared = (await project_settings(video['project_id']))['instruction_files']
+    if shared['configured']:
+        options.templates = {key: InstructionFile(**{k: value[k] for k in ('name', 'text', 'source')})
+                             for key, value in shared['templates'].items() if key in ('image', 'video_4s', 'video_6s', 'video_8s', 'video_10s')}
+        return options, {key: shared[key] for key in ('directory', 'warnings', 'configured')}
     files = await asyncio.to_thread(discover, {'video_id': video['id'], 'project_id': video['project_id']}, options.templates)
     # Never use a stale snapshot after an auto-loaded file is removed or invalid.
     options.templates = {key: (InstructionFile(name=value.name, source='folder') if value.source == 'folder' else value)
@@ -468,13 +530,22 @@ async def generate_concepts(video_id: str, body: GenerateBody):
         if body.provider=='chatgpt-web' and not body.model:
             body.model=options.chatgpt_model
         choices = {sid: ('image' if options.row_instructions.get(sid,'video' if row['ordinal']<=options.video_row_count else 'image')=='image' else 'video_'+str(next((n for n in (4,6,8,10) if row['end_ms']-row['start_ms']<=n*1000),10))+'s') for sid,(_,row) in mapping.items()} if body.use_row_instructions else {}
+        if body.provider == 'chatgpt-web':
+            from agent.services.project_instructions import supports_zip
+            needs_zip = any(v == 'image' for v in choices.values()) if body.use_row_instructions else body.prompt_kind == 'image'
+            if needs_zip and not supports_zip(body.model):
+                raise HTTPException(400, 'Image ZIP output currently supports GPT-5.6 Sol. Other model output adapters are not configured yet.')
         if body.use_row_instructions:
             for sid in set(body.segment_ids):
                 instruction = choices.get(sid, 'image')
                 template = options.templates.get(instruction, InstructionFile(text=prompt_template if instruction=='image' else ''))
                 if not template.text.strip():
-                    raise HTTPException(400, f'Scene {mapping[sid][1]["ordinal"]:03d}: load prompt_instructions_{instruction}.txt first.')
-        ordered = sorted(set(body.segment_ids), key=lambda sid: (((1 if choices.get(sid,'image')=='image' else 0) if body.use_row_instructions else 0), mapping[sid][0]))
+                    raise HTTPException(400, f'Scene {mapping[sid][1]["ordinal"]:03d}: save template_{instruction}_prompt.txt in Project settings first.')
+        if options.templates.get('image'):
+            prompt_template = options.templates['image'].text
+        video_zip_batches = body.provider == 'chatgpt-web' and supports_zip(body.model)
+        group_order = {'video_4s': 0, 'video_6s': 1, 'video_8s': 2, 'video_10s': 3, 'image': 4}
+        ordered = sorted(set(body.segment_ids), key=lambda sid: ((group_order.get(choices.get(sid, 'image'), 4) if video_zip_batches else (1 if choices.get(sid,'image')=='image' else 0)) if body.use_row_instructions else 0, mapping[sid][0]))
         for sid in ordered:
             instruction = choices.get(sid, 'image') if body.use_row_instructions else body.prompt_kind
             target = ('image' if instruction=='image' else 'video') if body.use_row_instructions else body.prompt_kind
@@ -494,20 +565,30 @@ async def generate_concepts(video_id: str, body: GenerateBody):
                 continue
             payload = {'video_id': video_id, **body.model_dump(exclude={'segment_ids','regenerate'}), 'ordinal': s['ordinal'], 'text': s['text'], 'start_ms': s['start_ms'], 'end_ms': s['end_ms'], 'segment_revision': s['revision'], 'document_revision': doc['revision'], 'active_concept_id': s['active_concept_id'], 'visual_style': doc['visual_style'], 'script_context': doc['script_text'][:8000], 'previous_text': segments[i-1]['text'][:1000] if i else '', 'next_text': segments[i+1]['text'][:1000] if i+1<len(segments) else ''}
             payload.update(prompt_kind=target, instruction_type=instruction)
+            if project_settings is not None and (target == 'image' or target == 'video' and supports_zip(body.model)):
+                from agent.services.project_instructions import DEFAULT_ZIP
+                shared = project_settings.get('instruction_files', {})
+                zip_text = shared.get('templates', {}).get('zip_file', {}).get('text', DEFAULT_ZIP)
+                if not zip_text.strip():
+                    raise HTTPException(400, 'Save template_zip_file_prompt.txt in Project settings before starting ZIP prompt jobs.')
+                if len(row_template) + len(zip_text.replace('{batch_size}', str(body.batch_size))) + 2 > 100000:
+                    raise HTTPException(400, 'Prompt instructions plus ZIP instructions must fit within 100,000 characters.')
+                payload['zip_template'] = zip_text
             if project_settings is not None:
                 payload['project_settings']=project_settings
                 payload['retained_prompt']=active[0]['video_prompt' if target=='image' else 'image_prompt'] if ready else ''
                 if row_template.strip():
                     payload['prompt_template'] = row_template
                     payload['text_output_id'] = session_id
-                    payload['text_session_id'] = group_sessions.setdefault('video' if target=='video' else instruction, uid())
+                    payload['text_session_id'] = group_sessions.setdefault(instruction if video_zip_batches else ('video' if target=='video' else instruction), uid())
                     if target=='video':
-                        payload['video_prompt_text'] = True
-                        payload['batch_size'] = 1
+                        payload['video_prompt_text'] = 'zip_template' not in payload
+                        payload['video_prompt_zip'] = 'zip_template' in payload
+                        payload['batch_size'] = 10 if payload['video_prompt_zip'] else 1
                     elif body.use_row_instructions:
                         payload['image_phase_start'] = group_counts.get('image',0)==0 and any(k.startswith('video') for k in group_counts)
                     count = group_counts.get(instruction, 0)
-                    if target=='video' or count % body.batch_size == 0:
+                    if count % payload['batch_size'] == 0:
                         group_batches[instruction] = uid()
                         batches.append(group_batches[instruction])
                     group_counts[instruction] = count + 1
@@ -619,7 +700,7 @@ async def run():
                     break
                 payload = json.loads(job['payload'])
                 if payload.get('prompt_kind')=='image' and payload.get('text_output_id'):
-                    waiting = await query("SELECT 1 FROM concept_job WHERE json_extract(payload,'$.text_output_id')=? AND json_extract(payload,'$.video_prompt_text')=1 AND state NOT IN ('COMPLETED','STALE') LIMIT 1", (payload['text_output_id'],))
+                    waiting = await query("SELECT 1 FROM concept_job WHERE json_extract(payload,'$.text_output_id')=? AND json_extract(payload,'$.prompt_kind')='video' AND state NOT IN ('COMPLETED','STALE') LIMIT 1", (payload['text_output_id'],))
                     if waiting:
                         continue
                 task_id = payload.get('text_batch_id') or job['id']

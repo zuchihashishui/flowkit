@@ -33,17 +33,14 @@ test('SRT UI selects JSON, preserves long prompt, sends Work options, previews a
 });
 
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-test('JSON template is opt-in for a saved custom prompt, persists and explains timing limits',()=>{
+test('JSON instructions open project settings and preserve the existing migration draft',()=>{
  const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'../ui/index.html'),'utf8'),{url:'https://studio.test',runScripts:'outside-only'}),w=dom.window,$=id=>w.document.getElementById(id);
- w.setInterval=()=>{};w.localStorage.setItem('srt-prompt','My existing audio instructions\n\nKeep this draft');
+ w.setInterval=()=>{};w.localStorage.setItem('srt-prompt','My existing audio instructions');let opened=false;
+ w.projectInstructions={open:()=>{opened=true;}};
  w.eval(fs.readFileSync(path.join(__dirname,'../ui/srt.js'),'utf8'));
- assert.equal($('srt-prompt').value,'My existing audio instructions\n\nKeep this draft');
  $('srt-use-template').onclick();
- assert.match($('srt-prompt').value,/attached transcript JSON/);
- assert.match($('srt-prompt').value,/do not duplicate parallel word lists/);
- assert.match($('srt-prompt').value,/duration is unavailable/);
- assert.match($('srt-prompt').value,/HH:MM:SS,mmm --> HH:MM:SS,mmm/);
- assert.equal(w.localStorage.getItem('srt-prompt'),$('srt-prompt').value);
+ assert.equal(opened,true);assert.equal($('srt-prompt').readOnly,true);
+ assert.equal($('srt-prompt').value,'My existing audio instructions');
  dom.window.close();
 });
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};

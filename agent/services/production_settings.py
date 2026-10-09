@@ -105,6 +105,9 @@ async def get(video_id, *, project=None):
     overrides = validated_overrides(json.loads(row['value'])) if row else {}
     inherited = project['production']
     effective = Production.model_validate(merge(inherited, overrides)).model_dump()
+    shared = project.get('instruction_files', {})
+    if shared.get('configured'):
+        effective['srt']['instructions'] = shared['templates']['json_to_srt']['text']
     return {'video_id': video_id, 'project_id': video['project_id'],
             'revision': row['revision'] if row else 0, 'project_revision': project['revision'],
             'overrides': overrides, 'inherited': inherited, 'effective': effective}

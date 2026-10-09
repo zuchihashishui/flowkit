@@ -1,5 +1,6 @@
 from typing import Literal
 from uuid import UUID
+import asyncio
 import shutil
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
@@ -18,7 +19,7 @@ class Plan(Scoped):
     image_ids: list[UUID] = Field(default_factory=list, max_length=1000)
     video_ids: list[UUID] = Field(default_factory=list, max_length=1000)
     visual_mode: Literal['images', 'mixed'] = 'images'
-    clip_end: Literal['freeze', 'loop'] = 'freeze'
+    clip_end: Literal['slow', 'freeze', 'loop'] = 'slow'
     mapping: dict[str, UUID | None] = Field(default_factory=dict, max_length=3000)
     mapping_mode: Literal['number', 'order'] = 'number'
     size: Literal['1080p', '720p', 'vertical'] = '1080p'
@@ -39,7 +40,13 @@ async def status(project_id: str | None = None, video_id: str | None = None, una
         from agent.services.video_files import folders
         await context(project_id, video_id)
         output_directory = (await folders(project_id, video_id))['folders']['exports']
-    return {'workspace_version': 1, 'output_directory': output_directory, 'production_version': 1, 'mixed_media_version': 1, 'image_motion_version': 1, 'assets': scope.select(scope.annotate(service, 'asset', service.assets()), project_id, video_id, unassigned), 'jobs': scope.select(scope.annotate(service, 'assembly', service.jobs(dict(project_id=project_id, video_id=video_id, unassigned=unassigned))), project_id, video_id, unassigned), 'ffmpeg': bool(shutil.which('ffmpeg')), 'ffprobe': bool(shutil.which('ffprobe'))}
+    filters = dict(project_id=project_id, video_id=video_id, unassigned=unassigned)
+    def snapshot():
+        return {'assets': scope.annotate(service, 'asset', service.assets(filters)),
+                'jobs': scope.annotate(service, 'assembly', service.jobs(filters)),
+                'ffmpeg': bool(shutil.which('ffmpeg')), 'ffprobe': bool(shutil.which('ffprobe'))}
+    return {'workspace_version': 1, 'output_directory': output_directory, 'production_version': 1,
+            'mixed_media_version': 1, 'image_motion_version': 1, **await asyncio.to_thread(snapshot)}
 
 
 class ProjectSources(Scoped):

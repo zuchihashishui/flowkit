@@ -47,14 +47,15 @@
     for(const [key,label] of [['image','Image'],['video_4s','Video 4s'],['video_6s','Video 6s'],['video_8s','Video 8s'],['video_10s','Video 10s']]){
       const file=$('sb-file-'+key),upload=$('sb-upload-'+key),old=upload.parentElement,row=body.insertRow();
       row.append(node('td',label));const fileCell=node('td'),actions=node('td');fileCell.append(file);
-      actions.append(upload,button('View / edit',()=>{instructionDrawer?.open();window.promptInstructionEditor?.(key);}),button('Use folder',()=>window.usePromptInstructionFolder?.(key)),button('Remove',()=>window.removePromptInstruction?.(key)));row.append(fileCell,actions);old.remove();
+      upload.hidden=true;actions.append(upload,button('Project settings',()=>window.projectInstructions?.open()));row.append(fileCell,actions);old.remove();
     }
     instructions.prepend(table);
   }
-  fold($('sb-inputs'),'SRT source & prompt instructions');
+  $('sb-choose-prompt').hidden=true;
+  fold($('sb-inputs'),'SRT source & shared project instructions');
   const generation=$('sb-provider')?.closest('.inline');fold(generation,'Generation settings · Chat / video rows / image batch size');
   const instructionEdit=$('sb-template')?.closest('details');let instructionDrawer;
-  if(instructionEdit){instructionEdit.classList.add('instruction-editor');instructionDrawer=drawer(instructionEdit,'Prompt instructions');document.querySelector('[data-view=storyboard]').append(instructionDrawer.element);instructionDrawer.element.append(button('Save instructions',()=>$('sb-save-options').click()));}
+  if(instructionEdit){instructionEdit.hidden=true;instructionEdit.classList.add('instruction-editor');instructionDrawer=drawer(instructionEdit,'Prompt instructions');document.querySelector('[data-view=storyboard]').append(instructionDrawer.element);instructionDrawer.element.append(button('Save instructions',()=>$('sb-save-options').click()));}
   fold($('sb-workers'),'ChatGPT worker details');
   const help=$('sb-select-all')?.closest('.toolbar')?.nextElementSibling;
   if(help?.tagName==='SMALL')fold(help,'How video and image batches run');

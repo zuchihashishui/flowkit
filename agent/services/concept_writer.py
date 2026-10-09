@@ -62,7 +62,7 @@ async def write_concept_batch(payloads, save_result=None):
     from agent.services.chatgpt_gateway import complete
     prompt = batch_message(payloads)
     first = payloads[0]
-    keys = ('provider', 'prompt_kind', 'text_session_id', 'prompt_template', 'project_settings', 'composer_mode', 'instruction_type', 'text_output_id', 'batch_size', 'model')
+    keys = ('provider', 'prompt_kind', 'text_session_id', 'prompt_template', 'project_settings', 'composer_mode', 'instruction_type', 'text_output_id', 'batch_size', 'model', 'zip_template', 'video_prompt_text', 'video_prompt_zip')
     if not first.get('text_session_id') or first.get('provider') != 'chatgpt-web' or first.get('prompt_kind') not in {'image', 'video'} or any(any(p.get(k) != first.get(k) for k in keys) for p in payloads):
         raise ValueError('An SRT to Prompt batch must share its session, prompt instructions and project settings.')
     if first.get('video_prompt_text'):
@@ -91,7 +91,11 @@ async def write_concept_batch(payloads, save_result=None):
     if first.get('image_phase_start'):
         from agent.services.chatgpt_gateway import close_prompt_phase
         await close_prompt_phase()
-    template = first['prompt_template'] + TEXT_BATCH_CONTRACT.format(batch_size=first.get('batch_size', TEXT_BATCH_SIZE))
+    from agent.services.project_instructions import supports_zip
+    if 'zip_template' in first and not supports_zip(first.get('model')):
+        raise ValueError('ZIP instructions are configured only for GPT-5.6 Sol.')
+    zip_template = first.get('zip_template', TEXT_BATCH_CONTRACT)
+    template = first['prompt_template'].rstrip() + '\n\n' + zip_template.replace('{batch_size}', str(first.get('batch_size', TEXT_BATCH_SIZE))).lstrip()
     if len(template) > 100000:
         raise ValueError('Shorten the prompt TXT to leave space for the batch output rules (100,000 characters total).')
     async def save_download(result):

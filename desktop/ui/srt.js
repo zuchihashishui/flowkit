@@ -2,6 +2,7 @@
  'use strict';
  const $=id=>document.getElementById(id);
  const api=(method,route,body)=>(window.workflow?.api||window.studio.api)(method,'/api/srt/'+route,body);
+ document.querySelector('[data-page="srt"]')?.addEventListener('click',()=>{void window.projectInstructions?.refreshSrt().catch(e=>{$('srt-message').textContent=e.message;});});
  let busy=false, importing=false, selected='', signature='', qualityJob='', qualityTicket=0;
  let importedSources=[], whisperxSources=[];
  const recentImports=new Map(), inFlight=new Map(), sourceErrors={}, loaded=new Set();
@@ -45,11 +46,7 @@ Use consecutive numbering and HH:MM:SS,mmm --> HH:MM:SS,mmm timestamps. Separate
   try{$('srt-prompt').value=localStorage.getItem('srt-prompt')||defaults;}catch{$('srt-prompt').value=defaults;}
   $('srt-prompt').addEventListener('input',()=>{try{localStorage.setItem('srt-prompt',$('srt-prompt').value);}catch{}});
  }
- $('srt-use-template').onclick=()=>{
-  $('srt-prompt').value=defaults;
-  $('srt-prompt').dispatchEvent(new Event('input',{bubbles:true}));
-  say('JSON → SRT template loaded. Review or edit it before creating a job.');
- };
+ $('srt-use-template').onclick=()=>window.projectInstructions?.open();
  function controls(){
   $('srt-start').disabled=busy||importing;
   $('srt-choose').disabled=importing;
@@ -196,6 +193,7 @@ Use consecutive numbering and HH:MM:SS,mmm --> HH:MM:SS,mmm timestamps. Separate
  $('srt-workers').onclick=()=>{document.querySelector('[data-page="projects"]').click();const panel=$('project-app-settings');panel.open=true;panel.scrollIntoView?.({block:'start'});};
  $('srt-form').onsubmit=e=>{e.preventDefault();return action(async()=>{
   upgradeLegacyPrompt();
+  await window.projectInstructions?.refreshSrt();
   const source_id=$('srt-source').value,prompt=$('srt-prompt').value,model=$('srt-model').value.trim();
   if(!source_id||!prompt.trim()||!model)throw Error('Select JSON and enter a prompt and model.');
   const duration_seconds=durationValue();

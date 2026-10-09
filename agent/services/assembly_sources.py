@@ -24,8 +24,8 @@ async def _load_project_sources(service, ctx, visual_mode):
     paths = await video_files.folders(**ctx)
     data = await storyboard.read_document(ctx['video_id'])
     doc, segments = data['document'], data['segments']
-    owned = scope.select(scope.annotate(service, 'asset', service.assets()), **ctx)
-    catalog = scope.select(scope.catalog(), **ctx)
+    owned = await asyncio.to_thread(_owned_assets, service, ctx)
+    catalog = await asyncio.to_thread(scope.catalog, ctx)
     lookup = {(r['resource_kind'], r['id']): r for r in catalog}
     issues, subtitle, audio = [], None, None
 
@@ -122,7 +122,7 @@ async def _load_project_sources(service, ctx, visual_mode):
 
     media = {'assets': [], 'mapping': {}, 'issues': []}
     if subtitle and segments:
-        media = await load_scene_media(service, ctx, subtitle['id'], visual_mode)
+        media = await load_scene_media(service, ctx, subtitle['id'], visual_mode, data=data)
     else:
         media['assets'] = [a for a in owned if a['kind'] in (['image'] if visual_mode == 'images' else ['image', 'video'])
             and not a['metadata'].get('media_job_id') and service.path(a).is_file()]
@@ -137,11 +137,14 @@ async def _load_project_sources(service, ctx, visual_mode):
         'visual_mode': 'mixed' if any(a['kind'] == 'video' for a in media['assets']) else 'images'}
 
 
-async def load_scene_media(service, ctx, srt_id, visual_mode):
-    from agent.api import storyboard, desktop
-    if not ctx.get('video_id'):
-        raise ValueError('Select a project first.')
-    data = await storyboard.read_document(ctx['video_id'])
+def _owned_assets(service, ctx):
+    return scope.annotate(service, 'asset', service.assets(ctx))
+
+
+def _scene_media_inputs(service, ctx, srt_id, visual_mode, data):
+    """Resolve saved files off the event loop, using the scoped scene snapshot."""
+    from collections import defaultdict
+    from agent.api import desktop
     subtitle = service.asset(srt_id, 'srt')
     _, cues = cues_from_srt(service.path(subtitle).read_bytes())
     segments = data['segments']
@@ -149,44 +152,57 @@ async def load_scene_media(service, ctx, srt_id, visual_mode):
         abs(c['start']*1000-s['start_ms']) > 1 or abs(c['end']*1000-s['end_ms']) > 1
         or ''.join(c['text'].split()) != ''.join(s['text'].split()) for c, s in zip(cues, segments)):
         raise ValueError('The selected SRT does not match this project’s current scenes. Choose the SRT used to create these scenes.')
-    jobs = desktop.rows()
-    copied = scope.select(scope.annotate(service, 'asset', service.assets()), **ctx)
-    results, mapping, issues = [], {}, []
+    copied = defaultdict(list)
+    for asset in service.assets(ctx):
+        metadata = asset['metadata']
+        if metadata.get('media_job_id'):
+            copied[(metadata['media_job_id'], metadata.get('file_index'))].append(asset)
+    scenes = []
     for cue, segment in zip(cues, segments):
-        candidates = []
+        entries, issues = [], []
         for kind in (['image'] if visual_mode == 'images' else ['video', 'image']):
-            matching = []
-            for job in jobs:
-                p = json.loads(job['payload'])
-                if (job['state'] == 'COMPLETED' and p.get('project_id') == ctx['project_id']
-                    and p.get('document_id') == data['document']['id'] and p.get('segment_id') == segment['id']
-                    and storyboard.media_is_current(data['video'], data['document'], segment, p) and p['kind'] == kind
-                    and p.get('start_ms') == segment['start_ms'] and p.get('end_ms') == segment['end_ms']):
-                    matching.append(job)
-            if not segment['ready']:
-                continue
+            # read_document already checks project/video, concept revisions,
+            # prompt and timing, and keeps media history newest first.
+            matching = [job for job in segment['media_jobs'] if segment['ready']
+                and job['state'] == 'COMPLETED' and job['current'] and job['kind'] == kind]
             for job in matching:
-                for index, filename in enumerate(json.loads(job['files'])):
-                    previous = next((a for a in copied if a['metadata'].get('media_job_id') == job['id'] and a['metadata'].get('file_index') == index and service.path(a).is_file()), None)
+                for index, filename in enumerate(job['files']):
+                    previous = next((a for a in copied[(job['id'], index)] if service.path(a).is_file()), None)
                     path = Path(filename).resolve()
                     if previous is None and (not output_paths.allowed(path, desktop.ROOT) or not path.is_file()):
                         issues.append(f"Scene {cue['index']}: a saved {kind} file is missing.")
                         continue
-                    try:
-                        if previous is None:
-                            class Reader:
-                                filename = f"{cue['index']:03d}-{job['id'][:8]}-{index+1}{path.suffix}"
-                                async def read(self, n):
-                                    return stream.read(n)
-                            with path.open('rb') as stream:
-                                previous = await service.import_upload(kind, Reader(), ctx, [scope.ref('asset', srt_id)], metadata_extra={
-                                    'media_job_id':job['id'], 'file_index':index, 'segment_id':segment['id'],
-                                    'concept_id':json.loads(job['payload']).get('concept_id'), 'ordinal':cue['index']})
-                            copied.append(previous)
-                        results.append(previous)
-                        candidates.append(previous)
-                    except (ValueError, OSError) as error:
-                        issues.append(f"Scene {cue['index']}: {error}")
+                    entries.append((kind, job, index, path, previous))
+        scenes.append((cue, segment, entries, issues))
+    return scenes
+
+
+async def load_scene_media(service, ctx, srt_id, visual_mode, *, data=None):
+    from agent.api import storyboard
+    if not ctx.get('video_id'):
+        raise ValueError('Select a project first.')
+    if data is None:
+        data = await storyboard.read_document(ctx['video_id'])
+    scenes = await asyncio.to_thread(_scene_media_inputs, service, ctx, srt_id, visual_mode, data)
+    results, mapping, issues = [], {}, []
+    for cue, segment, entries, scene_issues in scenes:
+        issues.extend(scene_issues)
+        candidates = []
+        for kind, job, index, path, previous in entries:
+            try:
+                if previous is None:
+                    class Reader:
+                        filename = f"{cue['index']:03d}-{job['id'][:8]}-{index+1}{path.suffix}"
+                        async def read(self, n):
+                            return stream.read(n)
+                    with path.open('rb') as stream:
+                        previous = await service.import_upload(kind, Reader(), ctx, [scope.ref('asset', srt_id)], metadata_extra={
+                            'media_job_id':job['id'], 'file_index':index, 'segment_id':segment['id'],
+                            'concept_id':job.get('concept_id'), 'ordinal':cue['index']})
+                results.append(previous)
+                candidates.append(previous)
+            except (ValueError, OSError) as error:
+                issues.append(f"Scene {cue['index']}: {error}")
         mapping[str(cue['index'])] = candidates[0]['id'] if candidates else None
         if not candidates:
             issues.append(f"Scene {cue['index']}: no saved media for the current concept and timing.")

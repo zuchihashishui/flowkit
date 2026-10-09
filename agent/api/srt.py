@@ -46,6 +46,9 @@ async def enqueue(body: Job):
         settings['srt_output']='download-file'
         if body.prepared_tab_token:settings['srt_prepared_token']=str(body.prepared_tab_token)
         prompt=body.prompt if body.prompt is not None else settings.get('production',{}).get('srt',{}).get('instructions','')
+        shared = settings.get('instruction_files', {})
+        if shared.get('configured'):
+            prompt = shared['templates']['json_to_srt']['text']
         if not prompt.strip() or not body.model.strip():raise ValueError('Enter a prompt and model name, or save SRT instructions in Project Settings.')
         return service.enqueue(str(body.source_id), prompt, body.model.strip(), body.timeout, ctx, method="file-srt", duration_seconds=body.duration_seconds, project_settings=settings)
     except (ValueError, KeyError, FileNotFoundError) as e:

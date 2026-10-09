@@ -17,6 +17,9 @@
    data._settings_edited=[...new Set([...(data._settings_edited||Object.keys(data)),'subtitles'])];
    data.subtitles='off';data._subtitle_options_version=1;
   }
+  if(data._clip_options_version!==1){
+   data['clip-end']='slow';data._clip_options_version=1;
+  }
   return data;
  }
  let draft=readDraft();
@@ -26,7 +29,7 @@
  const controls=['va-import-srt','va-import-audio','va-import-images','va-import-folder','va-preview','va-refresh','va-import-videos','va-import-video-folder','va-load-scenes','va-load-project','va-open-folder'];
  const ids=(kind='images')=>[...$('va-'+kind).selectedOptions].map(o=>o.value);
  const fields=['srt','audio','title','mode','size','fps','fit','subtitles','font','visual-mode','clip-end','image-motion'];
- const defaults={title:'Untitled video',mode:'number',size:'1080p',fps:'30',fit:'fit',subtitles:'off',font:'Yu Gothic','visual-mode':'images','clip-end':'freeze','image-motion':'none'};
+ const defaults={title:'Untitled video',mode:'number',size:'1080p',fps:'30',fit:'fit',subtitles:'off',font:'Yu Gothic','visual-mode':'images','clip-end':'slow','image-motion':'none'};
  const settingFields={size:'size',fps:'fps',fit:'fit',subtitles:'subtitles',font:'font',image_motion:'image-motion'};
  function applyDefaults(settings){
   if(!settings)return;
@@ -40,7 +43,7 @@
   $('va-image-count').textContent=ids().length+' images selected';
   $('va-video-count').textContent=ids('videos').length+' clips selected';
  }
- function saveDraft(){try{const data={images:ids(),videos:ids('videos'),mapping,_subtitle_options_version:1,_sources_edited:sourcesEdited,_settings_edited:[...editedFields]};for(const name of fields)data[name]=$('va-'+name).value;localStorage.setItem('assembly-draft:'+ (window.workflow?.key()||'legacy'),JSON.stringify(data));}catch{}}
+ function saveDraft(){try{const data={images:ids(),videos:ids('videos'),mapping,_subtitle_options_version:1,_clip_options_version:1,_sources_edited:sourcesEdited,_settings_edited:[...editedFields]};for(const name of fields)data[name]=$('va-'+name).value;localStorage.setItem('assembly-draft:'+ (window.workflow?.key()||'legacy'),JSON.stringify(data));}catch{}}
  function invalidate(){ready=false;lastRequest=null;$('va-render').disabled=true;$('va-plan-note').textContent='Inputs changed. Preview timeline before rendering.';saveDraft();}
  function editLock(value){for(const name of [...fields,'images','videos'])$('va-'+name).disabled=value;document.querySelectorAll('#va-scenes select').forEach(el=>el.disabled=value);}
  async function action(fn){if(busy)return;busy=true;editLock(true);for(const id of controls)$(id).disabled=true;$('va-render').disabled=true;try{await fn();}catch(e){say(e.message);}finally{busy=false;editLock(false);for(const id of controls)$(id).disabled=false;$('va-render').disabled=!ready;}}
@@ -148,7 +151,7 @@
     $('va-clip-preview').pause();$('va-clip-preview').hidden=true;$('va-image-preview').hidden=true;
     if(kind==='video'){const r=await window.studio.assemblyMedia(aid,'clip-preview');$('va-clip-preview').src=r.url;$('va-clip-preview').hidden=false;$('va-clip-preview').load();}
     else{$('va-image-preview').src=await window.studio.assemblyMedia(aid,'thumbnail');$('va-image-preview').hidden=false;}
-    $('va-image-label').textContent='Scene '+key+' · '+(visuals.find(a=>a.id===aid)?.title||'')+(cue.image_motion&&cue.image_motion!=='none'?' · '+(cue.image_motion==='zoom_in'?'Slow zoom in':'Slow zoom out'):'')+(cue.clip_action?' · '+({freeze:'Hold last frame',loop:'Loop clip',trim:'Trim to scene'}[cue.clip_action]):'');
+    $('va-image-label').textContent='Scene '+key+' · '+(visuals.find(a=>a.id===aid)?.title||'')+(cue.image_motion&&cue.image_motion!=='none'?' · '+(cue.image_motion==='zoom_in'?'Slow zoom in':'Slow zoom out'):'')+(cue.clip_action?' · '+({slow:'Slow down to fit',freeze:'Hold last frame',loop:'Loop clip',trim:'Trim to scene'}[cue.clip_action]):'');
    }));
    row.append(td);
    const check=(plan.checks||[]).find(c=>c.scene===cue.index),health=document.createElement('td');

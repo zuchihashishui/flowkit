@@ -9,11 +9,11 @@
   const webProvider=()=>$('sb-provider').value.startsWith('chatgpt-web');
   const rowInstruction=s=>{const choice=promptOptions.row_instructions?.[s.id]||(s.ordinal<=(promptOptions.video_row_count??15)?'video':'image');if(choice==='image')return 'image';const ms=s.end_ms-s.start_ms;return 'video_'+([4,6,8,10].find(n=>ms<=n*1000)||10)+'s';};
   const rowKind=s=>rowInstruction(s)==='image'?'image':'video';
-  function stashTemplate(){const old=promptOptions.templates[activeInstruction];const text=$('sb-template').value;if(!old&&!text&&!promptName)return;promptOptions.templates[activeInstruction]={text,name:promptName,source:old?.source==='folder'&&old.text===text&&old.name===promptName?'folder':'manual'};}
+  function stashTemplate(){const old=promptOptions.templates[activeInstruction];const text=$('sb-template').value;if(!old&&!text&&!promptName)return;promptOptions.templates[activeInstruction]={text,name:promptName,source:['folder','project'].includes(old?.source)&&old.text===text&&old.name===promptName?old.source:'manual'};}
   function showFiles(){
-    for(const key of Object.keys(instructionLabels)){const file=promptOptions.templates[key];$('sb-file-'+key).textContent=(file?.name||(file?.text?'Saved instructions':'No TXT loaded'))+(file?.source==='folder'?(file.text?' · Auto-loaded':' · File unavailable'):'');}
+    for(const key of Object.keys(instructionLabels)){const file=promptOptions.templates[key];$('sb-file-'+key).textContent=(file?.name||(file?.text?'Saved instructions':'No TXT loaded'))+(['folder','project'].includes(file?.source)?(file.text?' · Auto-loaded':' · File unavailable'):'');}
     const info=data?.document?.prompt_instruction_files||data?.prompt_instruction_files;
-    if($('sb-instructions-folder'))$('sb-instructions-folder').textContent=info?.directory?'Auto-load folder: '+info.directory:'Choose a project and video to locate its prompts folder.';
+    if($('sb-instructions-folder'))$('sb-instructions-folder').textContent=info?.directory?'Instruction folder: '+info.directory:'Choose a project and video to locate its prompts folder.';
     if($('sb-instructions-warnings'))$('sb-instructions-warnings').textContent=(info?.warnings||[]).join('\n');
   }
   function showTemplate(){showFiles();const f=promptOptions.templates[activeInstruction]||{text:'',name:''};$('sb-template').value=f.text;promptName=f.name;$('sb-prompt-file').textContent=f.name||'No TXT loaded for '+instructionLabels[activeInstruction];}
@@ -88,7 +88,7 @@
     if(webProvider())$('sb-provider').value='chatgpt-web-chat';
     $('sb-srt-file').textContent=data?.document?.srt_name||(data?.segments.length?`${data.segments.length} saved SRT rows`:'No SRT selected.');
     $('sb-prompt-file').textContent=promptName||($('sb-template').value?'Saved prompt instructions':'No prompt TXT selected.');
-    $('sb-input-message').textContent=data?.segments.length?'Rows are saved. Choose a TXT to update their prompt instructions.':'Select an SRT and a prompt TXT, then load them.';
+    $('sb-input-message').textContent=data?.segments.length?'Rows are saved. Edit shared instructions in Project settings.':'Select an SRT and save shared instructions in Project settings, then load the SRT.';
   }
   function updateTableSelection(){const box=$('sb-select-table');if(!box)return;const rows=visibleRows(),n=rows.filter(s=>checked.has(s.id)).length;box.checked=!!rows.length&&n===rows.length;box.indeterminate=n>0&&n<rows.length;box.disabled=!rows.length;}
   function selectionChanged() {
@@ -169,7 +169,7 @@
   function renderWorkers(status) {
     $('sb-workers').hidden=!webProvider();
     if($('sb-workers').hidden)return;
-    $('sb-workers-status').textContent=status.error||(!status.available?'Gateway unavailable':!status.extensionConnected?'ChatGPT extension disconnected':status.settings?.paused?'Queue paused':status.needsReview?'Account needs review':`Extension ${status.extensionVersion||'unknown'} · Chat / Temporary OFF · 1 tab · Video: 1 row + TXT each time → text · Image: ${$('sb-batch-size').value} rows → ZIP`);
+    $('sb-workers-status').textContent=status.error||(!status.available?'Gateway unavailable':!status.extensionConnected?'ChatGPT extension disconnected':status.settings?.paused?'Queue paused':status.needsReview?'Account needs review':`Extension ${status.extensionVersion||'unknown'} · Chat / Temporary OFF · 1 tab · Video: ${$('sb-model').value.trim().toLowerCase()==='gpt-5.6 sol'?'up to 10 rows per duration group → ZIP':'1 row → text'} · Image: ${$('sb-batch-size').value} rows → ZIP`);
     const phases={WAITING_SETUP:'Waiting for another tab to finish input / upload / Send',OPENING_TAB:'Opening tab',BINDING_TAB:'Binding tab',WAITING_PAGE:'Waiting for ChatGPT input',SELECTING_MODE:'Selecting conversation mode',ENABLING_TEMPORARY:'Enabling Temporary Chat',SELECTING_MODEL:'Checking model',TYPING:'Entering numbered SRT rows',ATTACHING_FILE:'Uploading prompt TXT',WAITING_ATTACHMENT:'Checking attached file',WAITING_SEND_BUTTON:'Waiting for Send button',VERIFYING_SUBMISSION:'Confirming message was sent',SENDING:'Sending prompt',WAITING_RESPONSE:'Waiting for response',VERIFYING_COMPLETION:'Checking completed response',DOWNLOADING_ZIP:'Downloading ZIP',AWAITING_SAVE:'Saving prompt results'};
     $('sb-worker-rows').replaceChildren(...(status.workers||[]).map(w=>{
       const row=element('tr'),phase=w.progress?.phase;
@@ -191,12 +191,19 @@
     else if(!inputDirty&&!optionsDirty){
       const incoming=data.document?.prompt_options?.templates||data.prompt_options?.templates||{};
       for(const key of Object.keys(instructionLabels)){
-        if(promptOptions.templates[key]?.source==='folder')delete promptOptions.templates[key];
-        if(incoming[key]?.source==='folder')promptOptions.templates[key]=JSON.parse(JSON.stringify(incoming[key]));
+        if(['folder','project'].includes(promptOptions.templates[key]?.source))delete promptOptions.templates[key];
+        if(['folder','project'].includes(incoming[key]?.source))promptOptions.templates[key]=JSON.parse(JSON.stringify(incoming[key]));
       }
       showTemplate();
     }
     showAudio();render();renderWorkers(workers||{});
+    if(!data.segments.length&&!inputDirty&&!inputSrt){
+      try{
+        const saved=await api('GET',path('/saved-srt'));
+        if(ticket!==requestId||vid!==collection||pid!==$('project-select').value||vid!==$('video-select').value||inputDirty||inputSrt||data?.segments.length)return;
+        if(saved){inputSrt=saved;$('sb-srt-file').textContent=saved.name+' · Auto-loaded';$('sb-input-message').textContent='Saved SRT loaded for this video. Choose prompt instructions, then click Load SRT / save prompt.';}
+      }catch(e){if(ticket===requestId)$('sb-input-message').textContent='Could not load saved SRT: '+e.message;}
+    }
   }
   async function open() {
     const pid=$('project-select').value;
@@ -315,9 +322,9 @@
   });
   $('sb-inputs').onsubmit=e=>{e.preventDefault();run(async()=>{
     assertCollection();stashTemplate();const imageFile=promptOptions.templates.image||{};const template=imageFile.text||'';
-    if(!template.trim())throw Error('Choose a non-empty prompt TXT first.');
+    if(!template.trim())throw Error('Save image instructions in Project settings first.');
     if(documentDirty||editorDirty)throw Error('Save or discard advanced script / concept edits first.');
-    if(inputSrt)await api('POST',path('/prompt-input'),{srt_content:inputSrt.text,srt_name:inputSrt.name,prompt_template:template,prompt_name:imageFile.name||''});
+    if(inputSrt)await api('POST',path('/prompt-input'),{srt_content:inputSrt.text,srt_name:inputSrt.name,source_kind:inputSrt.source_kind||null,source_id:inputSrt.source_id||null,prompt_template:template,prompt_name:imageFile.name||''});
     else {
       if(!data?.segments.length)throw Error('Choose an SRT file first.');
       await api('PUT',path(),{script_text:data.document.script_text||'',visual_style:data.document.visual_style||'',prompt_template:template,prompt_name:imageFile.name||''});
@@ -358,11 +365,11 @@
     const items=selected(1000,webProvider());
     startStatus.textContent='Saving prompt settings…';
     if(webProvider())await saveOptions();
-    if(!confirm(`Create prompts for ${items.length} row(s) in a new Chat tab? Video: one row and its TXT each time. Image: up to ${$('sb-batch-size').value} rows per message, TXT on the first batch.`)){startStatus.textContent='Cancelled. No prompt jobs submitted.';return;}
+    if(!confirm(`Create prompts for ${items.length} row(s) in a new Chat tab? Video with GPT-5.6 Sol: duration groups 4s → 6s → 8s → 10s, up to 10 rows per ZIP batch. Image: up to ${$('sb-batch-size').value} rows per message, TXT on the first batch.`)){startStatus.textContent='Cancelled. No prompt jobs submitted.';return;}
     startStatus.textContent='Opening a new Chat tab and sending TXT + SRT…';
     notice('Preparing one '+(generationOptions().composer_mode==='chat'?'Chat':'Work')+' tab: Video first, then Image…');
     const result=await api('POST',path('/generate-concepts'),{segment_ids:items.map(s=>s.id),...generationOptions(),fresh_start:webProvider(),regenerate:$('sb-regenerate').checked});
-    await reload();notice(`${result.ids.length} row(s) queued${result.batch_count?' in '+result.batch_count+' batch(es) of up to '+result.batch_size:''}; ${result.skipped.length} skipped because current or pending concepts already exist.`);
+    await reload();notice(`${result.ids.length} row(s) queued${result.batch_count?' in '+result.batch_count+' batch(es) (Image: up to '+result.batch_size+' rows; GPT-5.6 Sol Video: up to 10 rows per duration group)':''}; ${result.skipped.length} skipped because current or pending concepts already exist.`);
     startStatus.textContent=`${result.ids.length} rows queued; ${result.skipped.length} skipped. See row status for progress.`;
     } catch(error) {startStatus.textContent='Start failed: '+(error.message||String(error));console.error('[SRT to Prompt start]',error);throw error;}
   });

@@ -8,7 +8,7 @@
   const node = (tag, text, cls) => { const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el; };
   const ctx = () => window.workflow?.context() || {project_id:$('project-select')?.value || '',video_id:$('video-select')?.value || ''};
   const pages={elevenlabs:'elevenlabs',whisperx:'whisperx',srt:'srt',image_prompts:'storyboard',video_prompts:'storyboard',images:'scene-board',videos:'scene-board',assembly:'assembly'};
-  const names={elevenlabs:'Narration',whisperx:'Word JSON',srt:'SRT',image_prompts:'Image prompts',video_prompts:'Video prompts',images:'Images',videos:'Video clips',assembly:'Final video'};
+  const names={elevenlabs:'Text to Speech',whisperx:'Speech to JSON',srt:'JSON to SRT',image_prompts:'Image prompts',video_prompts:'Video prompts',images:'Images',videos:'Video clips',assembly:'Final video'};
   const states={ready:'Ready',completed:'Complete',running:'Running',queued:'Queued',needs_review:'Needs review',failed:'Failed',missing:'Not started',empty:'Not started',not_started:'Not started',pending:'Not started',partial:'Partially ready',cancelled:'Cancelled',interrupted:'Interrupted',processing:'Processing',waiting_commit:'Awaiting save',submission_uncertain:'Needs review'};
   let ticket=0,loading=false,overview=null,dialog=null,checking=false;
   function human(s) { return states[String(s).toLowerCase()] || String(s || 'Not started').replace(/_/g,' ').toLowerCase(); }
