@@ -193,7 +193,11 @@ Use consecutive numbering and HH:MM:SS,mmm --> HH:MM:SS,mmm timestamps. Separate
  });
  $('srt-open-chatgpt').onclick=()=>action(prepareTab);
  $('srt-open-extension').onclick=()=>action(()=>window.studio.chatgptAction('extension'));
+<<<<<<< HEAD
  $('srt-workers').onclick=()=>{document.querySelector('[data-page="projects"]').click();const panel=$('project-app-settings');panel.open=true;panel.scrollIntoView?.({block:'start'});};
+=======
+ $('srt-workers').onclick=()=>document.querySelector('[data-page="settings"]').click();
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  $('srt-form').onsubmit=e=>{e.preventDefault();return action(async()=>{
   upgradeLegacyPrompt();
   const source_id=$('srt-source').value,prompt=$('srt-prompt').value,model=$('srt-model').value.trim();

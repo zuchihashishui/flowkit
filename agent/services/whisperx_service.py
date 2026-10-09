@@ -441,6 +441,7 @@ class WhisperXService:
                     continue
 
     async def run(self):
+<<<<<<< HEAD
         self.loop_running = True
         try:
             with self.db() as db:
@@ -456,6 +457,18 @@ class WhisperXService:
                 await asyncio.sleep(2)
         finally:
             self.loop_running = False
+=======
+        with self.db() as db:
+            db.execute("UPDATE wx_jobs SET state='INTERRUPTED',phase='INTERRUPTED',finished=?,error='Backend restarted. Use Retry job to transcribe the same audio with the saved options.' WHERE state='RUNNING'", (time.time(),))
+        while True:
+            try:
+                await self.discover()
+                await self.step()
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception('WhisperX queue error')
+            await asyncio.sleep(2)
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 
 
 service = WhisperXService()

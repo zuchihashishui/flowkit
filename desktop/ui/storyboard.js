@@ -2,6 +2,7 @@
 (() => {
   let data = null, collection = '', owner = '', requestId = 0, busy = false;
   let documentDirty = false, editorDirty = false, edited = null, shownVersion = '', pollBusy = false;
+<<<<<<< HEAD
   let optionsDirty = false;
   let inputDirty = false, inputSrt = null, promptName = '';
   const instructionLabels={image:'Image',video_4s:'Video 4s',video_6s:'Video 6s',video_8s:'Video 8s',video_10s:'Video 10s'};
@@ -19,13 +20,21 @@
   function showTemplate(){showFiles();const f=promptOptions.templates[activeInstruction]||{text:'',name:''};$('sb-template').value=f.text;promptName=f.name;$('sb-prompt-file').textContent=f.name||'No TXT loaded for '+instructionLabels[activeInstruction];}
   function generationOptions(){const size=Number($('sb-batch-size').value);if(!Number.isInteger(size)||size<1||size>20)throw Error('Rows per message must be a whole number from 1 to 20.');return {provider:webProvider()?'chatgpt-web':$('sb-provider').value,prompt_kind:webProvider()?'image':'both',use_row_instructions:webProvider(),batch_size:size,composer_mode:'chat',model:$('sb-model').value.trim()||(webProvider()?'GPT-5.6 Sol':null)};}
   async function saveOptions(){const n=Number($('sb-video-row-count').value);if(!Number.isInteger(n)||n<0||n>1000)throw Error('Video row count must be a whole number from 0 to 1000.');promptOptions.video_row_count=n;stashTemplate();const g=generationOptions();if(webProvider())promptOptions.chatgpt_model=g.model;promptOptions.batch_size=g.batch_size;promptOptions.composer_mode=g.composer_mode;await api('PUT',path('/prompt-options'),promptOptions);optionsDirty=false;if($('sb-unsaved'))$('sb-unsaved').textContent='Saved';}
+=======
+  let inputDirty = false, inputSrt = null, promptName = '';
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   const checked = new Set();
   const path = suffix => '/api/storyboard/videos/' + collection + (suffix || '');
   function discard() {
     if (busy) { notice('Wait for the current storyboard action to finish.', true); return false; }
+<<<<<<< HEAD
     if (!closePromptEditor()) return false;
     if ((documentDirty || editorDirty || inputDirty || optionsDirty) && !confirm('Discard unsaved input, script or concept edits?')) return false;
     documentDirty = editorDirty = inputDirty = optionsDirty = false; inputSrt = null; edited = null; $('sb-editor').hidden = true; return true;
+=======
+    if ((documentDirty || editorDirty || inputDirty) && !confirm('Discard unsaved input, script or concept edits?')) return false;
+    documentDirty = editorDirty = inputDirty = false; inputSrt = null; edited = null; $('sb-editor').hidden = true; return true;
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   }
   async function run(fn, control) {
     if (busy) return;
@@ -39,7 +48,11 @@
   }
   function assertSaved(allowOptions=false) {
     assertCollection();
+<<<<<<< HEAD
     if (documentDirty || editorDirty || inputDirty || (!allowOptions && optionsDirty)) throw Error('Save or discard input/script/concept edits first.');
+=======
+    if (documentDirty || editorDirty || inputDirty) throw Error('Save or discard input/script/concept edits first.');
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     if (!data?.document) throw Error('Save the script before importing audio or segments.');
   }
   function selected(limit=200,allowOptions=false) {
@@ -58,13 +71,21 @@
     if (s.active_concept) return 'Outdated concept';
     return s.job?.state || 'No concept';
   }
+<<<<<<< HEAD
   function rowJob(s){return s.prompt_jobs?s.prompt_jobs[rowKind(s)]:s.job;}
+=======
+  function rowJob(s){return s.prompt_jobs?s.prompt_jobs[$('sb-prompt-kind').value]:s.job;}
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   function rowState(s) {
     const job=rowJob(s);
     if(job?.state==='RUNNING')return 'running';
     if(job?.state==='QUEUED')return 'queued';
     if(['FAILED','NEEDS_REVIEW','INTERRUPTED'].includes(job?.state))return 'error';
+<<<<<<< HEAD
     if(s.ready&&s.active_concept?.[rowKind(s)+'_prompt']?.trim())return job?.instruction_type&&job.instruction_type!==rowInstruction(s)?'pending':'completed';
+=======
+    if(s.ready&&s.active_concept?.[$('sb-prompt-kind').value+'_prompt']?.trim())return 'completed';
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     if(job?.state==='CANCELLED')return 'cancelled';
     if(s.active_concept&&!s.ready||job?.state==='STALE')return 'stale';
     return 'pending';
@@ -74,6 +95,7 @@
     const filter=$('sb-filter').value,query=$('sb-search').value.trim().toLowerCase();
     return (data?.segments||[]).filter(s=>{
       const state=rowState(s);
+<<<<<<< HEAD
       return (filter==='all'||filter===state||filter==='unfinished'&&state!=='completed')&&(!query||[s.ordinal,s.text,s.active_concept?.[rowKind(s)+'_prompt'],s.job?.error].join(' ').toLowerCase().includes(query));
     });
   }
@@ -86,10 +108,19 @@
     if(webProvider())$('sb-model').value=promptOptions.chatgpt_model||'GPT-5.6 Sol';
     $('sb-video-row-count').value=promptOptions.video_row_count??15;
     if(webProvider())$('sb-provider').value='chatgpt-web-chat';
+=======
+      return (filter==='all'||filter===state||filter==='unfinished'&&state!=='completed')&&(!query||[s.ordinal,s.text,s.active_concept?.[$('sb-prompt-kind').value+'_prompt'],s.job?.error].join(' ').toLowerCase().includes(query));
+    });
+  }
+  function fillInputs(){
+    inputSrt=null;inputDirty=false;promptName=data?.document?.prompt_name||'';
+    $('sb-template').value=data?.document?.prompt_template||'';
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     $('sb-srt-file').textContent=data?.document?.srt_name||(data?.segments.length?`${data.segments.length} saved SRT rows`:'No SRT selected.');
     $('sb-prompt-file').textContent=promptName||($('sb-template').value?'Saved prompt instructions':'No prompt TXT selected.');
     $('sb-input-message').textContent=data?.segments.length?'Rows are saved. Choose a TXT to update their prompt instructions.':'Select an SRT and a prompt TXT, then load them.';
   }
+<<<<<<< HEAD
   function updateTableSelection(){const box=$('sb-select-table');if(!box)return;const rows=visibleRows(),n=rows.filter(s=>checked.has(s.id)).length;box.checked=!!rows.length&&n===rows.length;box.indeterminate=n>0&&n<rows.length;box.disabled=!rows.length;}
   function selectionChanged() {
     updateTableSelection();
@@ -115,6 +146,21 @@
       const concept=element('td'),kind=mode==='video'||mode==='editor'&&rowKind(s)==='video'?'video':'image';
       const prompt=button(s.active_concept?.[kind+'_prompt']||'Add '+kind+' prompt…',()=>openPromptEditor(s,kind));
       prompt.type='button';prompt.className='scene-prompt-open';prompt.setAttribute('aria-label','Edit '+kind+' prompt for scene '+s.ordinal);prompt.title='View full prompt and edit';concept.append(prompt);tr.append(concept);
+=======
+  function selectionChanged() { render(); document.dispatchEvent(new Event('storyboard-selection')); }
+  function renderRows(target, mode) {
+    target.replaceChildren();
+    const batches=new Map();
+    if(mode==='editor')for(const item of data?.segments||[]){const batch=rowJob(item)?.text_batch_id;if(batch){if(!batches.has(batch))batches.set(batch,[]);batches.get(batch).push(String(item.ordinal).padStart(3,'0'));}}
+    for (const s of mode==='editor'?visibleRows():data?.segments || []) {
+      const tr=element('tr'); const box=element('input'); box.type='checkbox';box.checked=checked.has(s.id);box.dataset.segmentId=s.id;
+      box.setAttribute('aria-label','Select segment '+s.ordinal);
+      box.onchange=()=>{box.checked?checked.add(s.id):checked.delete(s.id);selectionChanged();};
+      const td=element('td');td.append(box);tr.append(td);
+      tr.append(element('td',String(s.ordinal).padStart(3,'0')+'\n'+timestamp(s.start_ms)+'\n'+timestamp(s.end_ms)+'\n'+((s.end_ms-s.start_ms)/1000).toFixed(3)+' s'));
+      const text=element('td');text.append(element('p',s.text));tr.append(text);
+      const concept=element('td');concept.append(element('p',s.active_concept ? ((mode==='video'||mode==='editor'&&$('sb-prompt-kind').value==='video')?s.active_concept.video_prompt:s.active_concept.image_prompt) : 'Create a concept first.'));tr.append(concept);
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
       const status=element('td');
       if(mode==='editor'){const badge=element('span',labels[rowState(s)],'sb-badge');badge.dataset.state=rowState(s);status.append(badge);tr.dataset.state=rowState(s);tr.dataset.rowId=s.id;}
       else status.textContent=segmentStatus(s);
@@ -138,16 +184,25 @@
       }
       target.append(tr);
     }
+<<<<<<< HEAD
     if(!data?.segments.length){const tr=element('tr'),td=element('td','Import SRT / JSON in SRT to Prompt to load timed segments.');td.colSpan=mode==='editor'?9:5;tr.append(td);target.append(tr);}
     else if(!target.children.length){const tr=element('tr'),td=element('td','No rows match this filter.');td.colSpan=9;tr.append(td);target.append(tr);}
     if(window.studioTables)window.studioTables.reconcile(destination,target);else destination.replaceChildren(target);
+=======
+    if(!data?.segments.length){const tr=element('tr'),td=element('td','Import SRT / JSON in SRT to Prompt to load timed segments.');td.colSpan=mode==='editor'?6:5;tr.append(td);target.append(tr);}
+    else if(!target.children.length){const tr=element('tr'),td=element('td','No rows match this filter.');td.colSpan=6;tr.append(td);target.append(tr);}
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   }
   function render() {
     updateTableSelection();if($('sb-unsaved'))$('sb-unsaved').textContent=optionsDirty?'Unsaved settings / row choices':'';
     $('sb-count').textContent=`${checked.size} of ${data?.segments.length||0} segments selected`;
     const counts={};for(const s of data?.segments||[])counts[rowState(s)]=(counts[rowState(s)]||0)+1;
     $('sb-summary').replaceChildren(...Object.entries(labels).map(([state,label])=>element('span',`${label}: ${counts[state]||0}`)));
+<<<<<<< HEAD
     const outputs=(data?.prompt_outputs||[]).filter(item=>item.kind==='mixed'||item.kind===$('sb-prompt-kind').value);
+=======
+    const outputs=(data?.prompt_outputs||[]).filter(item=>item.kind===$('sb-prompt-kind').value);
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     $('sb-output-folders').replaceChildren(...outputs.map(item=>element('p','TXT folder: '+item.directory)));
     $('sb-output-folders').hidden=!outputs.length;
     $('sb-warnings').textContent=(data?.warnings||[]).join('\n');
@@ -167,10 +222,17 @@
     } else audio.removeAttribute('src');
   }
   function renderWorkers(status) {
+<<<<<<< HEAD
     $('sb-workers').hidden=!webProvider();
     if($('sb-workers').hidden)return;
     $('sb-workers-status').textContent=status.error||(!status.available?'Gateway unavailable':!status.extensionConnected?'ChatGPT extension disconnected':status.settings?.paused?'Queue paused':status.needsReview?'Account needs review':`Extension ${status.extensionVersion||'unknown'} · Chat / Temporary OFF · 1 tab · Video: 1 row + TXT each time → text · Image: ${$('sb-batch-size').value} rows → ZIP`);
     const phases={WAITING_SETUP:'Waiting for another tab to finish input / upload / Send',OPENING_TAB:'Opening tab',BINDING_TAB:'Binding tab',WAITING_PAGE:'Waiting for ChatGPT input',SELECTING_MODE:'Selecting conversation mode',ENABLING_TEMPORARY:'Enabling Temporary Chat',SELECTING_MODEL:'Checking model',TYPING:'Entering numbered SRT rows',ATTACHING_FILE:'Uploading prompt TXT',WAITING_ATTACHMENT:'Checking attached file',WAITING_SEND_BUTTON:'Waiting for Send button',VERIFYING_SUBMISSION:'Confirming message was sent',SENDING:'Sending prompt',WAITING_RESPONSE:'Waiting for response',VERIFYING_COMPLETION:'Checking completed response',DOWNLOADING_ZIP:'Downloading ZIP',AWAITING_SAVE:'Saving prompt results'};
+=======
+    $('sb-workers').hidden=$('sb-provider').value!=='chatgpt-web';
+    if($('sb-workers').hidden)return;
+    $('sb-workers-status').textContent=status.error||(!status.available?'Gateway unavailable':!status.extensionConnected?'ChatGPT extension disconnected':status.settings?.paused?'Queue paused':status.needsReview?'Account needs review':'Work / Temporary OFF · 1 tab · 5 numbered rows → ZIP → next group');
+    const phases={WAITING_SETUP:'Waiting for another tab to finish input / upload / Send',OPENING_TAB:'Opening tab',BINDING_TAB:'Binding tab',WAITING_PAGE:'Waiting for ChatGPT input',SELECTING_MODE:'Selecting Work',ENABLING_TEMPORARY:'Enabling Temporary Chat',SELECTING_MODEL:'Checking model',TYPING:'Entering numbered SRT rows',ATTACHING_FILE:'Uploading prompt TXT',WAITING_ATTACHMENT:'Checking attached file',WAITING_SEND_BUTTON:'Waiting for Send button',VERIFYING_SUBMISSION:'Confirming message was sent',SENDING:'Sending batch',WAITING_RESPONSE:'Waiting for response',VERIFYING_COMPLETION:'Checking completed response',DOWNLOADING_ZIP:'Downloading ZIP',AWAITING_SAVE:'Checking ZIP and saving TXT files'};
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     $('sb-worker-rows').replaceChildren(...(status.workers||[]).map(w=>{
       const row=element('tr'),phase=w.progress?.phase;
       row.append(element('td',w.id),element('td',Number.isInteger(w.tabId)?String(w.tabId):'Not open'),element('td',w.error?w.state:(phases[phase]||phase?.replaceAll('_',' ')||w.state)));
@@ -180,7 +242,11 @@
   }
   async function reload(fields=false) {
     assertCollection();const ticket=++requestId,vid=collection,pid=owner;
+<<<<<<< HEAD
     const [result,workers]=await Promise.all([api('GET',path()),webProvider()?api('GET','/api/chatgpt/status').catch(e=>({error:'Could not read worker status: '+e.message})):null]);
+=======
+    const [result,workers]=await Promise.all([api('GET',path()),$('sb-provider').value==='chatgpt-web'?api('GET','/api/chatgpt/status').catch(e=>({error:'Could not read worker status: '+e.message})):null]);
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     if(ticket!==requestId||vid!==collection||pid!==$('project-select').value)return;
     const oldIds=new Set(data?.segments.map(s=>s.id)||[]);
     data=result;
@@ -188,6 +254,7 @@
     for(const id of checked)if(!ids.has(id))checked.delete(id);
     for(const s of data.segments)if(!oldIds.has(s.id))checked.add(s.id);
     if(fields){$('sb-script').value=data.document?.script_text||'';$('sb-style').value=data.document?.visual_style||'';documentDirty=false;fillInputs();}
+<<<<<<< HEAD
     else if(!inputDirty&&!optionsDirty){
       const incoming=data.document?.prompt_options?.templates||data.prompt_options?.templates||{};
       for(const key of Object.keys(instructionLabels)){
@@ -196,6 +263,8 @@
       }
       showTemplate();
     }
+=======
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     showAudio();render();renderWorkers(workers||{});
   }
   async function open() {
@@ -298,6 +367,7 @@
     if(!f.name.toLowerCase().endsWith('.srt'))throw Error('Choose an SRT file.');
     inputSrt=f;inputDirty=true;$('sb-srt-file').textContent=f.name;$('sb-input-message').textContent='SRT selected. Choose the prompt TXT and click Load SRT / save prompt.';
   });
+<<<<<<< HEAD
   $('sb-video-row-count').onchange=()=>{const n=Number($('sb-video-row-count').value);if(!Number.isInteger(n)||n<0||n>1000){notice('Enter a whole number from 0 to 1000.',true);return;}promptOptions.video_row_count=n;promptOptions.row_instructions={};optionsDirty=true;render();};
   $('sb-batch-size').onchange=()=>{optionsDirty=true;if($('sb-unsaved'))$('sb-unsaved').textContent='Unsaved settings';};
   $('sb-save-options').onclick=()=>run(async()=>{assertCollection();if(inputSrt)throw Error('Load the selected SRT before saving prompt settings.');await saveOptions();inputDirty=false;notice('Prompt instructions and row choices saved for this video.');});
@@ -323,6 +393,23 @@
       await api('PUT',path(),{script_text:data.document.script_text||'',visual_style:data.document.visual_style||'',prompt_template:template,prompt_name:imageFile.name||''});
     }
     await saveOptions();await reload(true);notice(`${data.segments.length} SRT rows ready. Choose each row’s instructions, then Start selected rows.`);
+=======
+  $('sb-choose-prompt').onclick=()=>run(async()=>{
+    assertCollection();const f=await window.studio.importScriptSource('prompt');if(!f)return;
+    if(!f.text.trim()||f.text.length>100000)throw Error('Prompt TXT must contain 1–100,000 characters.');
+    promptName=f.name;$('sb-template').value=f.text;inputDirty=true;$('sb-prompt-file').textContent=f.name;$('sb-input-message').textContent='Prompt selected. Click Load SRT / save prompt.';
+  });
+  $('sb-inputs').onsubmit=e=>{e.preventDefault();run(async()=>{
+    assertCollection();const template=$('sb-template').value;
+    if(!template.trim())throw Error('Choose a non-empty prompt TXT first.');
+    if(documentDirty||editorDirty)throw Error('Save or discard advanced script / concept edits first.');
+    if(inputSrt)await api('POST',path('/prompt-input'),{srt_content:inputSrt.text,srt_name:inputSrt.name,prompt_template:template,prompt_name:promptName});
+    else {
+      if(!data?.segments.length)throw Error('Choose an SRT file first.');
+      await api('PUT',path(),{script_text:data.document.script_text||'',visual_style:data.document.visual_style||'',prompt_template:template,prompt_name:promptName});
+    }
+    await reload(true);notice(`${data.segments.length} SRT rows ready. Select Image or Video prompt, then Start selected rows.`);
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   });};
   $('sb-discard-inputs').onclick=()=>{if(!busy&&(!inputDirty||confirm('Discard unsaved SRT / TXT changes?')))fillInputs();};
   $('sb-filter').onchange=render;$('sb-search').oninput=render;
@@ -339,10 +426,16 @@
     await api('POST',path('/segments'),{format:f.name.toLowerCase().endsWith('.srt')?'srt':'json',content:f.text});await reload();notice('Segments imported with original timestamps.');
   });
   $('sb-collection').onchange=()=>{const next=$('sb-collection').value;if(!discard()){$('sb-collection').value=collection;return;}collection=next;data=null;checked.clear();if(collection)action(()=>reload(true));else render();};
+<<<<<<< HEAD
   $('sb-prompt-kind').onchange=()=>{$('sb-prompt-heading').textContent='Prompt for chosen row type';render();};
   function providerChanged(){const web=webProvider();$('sb-model').disabled=false;$('sb-model').value=web?(promptOptions.chatgpt_model||'GPT-5.6 Sol'):'';$('sb-model').placeholder=web?'Exact ChatGPT model name':'Provider default';$('sb-prompt-kind').disabled=!web;$('sb-workers').hidden=!web;}
   $('sb-model').oninput=()=>{optionsDirty=true;selectionChanged();};
   $('sb-provider').onchange=()=>{optionsDirty=true;providerChanged();};providerChanged();
+=======
+  $('sb-prompt-kind').onchange=()=>{$('sb-prompt-heading').textContent=$('sb-prompt-kind').value==='video'?'Video prompt':'Image prompt';render();};
+  function providerChanged(){const web=$('sb-provider').value==='chatgpt-web';$('sb-model').disabled=web;$('sb-model').placeholder=web?'Uses the Chat page model':'Provider default';$('sb-prompt-kind').disabled=!web;$('sb-workers').hidden=!web;}
+  $('sb-provider').onchange=providerChanged;providerChanged();
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   $('sb-refresh').onclick=()=>action(()=>open());
   $('sb-check-provider').onclick=()=>run(async()=>{
     const result=await api('GET','/api/storyboard/providers');$('sb-provider-status').textContent=result.providers.map(p=>p.id+': '+(p.status || (p.installed?'installed (sign-in not verified)':'not on PATH'))).join(' · ');
@@ -353,6 +446,7 @@
   const startStatus=document.createElement('p');startStatus.id='sb-start-status';startStatus.setAttribute('role','status');startStatus.setAttribute('aria-live','polite');
   $('sb-create-concepts').parentElement.insertAdjacentElement('afterend',startStatus);
   $('sb-create-concepts').onclick=()=>run(async()=>{
+<<<<<<< HEAD
     startStatus.textContent='Checking selected rows…';
     try {
     const items=selected(1000,webProvider());
@@ -365,6 +459,14 @@
     await reload();notice(`${result.ids.length} row(s) queued${result.batch_count?' in '+result.batch_count+' batch(es) of up to '+result.batch_size:''}; ${result.skipped.length} skipped because current or pending concepts already exist.`);
     startStatus.textContent=`${result.ids.length} rows queued; ${result.skipped.length} skipped. See row status for progress.`;
     } catch(error) {startStatus.textContent='Start failed: '+(error.message||String(error));console.error('[SRT to Prompt start]',error);throw error;}
+=======
+    const items=selected(1000);
+    if($('sb-provider').value==='chatgpt-web'&&!data.document.prompt_template?.trim())throw Error('Choose and save your prompt TXT first.');
+    if(!confirm(`Create prompts for up to ${items.length} row(s)? One Work tab sends up to 5 numbered rows, downloads and saves the ZIP, then sends the next group. The prompt TXT is attached only for the first group.`))return;
+    notice('Preparing one Work tab for prompt ZIP batches…');
+    const result=await api('POST',path('/generate-concepts'),{segment_ids:items.map(s=>s.id),provider:$('sb-provider').value,prompt_kind:$('sb-provider').value==='chatgpt-web'?$('sb-prompt-kind').value:'both',model:$('sb-model').value.trim()||null,regenerate:$('sb-regenerate').checked});
+    await reload();notice(`${result.ids.length} row(s) queued${result.batch_count?' in '+result.batch_count+' batch(es) of up to 5':''}; ${result.skipped.length} skipped because current or pending concepts already exist.`);
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   });
   $('sb-cancel-concepts').onclick=()=>run(async()=>{assertCollection();if(!confirm('Cancel all queued concept jobs in this script? The active job continues.'))return;const r=await api('POST',path('/cancel-concepts'),{});await reload();notice(`${r.cancelled} queued concept job(s) cancelled.`);});
   $('sb-editor-close').onclick=()=>{if(editorDirty&&!confirm('Discard unsaved editor changes?'))return;editorDirty=false;edited=null;$('sb-editor').hidden=true;};
@@ -393,9 +495,15 @@
   }
   async function retryConceptRows(items){
     assertSaved();
+<<<<<<< HEAD
     if(webProvider())await saveOptions();
     if(!confirm(`Retry ${items.length} failed row(s)? Check uncertain ChatGPT requests before retrying.`))return;
     const r=await api('POST',path('/retry-failed'),{segment_ids:items.map(s=>s.id),kind:'concept',reviewed:true,...generationOptions()});
+=======
+    if($('sb-provider').value==='chatgpt-web'&&!data.document.prompt_template?.trim())throw Error('Choose and save your prompt TXT first.');
+    if(!confirm(`Retry ${items.length} failed row(s)? Check uncertain ChatGPT requests before retrying.`))return;
+    const r=await api('POST',path('/retry-failed'),{segment_ids:items.map(s=>s.id),kind:'concept',reviewed:true,provider:$('sb-provider').value,prompt_kind:$('sb-provider').value==='chatgpt-web'?$('sb-prompt-kind').value:'both',model:$('sb-model').value.trim()||null});
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     await reload();notice(`${r.ids.length} failed rows queued again.`);
   }
   for(const kind of ['concept']){
@@ -422,7 +530,11 @@
   document.addEventListener('workflow-changed',()=>{
     const ctx=window.workflow?.context();
     if(!ctx||(ctx.project_id===owner&&ctx.video_id===collection))return;
+<<<<<<< HEAD
     closePromptEditor(true);++requestId;owner=ctx.project_id;collection=ctx.video_id;data=null;checked.clear();edited=null;documentDirty=editorDirty=false;
+=======
+    ++requestId;owner=ctx.project_id;collection=ctx.video_id;data=null;checked.clear();edited=null;documentDirty=editorDirty=false;
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     $('sb-editor').hidden=true;$('sb-script').value='';$('sb-style').value='';fillInputs();showAudio();render();
     if(!document.querySelector('[data-view="storyboard"]').hidden)action(open);
   });

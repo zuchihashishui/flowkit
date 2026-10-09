@@ -65,9 +65,12 @@ async function openFlowWindow({temporary=false,url=FLOW_TAB_URL,focused=false}={
     const promise=(async()=>{
       const old=projectFlowTabs.get(url),existing=old?await chrome.tabs.get(old).catch(()=>null):null;
       if(existing&&sameFlowDestination(existing.pendingUrl||existing.url,url))return existing;
+<<<<<<< HEAD
       // Reuse the project tab opened by Electron (also after worker restart).
       const matching=(await chrome.tabs.query({url:flowUrls})).find(t=>sameFlowDestination(t.pendingUrl||t.url,url));
       if(matching){projectFlowTabs.set(url,matching.id);return matching;}
+=======
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
       const win=await chrome.windows.create({url,type:'normal',focused});
       const tab=win.tabs?.[0]||(await chrome.tabs.query({windowId:win.id}))[0];
       if(!Number.isInteger(tab?.id))throw Error('Chrome did not return the Flow worker tab');

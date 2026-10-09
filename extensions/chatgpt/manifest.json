@@ -1,7 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Flowkit ChatGPT Gateway",
+<<<<<<< HEAD
   "version": "1.16.15",
+=======
+  "version": "1.12.3",
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   "description": "Local API gateway for ChatGPT \u2014 automates your logged-in session",
   "permissions": [
     "activeTab",

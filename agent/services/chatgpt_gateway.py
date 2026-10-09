@@ -3,7 +3,10 @@ import asyncio
 from contextlib import contextmanager
 import json
 import inspect
+<<<<<<< HEAD
 import logging
+=======
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 import sqlite3
 import time
 import uuid
@@ -135,7 +138,11 @@ async def commit(request_id, ok):
         r = await client.post(URL+'/commit', json={'request_id':request_id,'ok':ok})
         r.raise_for_status()
 
+<<<<<<< HEAD
 async def complete(prompt, model=None, validate=None, job_id=None, *, attachment=None, composer_mode=None, temporary=None, timeout_seconds=None, fresh_tab=False, page_url=None, prepared_tab_token=None, download_srt=False, validate_payload=None, srt_job_id=None, text_session_id=None, prompt_template=None, download_prompt_zip=False, video_prompt_text=False):
+=======
+async def complete(prompt, model=None, validate=None, job_id=None, *, attachment=None, composer_mode=None, temporary=None, timeout_seconds=None, fresh_tab=False, page_url=None, prepared_tab_token=None, download_srt=False, validate_payload=None, srt_job_id=None, text_session_id=None, prompt_template=None, download_prompt_zip=False):
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     global _cleanup_pending
     config = settings()
     timeout = timeout_seconds or config['timeout_seconds']
@@ -154,8 +161,11 @@ async def complete(prompt, model=None, validate=None, job_id=None, *, attachment
         extra['freshTab'] = True
     if srt_job_id:
         extra['srtJobId'] = srt_job_id
+<<<<<<< HEAD
     if video_prompt_text:
         extra['videoPromptText'] = True
+=======
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     if download_prompt_zip:
         extra['downloadPromptZip'] = True
     if download_srt:
@@ -165,8 +175,13 @@ async def complete(prompt, model=None, validate=None, job_id=None, *, attachment
     if attachment is not None:
         extra['attachment'] = attachment
     inflight = _srt_inflight if fresh_tab else _inflight
+<<<<<<< HEAD
     limit = 1 if fresh_tab or download_prompt_zip or video_prompt_text else config['workers']
     if (not fresh_tab and _restarting_text) or config['paused'] or len(inflight) >= limit:
+=======
+    limit = 1 if fresh_tab or download_prompt_zip else config['workers']
+    if config['paused'] or len(inflight) >= limit:
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
         raise GatewayBusy('ChatGPT queue is paused or all workers are busy.')
     rid = str(uuid.uuid4())
     caller = asyncio.current_task()
@@ -186,7 +201,11 @@ async def complete(prompt, model=None, validate=None, job_id=None, *, attachment
         async with httpx.AsyncClient(trust_env=False, timeout=timeout+(1080 if download_srt else 840 if attachment is not None else 690)) as client:
             response = await client.post(URL+'/v1/chat/completions',json={
                 'messages':[{'role':'user','content':prompt}], 'model':model or 'auto',
+<<<<<<< HEAD
                 'timeout':timeout*1000,'workers':1 if download_prompt_zip or video_prompt_text else config['workers'],'temporary':temporary, **extra})
+=======
+                'timeout':timeout*1000,'workers':1 if download_prompt_zip else config['workers'],'temporary':temporary, **extra})
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
         raw = response.text
         with db() as c:
             c.execute('UPDATE requests SET response=? WHERE id=?',(raw,rid))
@@ -375,6 +394,7 @@ async def stop_srt(job_id):
             return response.json()
         except httpx.HTTPError as error:
             raise ValueError('Could not confirm that the SRT worker stopped. Check the ChatGPT window and connection.') from error
+<<<<<<< HEAD
 
 async def close_prompt_phase():
     """Close saved owned text tabs before starting the next prompt phase."""
@@ -436,3 +456,5 @@ async def _replace_text_run(*, open_new):
         finally:
             _restarting_text = False
         return {'ok': True}
+=======
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af

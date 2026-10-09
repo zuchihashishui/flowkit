@@ -4,22 +4,35 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 test('SRT + TXT import, row filters, errors, retry and selection survive refresh',async()=>{
  const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'../ui/index.html'),'utf8'),{runScripts:'outside-only'}),w=dom.window,$=id=>w.document.getElementById(id),calls=[],notices=[];
  const data={video:{id:'v1',project_id:'p1',title:'SRT scenes'},document:null,segments:[],warnings:[]};
+<<<<<<< HEAD
  w.eval(fs.readFileSync(path.join(__dirname,'../ui/data-table.js'),'utf8'));
+=======
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  w.$=$;w.confirm=()=>true;w.setInterval=()=>0;w.notice=(message)=>notices.push(message);
  w.action=async fn=>{try{return await fn();}catch(error){notices.push(error.message);}};
  w.api=async(method,route,body)=>{
   calls.push({method,route,body});
+<<<<<<< HEAD
   if(route.endsWith('/restart-text'))return {ok:true};
   if(route==='/api/chatgpt/status')return {available:true,extensionConnected:true,workers:[{id:'worker-1',tabId:101,state:'RUNNING',progress:{phase:'ATTACHING_FILE'}},{id:'worker-2',tabId:102,state:'RUNNING',progress:{phase:'WAITING_SETUP'}},{id:'worker-3',tabId:103,state:'NEEDS_REVIEW',error:'Upload failed <script>unsafe()</script>'}]};
   if(route.startsWith('/api/videos'))return [data.video];
   if(route==='/api/storyboard/videos/v1')return structuredClone(data);
   if(route.endsWith('/prompt-options')){data.document.prompt_options=structuredClone(body);return body;}
+=======
+  if(route==='/api/chatgpt/status')return {available:true,extensionConnected:true,workers:[{id:'worker-1',tabId:101,state:'RUNNING',progress:{phase:'ATTACHING_FILE'}},{id:'worker-2',tabId:102,state:'RUNNING',progress:{phase:'WAITING_SETUP'}},{id:'worker-3',tabId:103,state:'NEEDS_REVIEW',error:'Upload failed <script>unsafe()</script>'}]};
+  if(route.startsWith('/api/videos'))return [data.video];
+  if(route==='/api/storyboard/videos/v1')return structuredClone(data);
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   if(route.endsWith('/prompt-input')){
    data.document={id:'doc1',prompt_template:body.prompt_template,prompt_name:body.prompt_name,srt_name:body.srt_name};
    data.segments=Array.from({length:200},(_,i)=>({id:'s'+(i+1),ordinal:i+1,start_ms:i*4000,end_ms:(i+1)*4000,text:'日本語 '+(i+1)+'\nNext line',concepts:[],active_concept:null,ready:false,media_jobs:[]}));
    return structuredClone(data);
   }
+<<<<<<< HEAD
   if(route.endsWith('/generate-concepts'))return {ids:body.segment_ids,skipped:[],batch_count:Math.ceil(body.segment_ids.length/body.batch_size),batch_size:body.batch_size};
+=======
+  if(route.endsWith('/generate-concepts'))return {ids:body.segment_ids,skipped:[],batch_count:Math.ceil(body.segment_ids.length/5)};
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   if(route.endsWith('/retry-failed')){for(const id of body.segment_ids)data.segments.find(s=>s.id===id).job={state:'QUEUED'};return {ids:body.segment_ids,skipped:[],resumed:[]};}
   throw Error('Unexpected route '+route);
  };
@@ -29,11 +42,15 @@ test('SRT + TXT import, row filters, errors, retry and selection survive refresh
  $('project-select').append(w.option('p1','Project'));$('project-select').value='p1';$('video-select').append(w.option('v1','Video'));$('video-select').value='v1';
  try{
   new vm.Script(fs.readFileSync(path.join(__dirname,'../ui/storyboard.js'),'utf8')).runInContext(dom.getInternalVMContext());await w.storyboard.open();
+<<<<<<< HEAD
   assert.equal($('sb-provider').querySelector('option[value="chatgpt-web"]'),null);
+=======
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   await $('sb-choose-srt').onclick();await $('sb-choose-prompt').onclick();
   $('sb-inputs').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
   const input=calls.find(c=>c.route.endsWith('/prompt-input'));assert.equal(input.body.srt_name,'scenes.srt');assert.equal(input.body.prompt_name,'prompt.txt');
   assert.equal($('sb-rows').children.length,200);assert.equal(w.storyboard.count(),200);assert.match($('sb-summary').textContent,/Not started: 200/);
+<<<<<<< HEAD
   $('sb-batch-size').value='10';$('sb-batch-size').onchange();
   await $('sb-create-concepts').onclick();assert.equal(calls.find(c=>c.route.endsWith('/generate-concepts')).body.segment_ids.length,200);
   assert.ok(notices.some(n=>/200 row\(s\) queued in 20 batch/.test(n)));
@@ -43,11 +60,19 @@ test('SRT + TXT import, row filters, errors, retry and selection survive refresh
   w.api=async(method,route,body)=>{if(route.endsWith('/generate-concepts'))throw Error('ChatGPT extension disconnected');return originalApi(method,route,body);};
   await $('sb-create-concepts').onclick();assert.match($('sb-start-status').textContent,/Start failed: ChatGPT extension disconnected/);
   w.api=originalApi;w.console.error=originalError;
+=======
+  await $('sb-create-concepts').onclick();assert.equal(calls.find(c=>c.route.endsWith('/generate-concepts')).body.segment_ids.length,200);
+  assert.ok(notices.some(n=>/200 row\(s\) queued in 40 batch/.test(n)));
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   data.segments[0].ready=true;data.segments[0].active_concept={id:'c1',version:1,image_prompt:'A saved image',video_prompt:''};data.segments[0].job={state:'COMPLETED'};
   data.segments[1].job={state:'FAILED',error:'Rate limit <script>unsafe()</script>'};data.segments[2].job={state:'RUNNING'};data.segments[3].job={state:'QUEUED'};
   for(const i of [1,2,3])data.segments[i].job.text_batch_id='batch-1';
   data.prompt_outputs=[{kind:'image',directory:'/output/text_prompts/run-1'},{kind:'video',directory:'/output/text_prompts/video-run'}];
+<<<<<<< HEAD
   await $('sb-refresh').onclick();assert.equal($('sb-video-row-count').value,'15');$('sb-video-row-count').value='0';$('sb-video-row-count').onchange();await $('sb-save-options').onclick();assert.match($('sb-summary').textContent,/Completed: 1/);assert.match($('sb-summary').textContent,/Error \/ review: 1/);
+=======
+  await $('sb-refresh').onclick();assert.match($('sb-summary').textContent,/Completed: 1/);assert.match($('sb-summary').textContent,/Error \/ review: 1/);
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   assert.equal($('sb-output-folders').hidden,false);assert.equal($('sb-output-folders').textContent,'TXT folder: /output/text_prompts/run-1');
   $('sb-prompt-kind').value='video';$('sb-prompt-kind').onchange();assert.equal($('sb-output-folders').textContent,'TXT folder: /output/text_prompts/video-run');
   $('sb-prompt-kind').value='image';$('sb-prompt-kind').onchange();
@@ -59,6 +84,7 @@ test('SRT + TXT import, row filters, errors, retry and selection survive refresh
   const call=calls.find(c=>c.route.endsWith('/retry-failed'));assert.deepEqual(Array.from(call.body.segment_ids),['s2']);assert.equal(data.segments[0].active_concept.image_prompt,'A saved image');
   $('sb-filter').value='all';$('sb-filter').onchange();$('sb-select-unfinished').click();assert.equal(w.storyboard.count(),196);
   $('sb-search').value='日本語 200';$('sb-search').oninput();assert.equal($('sb-rows').children.length,1);assert.match($('sb-rows').textContent,/日本語 200/);
+<<<<<<< HEAD
   for(const type of ['video_4s','video_6s','video_8s','video_10s']){
    await $('sb-upload-'+type).onclick();
   }
@@ -70,6 +96,8 @@ test('SRT + TXT import, row filters, errors, retry and selection survive refresh
   assert.equal(saved.templates.video_10s.text,'Create one visual prompt.\nStyle instructions.');
   await $('sb-create-concepts').onclick();const mixed=calls.filter(c=>c.route.endsWith('/generate-concepts')).at(-1).body;
   assert.equal(mixed.provider,'chatgpt-web');assert.equal(mixed.composer_mode,'chat');assert.equal(mixed.batch_size,7);assert.equal(mixed.use_row_instructions,true);
+=======
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   assert.ok(!notices.some(n=>/Unexpected|not defined/.test(n)),notices.join('\n'));
  }finally{dom.window.close();}
 });
@@ -86,6 +114,7 @@ test('ChatGPT prompt start and explicit retry reach preparation despite historic
  await assert.rejects(context.submit('POST','/api/storyboard/videos/v/generate-concepts',{provider:'codex'}),/Preflight blocked/);
  assert.equal(calls.length,2);assert.deepEqual(checks,['images','image_prompts']);
 });
+<<<<<<< HEAD
 
 test('folder instructions load before SRT, preserve edits, resume folder loading and isolate videos',async()=>{
  const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'../ui/index.html'),'utf8'),{runScripts:'outside-only'}),w=dom.window,$=id=>w.document.getElementById(id),notices=[];
@@ -147,3 +176,5 @@ for(const kind of ['image','video'])test('chosen row prompt opens full '+kind+' 
   assert.equal($('sb-rows').querySelector('[data-instruction-row]').value,kind,'unsaved type choice retained');
  }finally{dom.window.close();}
 });
+=======
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af

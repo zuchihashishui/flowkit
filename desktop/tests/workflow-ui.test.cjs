@@ -175,6 +175,7 @@ test('Create SRT skips the global review checklist and keeps project/video owner
   assert.equal(w.document.querySelector('script[src="chatgpt-queue.js"]'),null);
  }finally{s.dom.window.close();}
 });
+<<<<<<< HEAD
 
 function projectAssemblyReply(method, route, body){
  const u=new URL(route,'http://local'),v=body?.video_id||u.searchParams.get('video_id');
@@ -223,3 +224,5 @@ test('late automatic source loading cannot overwrite another video or its saved 
   assert.match($('va-output-directory').textContent,/shared\/b\/exports/);
  }finally{s.dom.window.close();}
 });
+=======
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af

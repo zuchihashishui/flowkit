@@ -368,6 +368,7 @@ test('Text to Prompt IPC imports UTF-8 SRT and TXT and permits the atomic input 
   assert.ok(main.requests.some(r=>r.url.endsWith('/prompt-input')&&JSON.parse(r.options.body).prompt_name==='prompt.txt'));
  }finally{await fs.rm(folder,{recursive:true,force:true});}
 });
+<<<<<<< HEAD
 
 test('IPC timeout identifies route and warns against resubmitting uncertain writes',async()=>{
  const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-timeout-'));
@@ -378,3 +379,5 @@ test('IPC timeout identifies route and warns against resubmitting uncertain writ
   await assert.rejects(reads.invoke('api','GET','/api/chatgpt/status'),/Backend timeout: GET .*chatgpt\/status.*limit 10s/);
  }finally{await fs.rm(folder,{recursive:true,force:true});}
 });
+=======
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af

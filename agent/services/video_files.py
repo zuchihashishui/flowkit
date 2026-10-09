@@ -14,7 +14,11 @@ from agent.config import OUTPUT_DIR
 from agent.db.schema import get_db
 
 ROOT = OUTPUT_DIR / 'projects'
+<<<<<<< HEAD
 FOLDERS = ('elevenlabs', 'whisperx', 'srt', 'audio', 'text_prompts', 'scene_board', 'prompts/image', 'prompts/video', 'images', 'videos', 'exports')
+=======
+FOLDERS = ('elevenlabs', 'whisperx', 'srt', 'audio', 'prompts/image', 'prompts/video', 'images', 'videos', 'exports')
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 _lock = asyncio.Lock()
 log = logging.getLogger(__name__)
 
@@ -58,12 +62,18 @@ def write(root, relative, data):
 
 def copy(root, relative, source, allowed):
     source = Path(source)
+<<<<<<< HEAD
     from agent.services.output_paths import allowed as permitted
     if source.is_symlink() or not permitted(source, allowed) or not source.is_file():
         raise ValueError('Saved source is missing or outside its storage directory: ' + str(source))
     target = destination(root, relative)
     if target.resolve() == source.resolve():
         return
+=======
+    if source.is_symlink() or not source.resolve().is_relative_to(Path(allowed).resolve()) or not source.is_file():
+        raise ValueError('Saved source is missing or outside its storage directory: ' + str(source))
+    target = destination(root, relative)
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     stat = source.stat()
     if not stat.st_size:
         raise ValueError('Saved source is empty: ' + str(source))
@@ -126,29 +136,44 @@ def owned_files(project_id, video_id):
                 result.append((f'{category}/{rid}/job.json', json.dumps(row, ensure_ascii=False, indent=2), None, kind, rid))
                 if kind == 'elevenlabs':
                     result.append((f'{category}/{rid}/source.txt', row['text'], None, kind, rid))
+<<<<<<< HEAD
                 from agent.services.output_paths import job_directory
                 directory = job_directory(service, kind, rid)
+=======
+                directory = service.output / rid
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
                 if directory.is_dir():
                     # Only durable stage outputs, not renderer caches or partial files.
                     for path in directory.iterdir():
                         if path.is_file() and path.suffix.lower() in {'.mp3', '.wav', '.m4a', '.json', '.srt', '.txt', '.log'}:
                             result.append((f'{category}/{rid}/{path.name}', path, service.output, kind, rid))
             elif kind == 'audio':
+<<<<<<< HEAD
                 result.append((f'audio/{rid}{Path(row["filename"]).suffix}', service.resolve_source(rid)[1], service.output, kind, rid))
             elif kind == 'json':
                 result.append((f'whisperx/imports/{rid}.json', service.source_path(rid), service.output, kind, rid))
             elif kind == 'asset':
                 if json.loads(row['metadata']).get('elevenlabs_source_id'):
                     continue  # Original narration is already in the ElevenLabs job folder.
+=======
+                result.append((f'audio/{rid}{Path(row["filename"]).suffix}', service.output / '_imports' / row['filename'], service.output, kind, rid))
+            elif kind == 'json':
+                result.append((f'whisperx/imports/{rid}.json', service.output / (rid + '.json'), service.output, kind, rid))
+            elif kind == 'asset':
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
                 category = {'srt': 'srt', 'audio': 'audio', 'image': 'images', 'video': 'videos'}.get(row['kind'], 'exports')
                 path = service.path(row)
                 result.append((f'{category}/imports/{rid}{path.suffix}', path, service.output, kind, rid))
             elif kind == 'assembly' and row['state'] == 'COMPLETED':
+<<<<<<< HEAD
                 path = service.result_path(rid)
                 # New renders already live in exports/<job>/video.mp4. Avoid
                 # copying large MP4s a second time during every workspace sync.
                 relative = f'exports/{rid}/video.mp4' if path.parent.parent.name == 'exports' else f'exports/{rid}.mp4'
                 result.append((relative, path, service.output, kind, rid))
+=======
+                result.append((f'exports/{rid}.mp4', service.result_path(rid), service.output, kind, rid))
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     return result, errors
 
 
@@ -230,10 +255,15 @@ def save_snapshot(folder, data, source, files, errors):
     # ZIP history is isolated by run; only committed current prompts appear above.
     for run in data.get('prompt_outputs', []):
         directory = Path(run['directory'])
+<<<<<<< HEAD
         if not (directory.resolve().is_relative_to(ARCHIVE_DIR.resolve()) or directory.resolve().is_relative_to(folder.resolve())):
             continue
         if directory.resolve().is_relative_to(folder.resolve()):
             continue  # Already stored here; do not duplicate ZIP/TXT history.
+=======
+        if not directory.resolve().is_relative_to(ARCHIVE_DIR.resolve()):
+            continue
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
         for path in directory.rglob('*'):
             if path.is_file() and path.suffix in {'.txt', '.zip'}:
                 relative = 'prompts/runs/' + directory.name + '/' + path.relative_to(directory).as_posix()
@@ -247,9 +277,12 @@ def save_snapshot(folder, data, source, files, errors):
           'elevenlabs/: narration chunks and merged audio, separated by job.\n'
           'whisperx/: transcripts, splits and worker logs, separated by job.\n'
           'srt/: original sources, SRT job versions and current scenes.srt.\n'
+<<<<<<< HEAD
           'prompts/: put prompt_instructions_image.txt and prompt_instructions_video_4s.txt,\n'
           'prompt_instructions_video_6s.txt, prompt_instructions_video_8s.txt, prompt_instructions_video_10s.txt here.\n'
           'SRT to Prompt auto-loads these files; manual uploads/edits take priority. UTF-8 TXT, max 97000 characters.\n'
+=======
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
           'prompts/image/ and prompts/video/: current numbered scene prompts.\n'
           'prompts/runs/: downloaded TXT/ZIP history.\n'
           'images/ and videos/: current numbered scene media (001, 002...).\n'

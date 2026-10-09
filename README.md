@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ## Studio v0.7.124
 
 Merge Audio + SRT + Media mặc định không thêm phụ đề vào MP4. Tùy chọn **Subtitles in output video** hiển thị ngay đầu màn hình. Xem [hướng dẫn](docs/releases/0.7.124.md).
@@ -54,10 +55,18 @@ WhisperX no longer opens the Word JSON preflight popup. Create word JSON continu
 
 Fix Windows WhisperX Create word JSON failing in preflight with `NotImplementedError` from `asyncio.create_subprocess_exec`. The normal backend launcher explicitly uses a subprocess-capable Proactor event loop. Stop the old backend and restart Studio after updating. See [release notes](docs/releases/0.7.87.md).
 
+=======
+<<<<<<< HEAD
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 ## Studio v0.7.86
 
 Scene Board video generation now always chooses duration from each SRT row: ≤4s → 4s, ≤6s → 6s, ≤8s → 8s, ≤10s → 10s. The shared manual duration selector is removed, and each Video row previews its chosen duration. See [release notes](docs/releases/0.7.86.md).
 
+<<<<<<< HEAD
+=======
+=======
+>>>>>>> e8698be (update)
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 ## Studio v0.7.85
 
 Prompt to Image and Prompt to Video are now integrated into **Scene Board**; both separate menus are removed. Each row defaults to Image; choose Video in its Create column, select rows and click Generate selected scenes. Mixed selections use the matching saved prompts. See [release notes](docs/releases/0.7.85.md).

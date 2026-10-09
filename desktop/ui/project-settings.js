@@ -12,11 +12,19 @@
    ['batch_size','Batch size','number',8,1,32],['video_duration_seconds','Video transcript boundary (seconds)','number',100,0,86400]
   ]],
   ['media','Images and videos',[
+<<<<<<< HEAD
    ['orientation','Orientation',['HORIZONTAL','VERTICAL'],'HORIZONTAL'],['image_model','Flow image model ID (Pro: GEM_PIX_2; 2.1: BELUGA; Lite: HARBOR_SEAL)','text','GEM_PIX_2',100]
   ]],
   ['assembly','Video assembly',[
    ['size','Output size',['1080p','720p','vertical'],'1080p'],['fps','Frames per second',[24,30,60],30],
    ['fit','Image fit',['fit','crop'],'fit'],['subtitles','Subtitles',['off','burn','soft'],'off'],
+=======
+   ['orientation','Orientation',['HORIZONTAL','VERTICAL'],'HORIZONTAL'],['image_model','Flow image model ID (blank = default)','text','',100]
+  ]],
+  ['assembly','Video assembly',[
+   ['size','Output size',['1080p','720p','vertical'],'1080p'],['fps','Frames per second',[24,30,60],30],
+   ['fit','Image fit',['fit','crop'],'fit'],['subtitles','Subtitles',['burn','soft','off'],'burn'],
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
    ['font','Subtitle font','text','Yu Gothic',80],['image_motion','Image motion',['none','zoom_in','zoom_out'],'none']
   ],'Image motion affects still images only. None keeps them still. Existing renders keep their saved settings.'],
   ['srt','SRT instructions',[

@@ -20,13 +20,20 @@
   return data;
  }
  let draft=readDraft();
+<<<<<<< HEAD
  let workspaceVersion=0,sourcesLoaded=false,sourcesEdited=!!draft._sources_edited,refreshTask=null,generation=0;
+=======
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  let editedFields=new Set(draft._settings_edited||Object.keys(draft));
  const say=text=>{$('va-message').textContent=text;};
  const controls=['va-import-srt','va-import-audio','va-import-images','va-import-folder','va-preview','va-refresh','va-import-videos','va-import-video-folder','va-load-scenes','va-load-project','va-open-folder'];
  const ids=(kind='images')=>[...$('va-'+kind).selectedOptions].map(o=>o.value);
  const fields=['srt','audio','title','mode','size','fps','fit','subtitles','font','visual-mode','clip-end','image-motion'];
+<<<<<<< HEAD
  const defaults={title:'Untitled video',mode:'number',size:'1080p',fps:'30',fit:'fit',subtitles:'off',font:'Yu Gothic','visual-mode':'images','clip-end':'freeze','image-motion':'none'};
+=======
+ const defaults={title:'Untitled video',mode:'number',size:'1080p',fps:'30',fit:'fit',subtitles:'burn',font:'Yu Gothic','visual-mode':'images','clip-end':'freeze','image-motion':'none'};
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  const settingFields={size:'size',fps:'fps',fit:'fit',subtitles:'subtitles',font:'font',image_motion:'image-motion'};
  function applyDefaults(settings){
   if(!settings)return;
@@ -40,7 +47,11 @@
   $('va-image-count').textContent=ids().length+' images selected';
   $('va-video-count').textContent=ids('videos').length+' clips selected';
  }
+<<<<<<< HEAD
  function saveDraft(){try{const data={images:ids(),videos:ids('videos'),mapping,_subtitle_options_version:1,_sources_edited:sourcesEdited,_settings_edited:[...editedFields]};for(const name of fields)data[name]=$('va-'+name).value;localStorage.setItem('assembly-draft:'+ (window.workflow?.key()||'legacy'),JSON.stringify(data));}catch{}}
+=======
+ function saveDraft(){try{const data={images:ids(),videos:ids('videos'),mapping,_settings_edited:[...editedFields]};for(const name of fields)data[name]=$('va-'+name).value;localStorage.setItem('assembly-draft:'+ (window.workflow?.key()||'legacy'),JSON.stringify(data));}catch{}}
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  function invalidate(){ready=false;lastRequest=null;$('va-render').disabled=true;$('va-plan-note').textContent='Inputs changed. Preview timeline before rendering.';saveDraft();}
  function editLock(value){for(const name of [...fields,'images','videos'])$('va-'+name).disabled=value;document.querySelectorAll('#va-scenes select').forEach(el=>el.disabled=value);}
  async function action(fn){if(busy)return;busy=true;editLock(true);for(const id of controls)$(id).disabled=true;$('va-render').disabled=true;try{await fn();}catch(e){say(e.message);}finally{busy=false;editLock(false);for(const id of controls)$(id).disabled=false;$('va-render').disabled=!ready;}}
@@ -57,9 +68,12 @@
   try{
    if(!restored){await window.videoSettings?.ready();applyDefaults(window.videoSettings?.effective()?.assembly);}
    const [state,srt,audio,wx]=await Promise.all([api('GET','status'),(window.workflow?.api||window.studio.api)('GET','/api/srt/status'),(window.workflow?.api||window.studio.api)('GET','/api/elevenlabs/jobs'),(window.workflow?.api||window.studio.api)('GET','/api/whisperx/status')]);
+<<<<<<< HEAD
    if(ticket!==generation)return;
    workspaceVersion=state.workspace_version||0;
    $('va-output-directory').textContent=state.output_directory?'Output: '+state.output_directory+' · Each render uses its own folder.':'Select a project and video to see the output folder.';
+=======
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
    assets=state.assets;mixedMediaVersion=state.mixed_media_version||0;productionVersion=state.production_version||0;imageMotionVersion=state.image_motion_version||0;const shortcut=!!wantedSRT;
    $('va-tools').textContent=`FFmpeg: ${state.ffmpeg?'Ready':'Missing'} · FFprobe: ${state.ffprobe?'Ready':'Missing'}`;
    const srtOptions=[...assets.filter(a=>a.kind==='srt').map(a=>({value:'asset:'+a.id,title:a.title})),...srt.jobs.filter(j=>j.state==='COMPLETED').map(j=>({value:'job:'+j.id,title:'SRT job: '+j.title}))];
@@ -168,7 +182,11 @@
   say(`Imported ${r.assets.length} file(s). ${r.errors.length?'Errors: '+r.errors.join('\n'):'Preview timeline to continue.'}`);
  }
  for(const [id,kind] of [['va-import-srt','srt'],['va-import-audio','audio'],['va-import-images','images'],['va-import-folder','images-folder'],['va-import-videos','videos'],['va-import-video-folder','videos-folder']])$(id).onclick=()=>action(()=>importFiles(kind));
+<<<<<<< HEAD
  for(const name of [...fields,'images','videos'])$('va-'+name).addEventListener(['title','font'].includes(name)?'input':'change',()=>{editedFields.add(name);if(['srt','audio','mode','images','videos','visual-mode'].includes(name))sourcesEdited=true;if(['srt','mode','images','videos','visual-mode'].includes(name))mapping={};invalidate();modeUI();});
+=======
+ for(const name of [...fields,'images','videos'])$('va-'+name).addEventListener(['title','font'].includes(name)?'input':'change',()=>{editedFields.add(name);if(['srt','mode','images','videos','visual-mode'].includes(name))mapping={};invalidate();modeUI();});
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  $('va-clip-preview').onerror=()=>say('This clip cannot be previewed by Electron. FFmpeg can still render supported imported formats.');
  $('va-load-scenes').onclick=()=>action(async()=>{
   if(!productionVersion)throw Error('Restart Studio with the updated backend to load scene media.');
@@ -188,6 +206,7 @@
  document.querySelector('[data-page="assembly"]').addEventListener('click',openPage);
  window.openAssembly=sourceId=>{wantedSRT='job:'+sourceId;mapping={};sourcesLoaded=true;sourcesEdited=true;document.querySelector('[data-page="assembly"]').click();};
  setInterval(()=>{if(!document.querySelector('[data-view="assembly"]').hidden&&!busy)refresh().catch(e=>say(e.message));},2500);
+<<<<<<< HEAD
  document.addEventListener('workflow-changed',async()=>{
   const ticket=++generation;assets=[];mapping={};wantedSRT='';signature='';restored=false;ready=false;lastRequest=null;sourcesLoaded=false;workspaceVersion=0;draft=readDraft();sourcesEdited=!!draft._sources_edited;
   editedFields=new Set(draft._settings_edited||Object.keys(draft));
@@ -199,17 +218,28 @@
   if(!document.querySelector('[data-view="assembly"]').hidden)await openPage();
   else await refresh().catch(e=>say(e.message));
  });
+=======
+ document.addEventListener('workflow-changed',async()=>{assets=[];mapping={};wantedSRT='';signature='';restored=false;ready=false;lastRequest=null;draft=readDraft();editedFields=new Set(draft._settings_edited||Object.keys(draft));for(const id of ['srt','audio','images','videos','scenes','jobs'])$('va-'+id).replaceChildren();$('va-render').disabled=true;$('va-video').pause();$('va-video').removeAttribute('src');$('va-video').hidden=true;$('va-image-preview').hidden=true;$('va-clip-preview').pause();$('va-clip-preview').removeAttribute('src');$('va-clip-preview').hidden=true;$('va-plan-warnings').textContent='';$('va-plan-note').textContent='Select files and preview the timeline.';while(refreshing)await new Promise(r=>setTimeout(r,20));await refresh().catch(e=>say(e.message));});
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  document.addEventListener('production-settings-changed',event=>{
   if(busy)return;
   const current=window.workflow?.context(),detail=event.detail||{};
   if(current&&(detail.project_id!==current.project_id||detail.video_id!==current.video_id))return;
+<<<<<<< HEAD
   applyDefaults((detail.effective||detail.production)?.assembly);modeUI();if(restored)invalidate();
+=======
+  applyDefaults((detail.effective||detail.production)?.assembly);if(restored)invalidate();
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  });
  document.addEventListener('production-defaults-reset',event=>{
   if(busy)return;
   const current=window.workflow?.context(),detail=event.detail||{};
   if(current&&(detail.project_id!==current.project_id||detail.video_id!==current.video_id))return;
   for(const name of Object.values(settingFields))editedFields.delete(name);
+<<<<<<< HEAD
   applyDefaults((detail.production||detail.effective)?.assembly);modeUI();invalidate();
+=======
+  applyDefaults((detail.production||detail.effective)?.assembly);invalidate();
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  });
 })();

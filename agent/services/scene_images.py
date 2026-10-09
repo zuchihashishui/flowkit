@@ -1,6 +1,9 @@
 """Numbered scene-image copies; immutable per-job originals remain untouched."""
+<<<<<<< HEAD
 from agent.services import output_paths
 
+=======
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 import asyncio
 import json
 import re
@@ -12,8 +15,12 @@ from agent.config import OUTPUT_DIR
 
 
 def image_folder(video_id):
+<<<<<<< HEAD
     from agent.services.output_paths import video_directory
     return video_directory({'video_id': str(uuid.UUID(video_id))}) / 'images'
+=======
+    return OUTPUT_DIR / 'scene_images' / str(uuid.UUID(video_id))
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 
 
 def copy_image(source, target):
@@ -52,7 +59,11 @@ async def collect_images(video_id, segment_ids=None):
             sources = []
             for filename in job['files']:
                 source = Path(filename).resolve()
+<<<<<<< HEAD
                 if (not output_paths.allowed(source, desktop.ROOT) or not source.is_file()
+=======
+                if (not source.is_relative_to(desktop.ROOT.resolve()) or not source.is_file()
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
                         or source.stat().st_size == 0 or source.suffix.lower() not in {'.png','.jpg','.jpeg','.webp','.avif'}):
                     skipped.append(f"Scene {scene['ordinal']:03d}: saved image is missing or invalid.")
                     break

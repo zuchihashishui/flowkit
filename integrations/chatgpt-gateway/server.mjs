@@ -112,6 +112,7 @@ const server=createServer(async(req,res)=>{
    for(const [id,reservation] of reservations)if(reservation&&held.get(id)===reservation&&reservation.state==='NEEDS_REVIEW')held.delete(id);
    return json(res,200,{ok:true});
   }catch(e){return json(res,409,{error:e.message});}finally{textCleanupActive=false;}
+<<<<<<< HEAD
  }
  if(req.url==='/workers/open'){
   if(!capabilities.includes('fresh-text-tab-v1'))return json(res,409,{error:'Reload Flowkit ChatGPT Gateway 1.16.0 from the new extensions/chatgpt folder. Running extension: '+extensionVersion});
@@ -133,6 +134,8 @@ const server=createServer(async(req,res)=>{
   try{
    return json(res,200,await restartPromise);
   }catch(e){console.warn('[workers/restart]',e.message);return json(res,409,{code:'TEXT_RESTART_FAILED',error:e.message});}
+=======
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  }
  if(req.url==='/workers/close'){
   if(!capabilities.includes('worker-lifecycle-v1'))return json(res,200,{ok:true,skipped:true});
@@ -151,11 +154,17 @@ const server=createServer(async(req,res)=>{
   }catch(e){return json(res,409,{error:e.message});}
  }
  if(req.url!=='/v1/chat/completions')return json(res,404,{error:'Not found'});
+<<<<<<< HEAD
  if(p.videoPromptText===true&&(!capabilities.includes('video-prompt-text-v1')||p.workers!==1||!p.textSessionId||p.downloadPromptZip===true))return json(res,400,{error:'Reload ChatGPT Bridge 1.14.0 for single video prompts.',not_submitted:true});
  if(p.downloadPromptZip===true&&(!p.textSessionId||!['work','chat'].includes(p.composerMode)||p.temporary!==false||p.workers!==1||!capabilities.includes('work-prompt-zip-v1')||!capabilities.includes('verified-send-v1')))return json(res,400,{error:'Prompt ZIP batches require one Work worker and Bridge 1.12.1.',not_submitted:true});
  if(p.downloadPromptZip===true&&p.composerMode==='chat'&&!capabilities.includes('chat-prompt-zip-v1'))return json(res,400,{error:'Reload ChatGPT Bridge 1.13.0 for Chat prompt ZIP batches.',not_submitted:true});
  if(p.textSessionId!==undefined){
   if(typeof p.textSessionId!=='string'||!/^[a-f0-9-]{36}$/.test(p.textSessionId)||typeof p.promptTemplate!=='string'||!p.promptTemplate.trim()||p.promptTemplate.length>100000||((p.downloadPromptZip===true||p.videoPromptText===true)?(p.temporary!==false||!['work','chat'].includes(p.composerMode)):(p.temporary!==true||p.composerMode!=='chat'))||p.freshTab||p.attachment)return json(res,400,{error:'Invalid text conversation session',not_submitted:true});
+=======
+ if(p.downloadPromptZip===true&&(!p.textSessionId||p.composerMode!=='work'||p.temporary!==false||p.workers!==1||!capabilities.includes('work-prompt-zip-v1')||!capabilities.includes('verified-send-v1')))return json(res,400,{error:'Prompt ZIP batches require one Work worker and Bridge 1.12.1.',not_submitted:true});
+ if(p.textSessionId!==undefined){
+  if(typeof p.textSessionId!=='string'||!/^[a-f0-9-]{36}$/.test(p.textSessionId)||typeof p.promptTemplate!=='string'||!p.promptTemplate.trim()||p.promptTemplate.length>100000||(p.downloadPromptZip===true?(p.temporary!==false||p.composerMode!=='work'):(p.temporary!==true||p.composerMode!=='chat'))||p.freshTab||p.attachment)return json(res,400,{error:'Invalid text conversation session',not_submitted:true});
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   if(!capabilities.includes('temporary-text-session-v1')||!capabilities.includes('txt-prompt-attachment-v1')||!capabilities.includes('serialized-submission-v1'))return json(res,400,{error:'Reload ChatGPT Bridge 1.11.4 for coordinated text tab submission.',not_submitted:true});
  }
  if(p.pageUrl!==undefined){
@@ -184,14 +193,23 @@ const server=createServer(async(req,res)=>{
  const srt=current.find(isSrt);
  const worker=p.freshTab?(srt?.state==='IDLE'?srt:!srt?{id:SRT_WORKER_ID,kind:'srt',tabId:null,state:'IDLE'}:null):current.filter(w=>!isSrt(w)).slice(0,limit).find(w=>w.state==='IDLE');
  const running=[...active.values()].filter(r=>isSrt(r.worker)===!!p.freshTab).length;
+<<<<<<< HEAD
  if(((textCleanupActive||restartPromise)&&!p.freshTab)||inspectionActive||extensionInspecting||!enabled||accountPaused||!worker||running>=limit)return json(res,409,{error:'No available worker or account paused',not_submitted:true});
  const requestId=randomUUID(),timeout=Math.min((p.attachment||p.downloadPromptZip===true||p.videoPromptText===true)?1800000:600000,Math.max(30000,Number(p.timeout)||180000));
+=======
+ if((textCleanupActive&&!p.freshTab)||inspectionActive||extensionInspecting||!enabled||accountPaused||!worker||running>=limit)return json(res,409,{error:'No available worker or account paused',not_submitted:true});
+ const requestId=randomUUID(),timeout=Math.min((p.attachment||p.downloadPromptZip===true)?1800000:600000,Math.max(30000,Number(p.timeout)||180000));
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  held.set(worker.id,{requestId,worker,jobId:p.srtJobId,state:'RUNNING'});
  const result=await new Promise(resolve=>{
   const timer=setTimeout(()=>fail(requestId,'Response deadline exceeded; review the worker tab.'),timeout+(p.attachment?1050000:660000));
   active.set(requestId,{resolve,timer,worker,jobId:p.srtJobId});
   res.on('close',()=>{if(!res.writableEnded)fail(requestId,'Client disconnected; submission may have completed.');});
+<<<<<<< HEAD
   try{send({type:'chat',requestId,workerId:worker.id,messages:p.messages,model:p.model||'auto',timeout,temporary:p.temporary!==false,attachment:p.attachment,composerMode:p.composerMode,freshTab:p.freshTab===true,preparedTabToken:p.preparedTabToken,pageUrl:p.pageUrl,downloadSrt:p.downloadSrt===true,downloadPromptZip:p.downloadPromptZip===true,videoPromptText:p.videoPromptText===true,srtJobId:p.srtJobId,textSessionId:p.textSessionId,promptTemplate:p.promptTemplate});}catch(e){fail(requestId,e.message);}
+=======
+  try{send({type:'chat',requestId,workerId:worker.id,messages:p.messages,model:p.model||'auto',timeout,temporary:p.temporary!==false,attachment:p.attachment,composerMode:p.composerMode,freshTab:p.freshTab===true,preparedTabToken:p.preparedTabToken,pageUrl:p.pageUrl,downloadSrt:p.downloadSrt===true,downloadPromptZip:p.downloadPromptZip===true,srtJobId:p.srtJobId,textSessionId:p.textSessionId,promptTemplate:p.promptTemplate});}catch(e){fail(requestId,e.message);}
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  });
  if(result.not_submitted)return json(res,409,result);
  if(!result.ok)return json(res,502,result);
@@ -209,7 +227,11 @@ wss.on('connection',ws=>{
  ws.on('message',raw=>{
   let m;try{m=JSON.parse(raw);}catch{return;}
   if(m.type==='pool'&&m.protocol===2){
+<<<<<<< HEAD
    capabilities=Array.isArray(m.capabilities)?m.capabilities.filter(x=>['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1','srt-prepare-v1','srt-download-v1','srt-cancel-v1','temporary-text-session-v1','text-worker-recovery-v1','txt-prompt-attachment-v1','serialized-submission-v1','work-prompt-zip-v1','chat-prompt-zip-v1','video-prompt-text-v1','restart-text-v1','fresh-text-tab-v1','verified-send-v1'].includes(x)):[];
+=======
+   capabilities=Array.isArray(m.capabilities)?m.capabilities.filter(x=>['json-attachment-v1','fresh-srt-tab-v1','dedicated-srt-v1','worker-lifecycle-v1','project-urls-v1','srt-prepare-v1','srt-download-v1','srt-cancel-v1','temporary-text-session-v1','text-worker-recovery-v1','txt-prompt-attachment-v1','serialized-submission-v1','work-prompt-zip-v1','verified-send-v1'].includes(x)):[];
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
    const seen=new Set(),ids=new Set();workers=(Array.isArray(m.workers)?m.workers:[]).filter(w=>{
     if(!w||typeof w.id!=='string'||w.id===SRT_WORKER_ID||w.kind==='srt'||(!Number.isInteger(w.tabId)&&w.tabId!==null)||ids.has(w.id))return false;
     if(w.tabId!==null&&seen.has(w.tabId))return false;

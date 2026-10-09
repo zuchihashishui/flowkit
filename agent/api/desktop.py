@@ -18,7 +18,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, model_validator
 from typing import Literal
 
+<<<<<<< HEAD
 from agent.config import OUTPUT_DIR, BASE_DIR, FLOW_GENERATION_MAX_CONCURRENT
+=======
+from agent.config import OUTPUT_DIR, BASE_DIR
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 from agent.models.prompt_limits import MEDIA_PROMPT_MAX_CHARS, VOICE_TEXT_MAX_CHARS
 from agent.api import flow, tts
 from agent.services.flow_client import get_flow_client

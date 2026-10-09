@@ -156,6 +156,7 @@ test('reset to video defaults resets render options while preserving scene input
  assert.equal($('va-images').selectedOptions[0].value,'i1');assert.equal($('va-render').disabled,true);
  dom.window.close();
 });
+<<<<<<< HEAD
 
 test('upgrade disables legacy subtitles, sends the selected mode to render, and remembers explicit choices',async()=>{
  const {dom,w,d,$,calls}=setup({savedDraft:{srt:'asset:s',audio:'asset:a',images:['i1'],subtitles:'burn',_settings_edited:['subtitles']},productionDefaults:{subtitles:'burn'}});
@@ -176,3 +177,5 @@ test('upgrade disables legacy subtitles, sends the selected mode to render, and 
  const reopened=setup({savedDraft,productionDefaults:{subtitles:'off'}});
  await reopened.$('va-refresh').onclick();assert.equal(reopened.$('va-subtitles').value,'soft');reopened.dom.window.close();
 });
+=======
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af

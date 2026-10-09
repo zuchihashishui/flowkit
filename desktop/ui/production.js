@@ -2,7 +2,11 @@
 (() => {
   const host = document.getElementById('production-dashboard');
   if (!host) return;
+<<<<<<< HEAD
   host.innerHTML = `<section class="panel production-panel"><div class="toolbar"><div><h2>Production dashboard</h2><p>Every video keeps its own sources and results. Each stage starts only when you click.</p></div><div class="actions"><button type="button" id="pd-files">Open project folder</button><button type="button" id="pd-refresh">Refresh progress</button></div></div><p id="pd-message" role="status" aria-live="polite"></p><div class="table-wrap"><table class="story-table production-video-table"><thead><tr><th>Video</th><th>Audio</th><th>Word JSON</th><th>SRT</th><th>Image prompts</th><th>Video prompts</th><th>Images</th><th>Video clips</th><th>Render</th><th>Actions</th></tr></thead><tbody id="pd-videos"></tbody></table></div></section><section class="panel space"><div class="toolbar"><h2>Recovery center</h2><button type="button" id="pd-recovery-refresh">Refresh recovery</button></div><p id="pd-recovery-summary">Select a project to inspect saved work.</p><p class="muted">Saved results stay in their original video. Uncertain requests need inspection before retrying; reopening Studio does not resend them.</p><div id="pd-recovery" class="production-recovery"></div></section>`;
+=======
+  host.innerHTML = `<section class="panel production-panel"><div class="toolbar"><div><h2>Production dashboard</h2><p>Every video keeps its own sources and results. Each stage starts only when you click.</p></div><div class="actions"><button type="button" id="pd-files">Open project folder</button><button type="button" id="pd-refresh">Refresh progress</button></div></div><p id="pd-message" role="status" aria-live="polite"></p><div id="pd-videos" class="production-videos"></div></section><section class="panel space"><div class="toolbar"><h2>Recovery center</h2><button type="button" id="pd-recovery-refresh">Refresh recovery</button></div><p id="pd-recovery-summary">Select a project to inspect saved work.</p><p class="muted">Saved results stay in their original video. Uncertain requests need inspection before retrying; reopening Studio does not resend them.</p><div id="pd-recovery" class="production-recovery"></div></section>`;
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   const $ = id => document.getElementById(id);
   const request = (method, path, body) => window.studio.api(method, path, body);
   const node = (tag, text, cls) => { const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el; };
@@ -34,25 +38,40 @@
     $('pd-videos').replaceChildren();
     if(!data.videos?.length){$('pd-videos').append(node('p','Create a video above to start production.','muted'));return;}
     for(const video of data.videos){
+<<<<<<< HEAD
       const card=node('tr');card.dataset.videoId=video.id;card.dataset.active=String(ctx().video_id===video.id);
       const title=node('td'),head=node('div');head.append(node('h3',video.title),node('small',`${video.scene_count || 0} scenes${ctx().video_id===video.id?' · Active video':''}`));
       const actions=node('div',undefined,'actions');actions.append(button('Open video folder',()=>openFiles(video.id)),button('Prompt to Media',()=>navigate(video.id,'scene-board')));
+=======
+      const card=node('article',undefined,'production-video');card.dataset.videoId=video.id;
+      const title=node('div',undefined,'toolbar'),head=node('div');head.append(node('h3',video.title),node('small',`${video.scene_count || 0} scenes${ctx().video_id===video.id?' · Active video':''}`));
+      const actions=node('div',undefined,'actions');actions.append(button('Open video folder',()=>openFiles(video.id)),button('Scene Board',()=>navigate(video.id,'scene-board')));
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
       if(video.next_stage)actions.append(button('Check next step',async()=>{
         if(await window.selectProductionVideo?.(video.id,'projects')===false)return;
         if(ctx().video_id===video.id)await check(video.next_stage);
       }));
+<<<<<<< HEAD
       title.append(head);card.append(title);
       if(video.coverage)title.append(node('p',`Scene coverage · ${video.coverage.prompts || 0} / ${video.coverage.total || 0} prompts · ${video.coverage.visuals || 0} / ${video.coverage.total || 0} visuals saved (image or video)`,'muted'));
       if(video.next_stage_reason)title.append(node('p',video.next_stage_reason,'muted'));
       const grid=document.createDocumentFragment();
       for(const stageId of ['elevenlabs','whisperx','srt','image_prompts','video_prompts','images','videos','assembly']){
         const stage=(video.stages||[]).find(s=>s.id===stageId)||{id:stageId,status:'missing'};
+=======
+      title.append(head,actions);card.append(title);
+      if(video.coverage)card.append(node('p',`Scene coverage · ${video.coverage.prompts || 0} / ${video.coverage.total || 0} prompts · ${video.coverage.visuals || 0} / ${video.coverage.total || 0} visuals saved (image or video)`,'muted'));
+      if(video.next_stage_reason)card.append(node('p',video.next_stage_reason,'muted'));
+      const grid=node('div',undefined,'production-stages');
+      for(const stage of video.stages || []){
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
         const item=button('',()=>navigate(video.id,stage.id));item.className='production-stage';item.dataset.status=String(stage.status || 'missing').toLowerCase();
         item.append(node('strong',stage.label || names[stage.id] || stage.id),node('span',human(stage.status)),node('small',`${stage.ready || 0} / ${stage.total || 0}${stage.optional?' · Optional':''}`));
         if(stage.total>0){const progress=node('progress');progress.max=stage.total;progress.value=Math.min(stage.total,stage.ready || 0);progress.setAttribute('aria-label',(stage.label||stage.id)+' completed');item.append(progress);}
         const issues=[];for(const [key,label] of [['running','running'],['queued','queued'],['failed','failed'],['needs_review','need review']])if(stage[key])issues.push(`${stage[key]} ${label}`);
         if(issues.length)item.append(node('small',issues.join(' · ')));
         if(stage.latest_job?.error)item.title=stage.latest_job.error;
+<<<<<<< HEAD
         const cell=node('td');cell.append(item);grid.append(cell);
       }
       card.append(grid);
@@ -60,6 +79,12 @@
       actions.prepend(button(ctx().video_id===video.id?'Selected':'Select video',()=>navigate(video.id,'projects')),button('Edit',async()=>{if(await navigate(video.id,'projects'))window.workspaceUI?.editVideo();}));
       actions.append(button('Delete',async()=>{if(await window.deleteProductionVideo(video.id))await refresh();}));
       const actionCell=node('td');actionCell.className='table-actions';actionCell.append(actions);card.append(actionCell);
+=======
+        grid.append(item);
+      }
+      card.append(grid);
+      for(const warning of video.warnings || [])card.append(node('p',warning,'production-warning'));
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
       $('pd-videos').append(card);
     }
   }
@@ -86,7 +111,11 @@
     if(['image','video','voice'].includes(job.kind)){
       if(await navigate(job.video_id,'scene-board'))await window.focusProductionJob?.(job.id);
     }else if(job.action==='inspect'&&['concept','srt'].includes(job.kind)&&['NEEDS_REVIEW','WAITING_COMMIT','SUBMISSION_UNCERTAIN'].includes(job.state)){
+<<<<<<< HEAD
       if(await navigate(job.video_id,'projects')){$('project-app-settings').open=true;$('cg-status')?.click();$('cg-history')?.click();$('cg-state')?.scrollIntoView?.({block:'center'});}
+=======
+      if(await navigate(job.video_id,'settings')){$('cg-status')?.click();$('cg-history')?.click();$('cg-state')?.scrollIntoView?.({block:'center'});}
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     }else await navigate(job.video_id,job.stage);
   }
   async function refresh() {
@@ -108,6 +137,7 @@
     if(options.project_id && options.project_id!==current.project_id || options.video_id && options.video_id!==current.video_id)throw Error('The requested video is no longer active. Run the check again.');
     checking=true;
     try{
+<<<<<<< HEAD
       const {silentOnSuccess,inlineFailure,...input}=options;
       const report=await request('POST','/api/production/preflight',{...input,...current,stage});
       if(current.project_id!==ctx().project_id || current.video_id!==ctx().video_id)throw Error('The active video changed. Run the check again for the selected video.');
@@ -118,6 +148,12 @@
         return true;
       }
       dialog=node('div',undefined,'production-modal');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.setAttribute('aria-label','Production preflight');
+=======
+      const {silentOnSuccess,...input}=options;
+      const report=await request('POST','/api/production/preflight',{...input,...current,stage});
+      if(current.project_id!==ctx().project_id || current.video_id!==ctx().video_id)throw Error('The active video changed. Run the check again for the selected video.');
+      closeReport();dialog=node('div',undefined,'production-modal');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.setAttribute('aria-label','Production preflight');
+>>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
       const panel=node('section',undefined,'panel production-modal-panel'),header=node('div',undefined,'toolbar');header.append(node('h2',`${names[stage]||stage} · ${report.blocked?'Action required':'Ready to start'}`),button('Close',closeReport));panel.append(header);
       const checks=node('ul',undefined,'production-checks');for(const item of report.checks || []){const li=node('li');li.dataset.status=item.status;li.append(node('strong',({pass:'Ready',warn:'Note',fail:'Fix required'})[item.status]||item.status),node('span',item.message));checks.append(li);}panel.append(checks,node('p',report.blocked?'Resolve the items above before starting this stage.':'The check is complete. Continue from the selected stage when ready.','muted'));dialog.append(panel);document.body.append(dialog);
       dialog.querySelector('button')?.focus();
