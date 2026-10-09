@@ -131,7 +131,6 @@ test('retry is offered only for recoverable local transcription failures and use
   assert.equal([...$('wx-jobs').querySelectorAll('button')].filter(b=>b.textContent==='Retry job').length,0);
  }finally{dom.window.close();}
 });
-<<<<<<< HEAD
 
 test('WhisperX displays preflight status before the start request returns',async()=>{
  const {dom,w,$}=setup();
@@ -162,5 +161,3 @@ test('live log and queue errors remain visible when narration listing fails',asy
   assert.match($('wx-worker-status').textContent,/Output directory unavailable/);
  }finally{dom.window.close();}
 });
-=======
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af

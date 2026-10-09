@@ -1,11 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Flowkit Google Flow Bridge",
-<<<<<<< HEAD
   "version": "0.6.4",
-=======
-  "version": "0.6.3",
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   "description": "Local agent bridge for Google Flow — runs batchexecute RPCs inside a signed-in flow.google.com tab, mints reCAPTCHA with hijack bypass, proxies API calls",
   "permissions": [
     "storage",

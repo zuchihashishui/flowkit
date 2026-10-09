@@ -1,6 +1,19 @@
 """Numbered scene-image copies; immutable per-job originals remain untouched."""
 from agent.services import output_paths
 
+import asyncio
+import json
+import re
+import shutil
+import uuid
+from pathlib import Path
+
+from agent.config import OUTPUT_DIR
+
+
+def image_folder(video_id):
+    from agent.services.output_paths import video_directory
+    return video_directory({'video_id': str(uuid.UUID(video_id))}) / 'images'
 
 
 def copy_image(source, target):

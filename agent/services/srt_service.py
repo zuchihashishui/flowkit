@@ -1,4 +1,6 @@
 """JSON attachments to ChatGPT, with durable SRT output before worker release."""
+from agent.services import output_paths
+
 from agent.services import workflow_scope as scope
 
 import asyncio
@@ -68,17 +70,17 @@ def dispatch_status(state):
     if state.get('settings', {}).get('paused'):
         return waiting('QUEUE_PAUSED', 'The ChatGPT queue is paused. Open ChatGPT worker settings and click Resume queue.')
     if state.get('needsReview'):
-        return waiting('ACCOUNT_REVIEW', 'The ChatGPT account requires review. Check its tabs and any rate-limit message, then release workers after review in ChatGPT settings.')
+        return waiting('ACCOUNT_REVIEW', 'The ChatGPT account requires review. Check its tabs and any rate-limit message, then check the provider limit before continuing.')
     if state.get('inspecting'):
         return waiting('INSPECTING', 'Waiting for the current ChatGPT tab inspection to finish.')
     worker = state.get('srtWorker') or {}
     if not state.get('availableSrtSlots'):
         if worker.get('state') == 'NEEDS_REVIEW':
-            return waiting('WORKER_REVIEW', 'The SRT worker needs review. Inspect its tab, then use Release workers after review in ChatGPT settings.')
+            return waiting('WORKER_REVIEW', 'The previous SRT worker stopped. Open SRT or click Open / select SRT window to prepare a new tab for this queued job. Use Stop job to cancel it.')
         if worker.get('state') == 'AWAITING_SAVE':
             return waiting('AWAITING_SAVE', 'The SRT result is waiting for save confirmation; check ChatGPT Request History before releasing that worker.')
-        return waiting('WORKERS_BUSY', 'Waiting for the dedicated SRT worker. Text to Prompt uses its own three tabs.')
-    return {'ready': True, 'code': 'READY', 'message': 'Ready. One SRT job opens and binds one new ChatGPT tab, selects Work, and sends the prompt + JSON once. The three Text to Prompt tabs are separate.'}
+        return waiting('WORKERS_BUSY', 'Waiting for the dedicated SRT worker. SRT to Prompt uses its own single Work tab.')
+    return {'ready': True, 'code': 'READY', 'message': 'Ready. One SRT job opens and binds one new ChatGPT tab, selects Work, and sends the prompt + JSON once. The SRT to Prompt Work tab is separate.'}
 
 
 def parse_srt(answer):
@@ -109,6 +111,7 @@ class SRTService:
         self.store = Path(store or BASE_DIR / 'srt_jobs.db')
         self.output = Path(output or OUTPUT_DIR / 'srt')
         self.active_id = None
+        self.preparing = False
         self.worker_running = False
         self.last_checked_at = None
         self.worker_error = None
@@ -200,17 +203,23 @@ class SRTService:
             raise ValueError('JSON must contain a transcript object or array.')
         sid = str(uuid.uuid4())
         self.output.mkdir(parents=True, exist_ok=True)
-        (self.output / (sid + '.json')).write_bytes(data)
+        target = output_paths.owned_path(self.output / (sid + '.json'), context, 'srt/imports/' + sid + '.json')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
         title = title.replace('\\', '/').rsplit('/', 1)[-1][:200]
         with self.db() as db:
             db.execute('INSERT INTO srt_sources VALUES(?,?,?)', (sid, title, time.time()))
             scope.record(db, 'json', sid, context, sources)
+            output_paths.remember(db, 'json', sid, target)
         return {'id': sid, 'title': title}
+
+    def source_path(self, sid):
+        return output_paths.resource_path(self, 'json', sid, self.output / (sid + '.json'), 'srt/imports/' + sid + '.json')
 
     def source_data(self, source_id):
         source = next((s for s in self.sources() if s['id'] == source_id), None)
         if source:
-            return (self.output / (source_id + '.json')).read_bytes()
+            return self.source_path(source_id).read_bytes()
         data = whisperx.result_path(source_id).read_bytes()
         # Older runner outputs may have saved audio duration only in job progress.
         parsed = json.loads(data.decode('utf-8-sig'))
@@ -260,7 +269,7 @@ class SRTService:
         jid = str(uuid.uuid4())
         now = time.time()
         if plan:
-            folder = self.output / jid
+            folder = output_paths.owned_path(self.output / jid, context, 'srt/' + jid)
             folder.mkdir(parents=True, exist_ok=True)
             (folder / 'source-plan.json').write_text(json.dumps(plan, ensure_ascii=False), encoding='utf-8')
         with self.db() as db:
@@ -271,16 +280,45 @@ class SRTService:
                        (jid, source['id'], source['title'], prompt, model, timeout, 'QUEUED', None, None, now, now))
             scope.save_settings(db,'srt',jid,project_settings)
             scope.record(db, 'srt', jid, context, [scope.ref('json', source['id'])])
+            if plan:
+                output_paths.remember(db, 'srt', jid, folder)
         return {'id': jid}
 
     def update(self, jid, state, error=None, cues=None):
         with self.db() as db:
-            db.execute('UPDATE srt_jobs SET state=?,error=?,cues=?,updated=? WHERE id=?', (state, error, cues, time.time(), jid))
+            db.execute("UPDATE srt_jobs SET state=?,error=?,cues=?,updated=? WHERE id=? AND state NOT IN ('CANCELLING','CANCELLED')", (state, error, cues, time.time(), jid))
 
     def cancel(self, jid):
         with self.db() as db:
             count = db.execute("UPDATE srt_jobs SET state='CANCELLED',updated=? WHERE id=? AND state='QUEUED'", (time.time(), jid)).rowcount
         return {'cancelled': count}
+
+    async def stop(self, jid):
+        with self.db() as db:
+            row = db.execute('SELECT state FROM srt_jobs WHERE id=?',(jid,)).fetchone()
+            if not row:
+                raise ValueError('SRT job not found.')
+            if row['state'] in ('COMPLETED','CANCELLED'):
+                return {'cancelled':0,'state':row['state']}
+            state = row['state']
+            db.execute("UPDATE srt_jobs SET state='CANCELLING',updated=? WHERE id=?",(time.time(),jid))
+        try:
+            if state in ('RUNNING','CANCELLING','NEEDS_REVIEW') or self.active_id == jid:
+                await gateway.stop_srt(jid)
+        except Exception as error:
+            with self.db() as db:
+                db.execute("UPDATE srt_jobs SET state='NEEDS_REVIEW',error=?,updated=? WHERE id=? AND state='CANCELLING'",
+                           ('Stop not confirmed: '+str(error),time.time(),jid))
+            raise
+        with self.db() as db:
+            db.execute("UPDATE srt_jobs SET state='CANCELLED',error='Stopped by user. Existing files retained.',updated=? WHERE id=? AND state='CANCELLING'",(time.time(),jid))
+        return {'cancelled':1,'state':'CANCELLED'}
+
+    def check_not_cancelled(self, jid):
+        with self.db() as db:
+            state=db.execute('SELECT state FROM srt_jobs WHERE id=?',(jid,)).fetchone()
+        if not state or state['state'] in ('CANCELLING','CANCELLED'):
+            raise ValueError('SRT job was stopped. Late response was not applied.')
 
     def result_path(self, jid, require_approved=False):
         with self.db() as db:
@@ -291,10 +329,10 @@ class SRTService:
             report = self.quality(jid)
             if report.get('status') not in ('LEGACY','PASSED') and not report.get('approved'):
                 raise ValueError('Review the SRT quality report and accept its timing exceptions before using it in the next stage.')
-        return self.output / jid / 'subtitles.srt'
+        return output_paths.job_directory(self, 'srt', jid) / 'subtitles.srt'
 
     async def process(self, job):
-        if self.active_id:
+        if self.active_id or self.preparing:
             return
         jid = job['id']
         # A cancelled queued job must never be revived from an earlier snapshot.
@@ -303,16 +341,18 @@ class SRTService:
         if not claimed:
             return
         self.active_id = jid
-        folder = self.output / jid
+        folder = output_paths.job_directory(self, 'srt', jid)
         try:
             folder.mkdir(parents=True, exist_ok=True)
+            file_mode = scope.load_settings(self,'srt',jid).get('srt_output') == 'download-file'
             plan_path = folder / 'source-plan.json'
             method = job.get('method', 'legacy-srt')
             plan = json.loads(plan_path.read_text(encoding='utf-8')) if method == alignment.METHOD else None
-            data = json.dumps(alignment.attachment(plan), ensure_ascii=False, separators=(',',':')).encode() if plan else (self.output / (job['source_id'] + '.json')).read_bytes()
+            data = json.dumps(alignment.attachment(plan), ensure_ascii=False, separators=(',',':')).encode() if plan else self.source_path(job['source_id']).read_bytes()
             if len(data) > MAX_JSON:
                 raise ValueError('Prepared scene-boundary attachment exceeds 16 MiB. Split this transcript.')
             def save(answer):
+                self.check_not_cancelled(jid)
                 (folder / 'response.txt').write_text(answer, encoding='utf-8')
                 if plan:
                     try:
@@ -334,9 +374,33 @@ class SRTService:
                 part.replace(folder / 'subtitles.srt')
                 self.update(jid, 'COMPLETED', cues=count)
                 return srt
-            await gateway.complete(job['prompt'] + (alignment.instruction(plan) if plan else OUTPUT_INSTRUCTION), job['model'], validate=save,
+            def save_download(result):
+                self.check_not_cancelled(jid)
+                answer = result['choices'][0]['message']['content']
+                (folder / 'response.txt').write_text(answer, encoding='utf-8')
+                native = result.get('nativeDownload')
+                (folder / 'download.json').write_text(json.dumps(native, ensure_ascii=False), encoding='utf-8')
+                if not isinstance(native, dict):
+                    raise ValueError('ChatGPT returned no downloaded SRT file. The response remains saved.')
+                token = str(native.get('token',''))
+                if not re.fullmatch(r'[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}',token):
+                    raise ValueError('Invalid SRT download identifier.')
+                path = Path(native.get('path',''))
+                if not path.is_absolute() or path.parts[-3:] != ('flowkit-chatgpt',token,'subtitles.srt') or path.resolve() != path or not path.is_file():
+                    raise ValueError('Downloaded SRT file is unavailable at the browser location. The original response and download metadata are retained.')
+                raw = path.read_bytes()
+                text = raw.decode('utf-8-sig')
+                _, count = parse_srt(text)
+                part = folder / 'subtitles.srt.part'
+                part.write_bytes(raw)
+                part.replace(folder / 'subtitles.srt')
+                self.update(jid, 'COMPLETED', cues=count)
+                return text
+            await gateway.complete(job['prompt'] if file_mode else job['prompt'] + (alignment.instruction(plan) if plan else OUTPUT_INSTRUCTION), job['model'], validate=save,
+                **({'download_srt':True,'validate_payload':save_download} if file_mode else {}),
                 attachment={'name': 'transcript-' + job['source_id'] + '.json', 'base64': base64.b64encode(data).decode()},
-                composer_mode='work', temporary=False, timeout_seconds=job['timeout'], fresh_tab=True,
+                composer_mode='work', temporary=False, timeout_seconds=job['timeout'], fresh_tab=True, srt_job_id=jid,
+                **({'prepared_tab_token':scope.load_settings(self,'srt',jid)['srt_prepared_token']} if scope.load_settings(self,'srt',jid).get('srt_prepared_token') else {}),
                 **({'page_url':scope.load_settings(self,'srt',jid)['chatgpt_url']} if scope.load_settings(self,'srt',jid).get('chatgpt_url') else {}))
         except gateway.GatewayNotSubmitted as e:
             self.update(jid, 'FAILED', str(e))

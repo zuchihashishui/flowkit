@@ -1,10 +1,13 @@
 """Read-only production progress, input checks and restart recovery guidance."""
+import logging
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from agent.services import production_overview as production
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix='/production', tags=['production'])
 
@@ -35,4 +38,12 @@ async def recovery(project_id: str, video_id: str | None = None):
 
 @router.post('/preflight')
 async def preflight(body: Preflight):
-    return await production.preflight(body.model_dump())
+    try:
+        return await production.preflight(body.model_dump())
+    except HTTPException:
+        raise
+    except Exception as error:
+        logger.exception('Production preflight failed: stage=%s project=%s video=%s',
+                         body.stage, body.project_id, body.video_id)
+        detail = f'{type(error).__name__}: {str(error) or "No error message"}'
+        raise HTTPException(500, f'{body.stage} preflight failed — {detail}. See backend.log for the full traceback.') from error

@@ -97,6 +97,8 @@ async def run_ws_server():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    from agent.services.workspace_delete_files import recover as recover_workspace_deletions
+    await asyncio.to_thread(recover_workspace_deletions)
 
     # Load custom materials from DB into in-memory registry
     from agent.db.crud import list_materials as db_list_materials
@@ -133,9 +135,13 @@ async def lifespan(app: FastAPI):
     srt_task = asyncio.create_task(srt_service.run())
     from agent.services.assembly_service import service as assembly_service
     assembly_task = asyncio.create_task(assembly_service.run())
+    from agent.services import video_files
+    video_files_task = asyncio.create_task(video_files.run())
     logger.info("WS server + worker started")
 
-    yield
+    from agent.services.loop_watchdog import LoopWatchdog
+    with LoopWatchdog():
+        yield
 
     controller.request_shutdown()
     await controller.drain()
@@ -148,7 +154,8 @@ async def lifespan(app: FastAPI):
     whisperx_task.cancel()
     srt_task.cancel()
     assembly_task.cancel()
-    await asyncio.gather(ws_task, worker_task, desktop_task, storyboard_task, chatgpt_task, elevenlabs_task, whisperx_task, srt_task, assembly_task, return_exceptions=True)
+    video_files_task.cancel()
+    await asyncio.gather(ws_task, worker_task, desktop_task, storyboard_task, chatgpt_task, elevenlabs_task, whisperx_task, srt_task, assembly_task, video_files_task, return_exceptions=True)
     await close_db()
     logger.info("Flow Kit stopped")
 
@@ -339,12 +346,6 @@ async def dashboard_ws(websocket: WebSocket):
 
 
 if __name__ == "__main__":
-    import uvicorn
-    reload_enabled = os.environ.get("GLA_RELOAD", "0") == "1"
-    uvicorn.run(
-        "agent.main:app",
-        host=API_HOST,
-        port=API_PORT,
-        reload=reload_enabled,
-        reload_excludes=["*.db", "*.db-wal", "*.db-shm", "output/*"],
-    )
+    from agent.server_runtime import run_server
+    run_server("agent.main:app", host=API_HOST, port=API_PORT,
+               reload=os.environ.get("GLA_RELOAD", "0") == "1")

@@ -9,16 +9,10 @@ const record={video:{id:'v1',project_id:'p1',title:'Episode One'},document:{id:'
 function setup(api){
  const dom=new JSDOM('<button data-page="scene-board">Scene Board</button><section data-view="scene-board"><div id="scene-board"></div></section>',{runScripts:'outside-only',url:'http://localhost/'}),w=dom.window,$=id=>w.document.getElementById(id),previews=[],checks=[],urls=[];
  let context={project_id:'p1',video_id:'v1'};w.workflow={context:()=>({...context})};w.confirm=()=>true;w.URL.createObjectURL=()=>{const url='blob:test'+urls.length;urls.push(url);return url;};w.URL.revokeObjectURL=()=>{};
-<<<<<<< HEAD
  w.studio={api,openProjectPage:async()=>{},preview:async(id,index)=>{previews.push({id,index});return{bytes:new Uint8Array([1,2]),mime:'image/png',kind:'image'};}};
  w.production={check:async(...args)=>{checks.push(args);return true;}};w.projectSettings={assertSaved:()=>{}};w.selectProductionVideo=async()=>true;
  w.eval(fs.readFileSync(path.join(__dirname,'../ui/data-table.js'),'utf8'));
     w.eval(fs.readFileSync(path.join(__dirname,'../ui/scene-board.js'),'utf8'));
-=======
- w.studio={api,preview:async(id,index)=>{previews.push({id,index});return{bytes:new Uint8Array([1,2]),mime:'image/png',kind:'image'};}};
- w.production={check:async(...args)=>{checks.push(args);return true;}};w.projectSettings={assertSaved:()=>{}};w.selectProductionVideo=async()=>true;
- w.eval(fs.readFileSync(path.join(__dirname,'../ui/scene-board.js'),'utf8'));
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  return{dom,w,$,previews,checks,context:next=>{context=next;w.document.dispatchEvent(new w.CustomEvent('workflow-changed'));}};
 }
 test('scene board shows real current image thumbnails, retained older results, timings and safe narration text',async()=>{
@@ -73,11 +67,7 @@ test('Scene Board image settings are restored per video and default to video pro
 test('Scene Board does not generate with missing prompts, blocked preflight, or changed video',async()=>{
  let writes=0,resolveCheck;const doc=structuredClone(record),s=setup(async(method,route)=>{if(method==='POST')writes++;return route==='/api/models'?{}:doc;});
  try{doc.segments[1].ready=false;await s.w.sceneBoard.open();s.$('scb-select-filtered').click();s.$('scb-generate').click();await tick();assert.equal(writes,0);assert.match(s.$('scb-message').textContent,/current prompt/);
-<<<<<<< HEAD
  doc.segments[1].ready=true;await s.w.sceneBoard.open();s.w.production.check=async()=>false;s.$('scb-generate').click();await tick();assert.equal(writes,0);assert.match(s.$('scb-message').textContent,/Generation blocked/);await s.w.sceneBoard.open();assert.match(s.$('scb-message').textContent,/Generation blocked/);
-=======
- doc.segments[1].ready=true;await s.w.sceneBoard.open();s.w.production.check=async()=>false;s.$('scb-generate').click();await tick();assert.equal(writes,0);
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  s.w.production.check=async()=>new Promise(r=>resolveCheck=r);s.$('scb-generate').click();await tick();s.context({project_id:'p1',video_id:'v2'});resolveCheck(true);await tick();assert.equal(writes,0);
  }finally{s.dom.window.close();}
 });
@@ -139,27 +129,12 @@ test('scenes default to images and mixed generation submits the exact image/vide
   assert.deepEqual(s.checks.map(c=>c[0]),['images','videos']);assert.match(s.$('scb-message').textContent,/2 media jobs queued/);
  }finally{s.dom.window.close();}
 });
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 test('row types persist per video and survive reopening the board',async()=>{
  const s=setup(async(_m,route)=>route.endsWith('v2')?{...mixedRecord(),video:{id:'v2',project_id:'p1',title:'Second'}}:mixedRecord());
  try{await s.w.sceneBoard.open();setSceneKind(s,'s2','video');
  await s.w.sceneBoard.open();assert.equal(s.$('scb-rows').querySelector('[data-scene-kind="s2"]').value,'video');
  s.context({project_id:'p1',video_id:'v2'});await tick();assert.equal(s.$('scb-rows').querySelector('[data-scene-kind="s2"]').value,'image');
  s.context({project_id:'p1',video_id:'v1'});await tick();assert.equal(s.$('scb-rows').querySelector('[data-scene-kind="s2"]').value,'video');
-<<<<<<< HEAD
-=======
-=======
-test('row types and video duration persist per video and survive reopening the board',async()=>{
- const s=setup(async(_m,route)=>route.endsWith('v2')?{...mixedRecord(),video:{id:'v2',project_id:'p1',title:'Second'}}:mixedRecord());
- try{await s.w.sceneBoard.open();setSceneKind(s,'s2','video');s.$('scb-duration').value='10';s.$('scb-duration').onchange();
- await s.w.sceneBoard.open();assert.equal(s.$('scb-rows').querySelector('[data-scene-kind="s2"]').value,'video');
- s.context({project_id:'p1',video_id:'v2'});await tick();assert.equal(s.$('scb-rows').querySelector('[data-scene-kind="s2"]').value,'image');assert.equal(s.$('scb-duration').value,'srt');
- s.context({project_id:'p1',video_id:'v1'});await tick();assert.equal(s.$('scb-rows').querySelector('[data-scene-kind="s2"]').value,'video');assert.equal(s.$('scb-duration').value,'10');
->>>>>>> e8698be (update)
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  }finally{s.dom.window.close();}
 });
 test('missing video prompts or a blocked video preflight prevent both mixed groups from submitting',async()=>{
@@ -168,25 +143,11 @@ test('missing video prompts or a blocked video preflight prevent both mixed grou
  setSceneKind(s,'s1','image');setSceneKind(s,'s2','video');s.w.production.check=async stage=>stage!=='videos';s.$('scb-generate').click();await tick();assert.equal(writes.length,0);
  }finally{s.dom.window.close();}
 });
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 test('SRT video duration and regeneration keep active jobs and originals protected',async()=>{
  const data=mixedRecord(),writes=[];data.segments[0].media_jobs=[{id:'active',kind:'image',current:true,state:'RUNNING',files:[]}];data.segments[1].media_jobs=[{id:'done',kind:'video',current:true,state:'COMPLETED',files:['clip.mp4']}];
  const s=setup(async(method,_route,body)=>{if(method==='POST'){writes.push(body);return{ids:['new'],skipped:[],durations:[{short:true}]};}return data;});
  try{await s.w.sceneBoard.open();setSceneKind(s,'s2','video');s.$('scb-select-filtered').click();s.$('scb-regenerate').checked=true;s.$('scb-generate').click();await tick();
  assert.equal(writes.length,1);assert.deepEqual(Array.from(writes[0].segment_ids),['s2']);assert.equal(writes[0].duration,undefined);assert.equal(writes[0].duration_mode,'srt');assert.equal(writes[0].regenerate,true);assert.match(s.$('scb-message').textContent,/1 scenes skipped/);assert.match(s.$('scb-message').textContent,/hold\/loop/);
-<<<<<<< HEAD
-=======
-=======
-test('manual video duration and regeneration keep active jobs and originals protected',async()=>{
- const data=mixedRecord(),writes=[];data.segments[0].media_jobs=[{id:'active',kind:'image',current:true,state:'RUNNING',files:[]}];data.segments[1].media_jobs=[{id:'done',kind:'video',current:true,state:'COMPLETED',files:['clip.mp4']}];
- const s=setup(async(method,_route,body)=>{if(method==='POST'){writes.push(body);return{ids:['new'],skipped:[],durations:[{short:true}]};}return data;});
- try{await s.w.sceneBoard.open();setSceneKind(s,'s2','video');s.$('scb-select-filtered').click();s.$('scb-duration').value='6';s.$('scb-regenerate').checked=true;s.$('scb-generate').click();await tick();
- assert.equal(writes.length,1);assert.deepEqual(Array.from(writes[0].segment_ids),['s2']);assert.equal(writes[0].duration,6);assert.equal(writes[0].duration_mode,'manual');assert.equal(writes[0].regenerate,true);assert.match(s.$('scb-message').textContent,/1 scenes skipped/);assert.match(s.$('scb-message').textContent,/hold\/loop/);
->>>>>>> e8698be (update)
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  }finally{s.dom.window.close();}
 });
 test('a second-group error reports confirmed jobs and never automatically resubmits them',async()=>{
@@ -195,10 +156,6 @@ test('a second-group error reports confirmed jobs and never automatically resubm
  assert.deepEqual(writes,['image','video']);assert.match(s.$('scb-message').textContent,/1 media jobs confirmed queued/);assert.match(s.$('scb-message').textContent,/Flow unavailable/);assert.equal(s.$('scb-generate').disabled,false);
  }finally{s.dom.window.close();}
 });
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 
 test('old manual duration is ignored and each video row previews its own SRT duration',async()=>{
  const boundaries=[[1,4],[3999,4],[4000,4],[4001,6],[6000,6],[6001,8],[8000,8],[8001,10],[10000,10],[10001,10]],writes=[];
@@ -216,7 +173,6 @@ test('old manual duration is ignored and each video row previews its own SRT dur
   assert.equal(JSON.parse(s.w.localStorage.getItem('flowkit.scene-board.v1/p1/v1')).duration,undefined);
  }finally{s.dom.window.close();}
 });
-<<<<<<< HEAD
 
 test('Generate opens saved Flow project before preflight and enqueue; opening failure stops submission',async()=>{
  const events=[],s=setup(async(method,route)=>{if(method==='POST'){events.push('enqueue');return{ids:['new']};}return route==='/api/models'?{}:structuredClone(record);});
@@ -256,7 +212,3 @@ test('prompt editor retains edits on save failure and confirms discard',async()=
  s.w.confirm=()=>true;assert.equal(s.w.sceneBoard.canChangeVideo(),true);assert.equal(popup.isConnected,false);
  }finally{s.dom.window.close();}
 });
-=======
-=======
->>>>>>> e8698be (update)
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af

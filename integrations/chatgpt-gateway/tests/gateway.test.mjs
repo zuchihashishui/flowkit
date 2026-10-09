@@ -339,29 +339,17 @@ test('text preparation does not clear an account rate limit',async()=>{
  try{await s.request();assert.equal((await s.post('/workers/ensure',{})).status,409);assert.equal((await s.health()).needsReview,true);assert.equal(controls,0);}finally{await s.close();}
 });
 
-<<<<<<< HEAD
 for(const mode of ['work','chat'])test(mode+' ZIP batches use one reserved worker and preserve download metadata until save ACK',async()=>{
  const caps=['project-urls-v1','temporary-text-session-v1','txt-prompt-attachment-v1','serialized-submission-v1','text-worker-recovery-v1','work-prompt-zip-v1','chat-prompt-zip-v1','verified-send-v1'];
-=======
-test('Work ZIP batches use one reserved worker and preserve download metadata until save ACK',async()=>{
- const caps=['project-urls-v1','temporary-text-session-v1','txt-prompt-attachment-v1','serialized-submission-v1','text-worker-recovery-v1','work-prompt-zip-v1','verified-send-v1'];
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  const s=await setup([{id:'w1',tabId:1,state:'IDLE'}],caps),messages=[];
  s.ws.on('message',raw=>{const m=JSON.parse(raw);messages.push(m);
   if(m.type==='chat')s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:true,content:'image_prompts.zip',nativeDownload:{path:'/downloads/prompts.zip',token:'token'}}));
   else if(m.controlId)s.ws.send(JSON.stringify({type:'controlResult',controlId:m.controlId,ok:true}));
  });
-<<<<<<< HEAD
  const payload={messages:[{role:'user',content:'001 First\n\n002 Second'}],workers:1,pageUrl:'https://chatgpt.com/',temporary:false,composerMode:mode,downloadPromptZip:true,textSessionId:'11111111-1111-1111-1111-111111111111',promptTemplate:'Create ZIP',timeout:1800000};
  try{
   assert.equal((await s.post('/workers/ensure',{workers:1})).status,200);assert.equal(messages[0].workerCount,1);
   for(const wrong of [{workers:3},{composerMode:'invalid'},{temporary:true}])assert.equal((await s.post('/v1/chat/completions',{...payload,...wrong})).status,400);
-=======
- const payload={messages:[{role:'user',content:'001 First\n\n002 Second'}],workers:1,pageUrl:'https://chatgpt.com/',temporary:false,composerMode:'work',downloadPromptZip:true,textSessionId:'11111111-1111-1111-1111-111111111111',promptTemplate:'Create ZIP',timeout:1800000};
- try{
-  assert.equal((await s.post('/workers/ensure',{workers:1})).status,200);assert.equal(messages[0].workerCount,1);
-  for(const wrong of [{workers:3},{composerMode:'chat'},{temporary:true}])assert.equal((await s.post('/v1/chat/completions',{...payload,...wrong})).status,400);
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   const result=await (await s.post('/v1/chat/completions',payload)).json();assert.equal(result.nativeDownload.token,'token');assert.equal(messages.find(m=>m.type==='chat').downloadPromptZip,true);
   assert.equal(messages.find(m=>m.type==='chat').timeout,1800000);
   assert.equal((await s.post('/v1/chat/completions',payload)).status,409);
@@ -374,7 +362,6 @@ test('Work ZIP requires the updated Send extension before preparing workers',asy
  let commands=0;s.ws.on('message',()=>commands++);
  try{const response=await s.post('/workers/ensure',{workers:1});assert.equal(response.status,409);assert.match((await response.json()).error,/1.12.1/);assert.equal(commands,0);}finally{await s.close();}
 });
-<<<<<<< HEAD
 
 
 test('video prompt capability survives relay and submits one row with its TXT',async()=>{
@@ -450,5 +437,3 @@ test('direct open replaces stale text reservation without restart control and ca
   assert.equal(result.status,200);assert.deepEqual(commands,['openText','chat']);assert.equal((await s.health()).srtWorker.tabId,7);
  }finally{await s.close();}
 });
-=======
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af

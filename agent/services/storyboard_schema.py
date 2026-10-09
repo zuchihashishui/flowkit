@@ -20,6 +20,16 @@ CREATE TABLE IF NOT EXISTS script_segment (
  active_concept_id TEXT,
  UNIQUE(document_id, ordinal)
 );
+CREATE TABLE IF NOT EXISTS text_prompt_input (
+ document_id TEXT PRIMARY KEY REFERENCES script_document(id) ON DELETE CASCADE,
+ prompt_template TEXT NOT NULL DEFAULT '',
+ prompt_name TEXT NOT NULL DEFAULT '',
+ srt_name TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS text_prompt_options (
+ document_id TEXT PRIMARY KEY REFERENCES script_document(id) ON DELETE CASCADE,
+ settings TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS document_source (
  document_id TEXT PRIMARY KEY REFERENCES script_document(id) ON DELETE CASCADE,
  kind TEXT NOT NULL, source_id TEXT, content TEXT NOT NULL, imported REAL NOT NULL

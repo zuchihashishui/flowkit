@@ -16,11 +16,7 @@ async function bridge(initial=[],create,downloadMock,manualSubmission=false,opti
    update:async(id,options)=>{updated.push({id,...options});if(options.url)proofs.delete(id);Object.assign(tabs.get(id),options);return tabs.get(id);},
    onRemoved:{addListener:f=>removed=f},sendMessage:async(id,m)=>{
     if(m.type==='stopSrt')return {ok:true};
-<<<<<<< HEAD
     if(m.type==='clickSrtDownload'||m.type==='clickPromptZipDownload'||m.type==='continuePromptZipDownload')return downloadMock.click(m);
-=======
-    if(m.type==='clickSrtDownload'||m.type==='clickPromptZipDownload')return downloadMock.click(m);
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     if(m.type==='prepareSrt')return {ok:true};if(m.type==='ping')return options.ping?options.ping(id,{tabs,focused}):{ok:true,submissionAck:true,verifiedSend:true,promptZip:true,inputReady:true,url:tabs.get(id)?.url,textSessionProof:proofs.get(id)};if(m.type==='probe')return {streaming:false};if(m.type==='preflight')return {ok:true,data:{passed:true}};
     messages.push({id,...m});if(!manualSubmission)setImmediate(()=>listener({type:'requestSubmitted',requestId:m.requestId},{id:'ext',frameId:0,tab:{id}},()=>{}));return new Promise(resolve=>pending.set(m.requestId,resolve));}},
   runtime:{id:'ext',onMessage:{addListener:f=>listener=f},onStartup:{addListener(){}},onInstalled:{addListener(){}}},alarms:{create(){},onAlarm:{addListener(){}}}};
@@ -391,7 +387,6 @@ test('Work ZIP refuses an old content script before entering text or uploading',
  await until(()=>b.replies.some(r=>r.type==='response'&&r.requestId==='stale-page'));
  const reply=b.replies.find(r=>r.type==='response'&&r.requestId==='stale-page');
  assert.equal(reply.ok,false);assert.match(reply.error,/1.12.1/);assert.equal(b.messages.length,0);
-<<<<<<< HEAD
 });
 
 test('failed text tab closure is reported and can be retried',async()=>{
@@ -455,6 +450,4 @@ test('unmatched Chrome ZIP events are reported and never adopted as this batch o
  const status=await b.ui({type:'status'}),messages=status.events.map(e=>e.message);
  assert.ok(messages.some(m=>m.includes('referrer is empty')));assert.ok(messages.some(m=>m.includes('referrer does not match')));
  await b.complete('owned');
-=======
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 });

@@ -13,13 +13,8 @@ const recovery={counts:{needs_review:1,queued:77},jobs:[{id:'uncertain',video_id
 test('dashboard shows every video, routes stages and recovery without submitting generation',async()=>{
  const requests=[],s=setup(async(method,route)=>{requests.push({method,route});return route.includes('/overview')?overview:recovery;});
  try{await tick();assert.match(s.$('pd-videos').textContent,/Episode One/);assert.match(s.$('pd-videos').textContent,/120 \/ 200/);assert.match(s.$('pd-videos').textContent,/Episode Two/);
-<<<<<<< HEAD
  [...s.w.document.querySelectorAll('[data-video-id="v2"] .production-stage')].find(b=>b.textContent.includes('Video prompts')).click();await tick();assert.deepEqual(s.calls,[{video:'v2',page:'storyboard'}]);assert.equal(s.$('sb-prompt-kind').value,'video');
  s.$('pd-recovery').querySelector('button').click();await tick();assert.deepEqual(s.calls[1],{video:'v1',page:'projects'});assert.ok(requests.every(r=>r.method==='GET'));
-=======
- s.w.document.querySelector('[data-video-id="v2"] .production-stage').click();await tick();assert.deepEqual(s.calls,[{video:'v2',page:'storyboard'}]);assert.equal(s.$('sb-prompt-kind').value,'video');
- s.$('pd-recovery').querySelector('button').click();await tick();assert.deepEqual(s.calls[1],{video:'v1',page:'settings'});assert.ok(requests.every(r=>r.method==='GET'));
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  }finally{s.dom.window.close();}
 });
 test('preflight forwards snapshot inputs, blocks failures and ignores a stale video result',async()=>{
@@ -48,10 +43,6 @@ test('folder buttons pass the clicked video owner and display copy warnings',asy
  const opened=[],s=setup(async(method,route)=>route.includes('/overview')?overview:recovery);
  s.w.studio.openVideoFiles=async(project,video)=>{opened.push({project,video});return{directory:video?'/projects/p/'+video:null,project_directory:'/projects/p',warnings:video?['Missing old audio']:[]};};
  try{await tick();s.$('pd-files').click();await tick();assert.deepEqual(opened[0],{project:'p1',video:null});
-<<<<<<< HEAD
  [...s.w.document.querySelectorAll('[data-video-id="v2"] button')].find(b=>b.textContent==='Open video folder').click();await tick();assert.deepEqual(opened[1],{project:'p1',video:'v2'});assert.match(s.$('pd-message').textContent,/Missing old audio/);assert.equal(s.calls.length,0);
-=======
- s.w.document.querySelector('[data-video-id="v2"] button').click();await tick();assert.deepEqual(opened[1],{project:'p1',video:'v2'});assert.match(s.$('pd-message').textContent,/Missing old audio/);assert.equal(s.calls.length,0);
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  }finally{s.dom.window.close();}
 });

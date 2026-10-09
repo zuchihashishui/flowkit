@@ -10,12 +10,8 @@ test('SRT UI selects JSON, preserves long prompt, sends Work options, previews a
   if(url.endsWith('/preview'))return {text:'1\n00:00:00,000 --> 00:00:03,000\n日本語'};
   return {sources,jobs:[{id:'done',title:'<script>bad</script>',state:'COMPLETED',model:'GPT-6 Astra',cues:1}]};
  },srtImport:async()=>{sources.push({id:'file',title:'My JSON'});return sources.at(-1);},srtSave:async id=>{calls.push({save:id});return {path:'test.srt'};}};
-<<<<<<< HEAD
  w.eval(fs.readFileSync(path.join(__dirname,'../ui/data-table.js'),'utf8'));
     w.eval(fs.readFileSync(path.join(__dirname,'../ui/srt.js'),'utf8'));
-=======
- w.eval(fs.readFileSync(path.join(__dirname,'../ui/srt.js'),'utf8'));
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  assert.equal(calls.length,0,'Loading the SRT UI must not prepare a browser tab');
  for(let i=0;i<2;i++){d.querySelector('[data-page="srt"]').click();await tick();}
  assert.ok(calls.length>0,'Opening SRT still refreshes saved sources and jobs');
@@ -130,11 +126,7 @@ test('queued SRT explains why it is waiting, exposes recovery links and resumes 
  let job={id:'waiting',title:'Narration.json',state:'QUEUED',model:'GPT-6 Astra',queue_position:1};
  const {dom,w,$}=sourceUI({'/api/srt/status':()=>({sources:[],jobs:[{...job,wait_reason:queue}],queue})});
  w.studio.chatgptAction=async action=>calls.push(action);
-<<<<<<< HEAD
  w.document.querySelector('[data-page="projects"]').addEventListener('click',()=>calls.push('workers'));
-=======
- w.document.querySelector('[data-page="settings"]').addEventListener('click',()=>calls.push('workers'));
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  try{
   await $('srt-refresh').onclick();
   assert.match($('srt-queue-status').textContent,/Reload extensions\/chatgpt/);

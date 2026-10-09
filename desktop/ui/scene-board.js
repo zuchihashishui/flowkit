@@ -2,7 +2,6 @@
 (() => {
   const host=document.getElementById('scene-board');if(!host)return;
   host.innerHTML=`<section class="panel"><div class="toolbar"><div><h2>Prompt to Media</h2><p>Review narration, prompts and current media together. Successful results are preserved when retrying failed scenes.</p></div><button id="scb-show-downloads" type="button">Jobs &amp; downloads</button><button id="scb-open-files" type="button">Open video folder</button><button id="scb-collect" type="button">Collect saved images</button><button id="scb-refresh" type="button">Refresh scenes</button></div><div class="scene-board-controls"><label>Show<select id="scb-filter"><option value="all">All scenes</option><option value="failed">Failed scenes</option><option value="needs_review">Needs review</option><option value="missing_image_prompt">Missing image prompt</option><option value="missing_video_prompt">Missing video prompt</option><option value="missing_image">Missing image</option><option value="missing_video">Missing video clip</option><option value="ready">Image or video saved</option></select></label><label>Search narration or prompts<input id="scb-search" type="search" placeholder="Find a scene…" maxlength="500"></label><label>Retry target<select id="scb-target"><option value="image_prompt">Image prompt</option><option value="video_prompt">Video prompt</option><option value="image">Image generation</option><option value="video">Video generation</option></select></label></div><div class="scene-board-controls"><label>Image Model<select id="scb-model"><option value="GEM_PIX_2">Nano Banana Pro</option><option value="BELUGA">Nano Banana 2.1</option><option value="HARBOR_SEAL">Nano Banana 2 Lite</option></select></label><label>Aspect Ratio<select id="scb-ratio"><option value="HORIZONTAL">16:9 · Landscape</option><option value="VERTICAL">9:16 · Portrait</option></select></label><label class="check"><input id="scb-regenerate" type="checkbox">Regenerate completed selected scenes</label></div><p>Each row defaults to Image; choose Video for scenes that need a clip. Video requires a saved video prompt. Duration follows each SRT scene: up to 4s → 4s, up to 6s → 6s, up to 8s → 8s, up to 10s → 10s; longer scenes use 10s. Settings apply to new generation. Retry uses the original job settings and resumes saved remote results when available.</p><div class="actions space"><button id="scb-generate" type="button">Generate selected scenes</button><button id="scb-select-filtered" type="button">Select all filtered (up to 200)</button><button id="scb-select-failed" type="button">Select failed for target</button><button id="scb-clear" type="button">Clear selection</button><button id="scb-retry" type="button">Retry selected failed scenes</button><button id="scb-edit" type="button">Open SRT to Prompt</button></div><p id="scb-message" role="status" aria-live="polite">Choose a project and video in Project.</p><p id="scb-image-folder" class="scene-board-folder"></p><p id="scb-count" class="scene-board-count"></p><div id="scb-table-scroll" class="table-wrap" tabindex="0" role="region" aria-label="Prompt to Media scenes"><table class="story-table sb-table scene-board-table"><thead><tr><th><label class="scene-board-select-all"><input id="scb-select-all" type="checkbox"> Select all</label></th><th>Scene / time</th><th>Create</th><th>Narration</th><th>Image / video prompts</th><th>Next model / ratio</th><th>Current media</th><th>Activity / actions</th></tr></thead><tbody id="scb-rows"></tbody></table></div></section>`;
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   const $=id=>document.getElementById(id),node=(tag,text,cls)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el;};
   const context=()=>window.workflow?.context()||{project_id:$('project-select')?.value||'',video_id:$('video-select')?.value||''};
   const scope=c=>`${c.project_id||''}/${c.video_id||''}`;
@@ -37,10 +36,6 @@
     const defaults=window.videoSettings?.effective()?.media||{};
     const savedModel=(stored.image_model??defaults.image_model)||'GEM_PIX_2';
     const model=['NARWHAL','NANO_BANANA_2'].includes(savedModel)?'GEM_PIX_2':savedModel;
-  function setImageSettings(stored={}){
-    const defaults=window.videoSettings?.effective()?.media||{};
-    const model=stored.image_model??defaults.image_model??'';
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     if(![...$('scb-model').options].some(o=>o.value===model)){$('scb-model').append(new Option(model,model));}
     $('scb-model').value=model;
     $('scb-ratio').value=stored.orientation??defaults.orientation??'HORIZONTAL';
@@ -158,9 +153,6 @@
       kindPicker.onchange=()=>{if(kindPicker.value==='video')mediaTypes[s.id]='video';else delete mediaTypes[s.id];updateDuration();persist();render();};updateDuration();output.append(kindPicker,durationNote);
       const text=node('td');text.append(node('p',s.text));const prompts=node('td');
       for(const kind of ['image','video']){const container=kind===mediaType(s)?prompts:node('details');if(container!==prompts){container.append(node('summary',kind==='image'?'Other: image prompt':'Other: video prompt'));prompts.append(container);}const p=actionButton(s.active_concept?.[kind+'_prompt']||'Add '+kind+' prompt…',()=>openPromptEditor(s,kind));p.className='scene-board-prompt scene-prompt-open';p.setAttribute('aria-label','Edit '+kind+' prompt for scene '+s.ordinal);p.title='View full prompt and edit';if(!hasPrompt(s,kind)&&s.active_concept?.[kind+'_prompt'])p.prepend(node('strong','Outdated · '));container.append(p);}
-      const text=node('td');text.append(node('p',s.text));const prompts=node('td');
-      for(const kind of ['image','video']){prompts.append(node('strong',kind==='image'?'Image prompt':'Video prompt'));const p=node('p',s.active_concept?.[kind+'_prompt']||'No saved prompt.','scene-board-prompt');if(!hasPrompt(s,kind)&&s.active_concept?.[kind+'_prompt'])p.prepend(node('strong','Outdated · '));prompts.append(p);}
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
       const media=node('td');for(const kind of ['image','video']){
         const group=node('div',undefined,'scene-board-media'),job=saved(s,kind),pending=currentJobs(s,kind).find(j=>active.has(j.state));group.append(node('strong',kind==='image'?'Image':'Video clip'));
         if(job){const status=node('small',kind==='image'?'Loading preview…':'Saved clip');group.append(status);if(kind==='image'){const image=node('img',undefined,'scene-board-thumb');image.alt=`Scene ${s.ordinal} image preview`;image.width=180;image.height=105;image.setAttribute('tabindex','0');image.onclick=()=>run(()=>openPreview(s,job));image.onkeydown=e=>{if(e.key==='Enter')image.click();};group.append(image);setTimeout(()=>{if(image.isConnected)queueThumbnail(image,job,status);},0);}group.append(actionButton(kind==='image'?'View image':'Play clip',()=>openPreview(s,job)),actionButton('Export files',()=>window.sceneDownloads.export(job.id)));}
@@ -226,12 +218,6 @@
     for(const body of groups){
       if(window.production?.check&&!await window.production.check(body.kind==='image'?'images':'videos',{...ctx,segment_ids:body.segment_ids,silentOnSuccess:true,inlineFailure:true}))throw Error('Generation blocked by the production check. Review project settings and extension connection. No jobs submitted.');
       if(scope(context())!==scope(ctx))throw Error('The active video changed. Generate from its own Prompt to Media.');
-    const summary=groups.map(g=>g.segment_ids.length+' '+(g.kind==='image'?'images':'videos')).join(' + ');
-    if(!confirm(`Generate ${summary}? This may use credits.${regenerate?' Completed selected results will be regenerated; their original files remain saved.':' Existing completed results are kept.'} Active jobs are always skipped.`))return;
-    for(const body of groups){
-      if(window.production?.check&&!await window.production.check(body.kind==='image'?'images':'videos',{...ctx,segment_ids:body.segment_ids,silentOnSuccess:true}))return;
-      if(scope(context())!==scope(ctx))throw Error('The active video changed. Generate from its own Scene Board.');
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     }
     window.projectSettings?.assertSaved();window.videoSettings?.assertSaved();
     let queued=0,skipped=items.length-eligible.length,short=false;
@@ -260,8 +246,6 @@
     document.dispatchEvent(new Event('production-updated'));
   }
   $('scb-model').onchange=()=>{persist();render();};$('scb-ratio').onchange=()=>{persist();render();};$('scb-generate').onclick=()=>run(generateMedia,$('scb-generate'));
-  $('scb-model').onchange=persist;$('scb-ratio').onchange=persist;$('scb-generate').onclick=()=>run(generateMedia,$('scb-generate'));
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   $('scb-show-downloads').onclick=()=>window.sceneDownloads.open();
   $('scb-open-files').onclick=()=>run(openVideoFiles,$('scb-open-files'));
   $('scb-collect').onclick=()=>run(collectImages,$('scb-collect'));

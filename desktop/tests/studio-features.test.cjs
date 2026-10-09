@@ -196,11 +196,7 @@ test('job previews and exports stay inside Scene Board and late previews cannot 
  try{
   w.document.querySelector('[data-page="scene-board"]').click();
   await click($('all-jobs'),'Preview');
-<<<<<<< HEAD
   assert.equal($('heading').textContent,'Prompt to Media');assert.equal($('download-preview').hidden,false);
-=======
-  assert.equal($('heading').textContent,'Scene Board');assert.equal($('download-preview').hidden,false);
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   assert.equal($('download-preview').querySelector('img').src,'blob:preview-0');
   await click($('all-jobs'),'Export files');assert.deepEqual(exports,['b']);
   $('close-job-details').click();assert.equal($('download-preview').hidden,true);assert.deepEqual(revoked,['blob:preview-0']);
@@ -230,7 +226,6 @@ test('Scene Board history preserves pause, saved-result resume and scoped queued
   assert.equal(calls.some(c=>c.route==='/api/desktop/jobs'&&c.method==='POST'),false);
  }finally{s.dom.window.close();}
 });
-<<<<<<< HEAD
 
 
 test('confirmed project deletion cascades and clears the active workspace',async()=>{
@@ -268,5 +263,3 @@ test('failed cascade leaves the selected video and project visible',async()=>{
   assert.equal(s.w.workflow.context().video_id,'v1');assert.equal(s.$('project-videos').children.length,2);
  }finally{s.dom.window.close();}
 });
-=======
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
