@@ -12,7 +12,7 @@ def payloads(rows=(1,3,10)):
 
 def test_numbered_input_keeps_source_ids():
     assert batch_message(payloads())=='001 日本語 1 Second line.\n\n003 日本語 3 Second line.\n\n010 日本語 10 Second line.'
-    for rows in [(),(1,1),tuple(range(1,7))]:
+    for rows in [(),(1,1),tuple(range(1,22))]:
         with pytest.raises(ValueError):batch_message(payloads(rows))
 
 
@@ -77,3 +77,38 @@ def test_new_run_keeps_prior_files_and_mixed_runs_are_rejected(tmp_path, monkeyp
     assert (tmp_path/'saved'/other/'001.txt').read_text()=='Second run'
     with pytest.raises(ValueError,match='same run'):
         prompt_batch.read_and_save_zip(second,rows+payloads((2,)))
+
+@pytest.mark.asyncio
+async def test_single_video_receives_text_saves_numbered_file_before_commit(tmp_path,monkeypatch):
+    from agent.services import chatgpt_gateway as gateway
+    from agent.services.concept_writer import write_concept_batch
+    monkeypatch.setattr(prompt_batch,'ARCHIVE_DIR',tmp_path/'saved')
+    p=dict(payloads((7,))[0],provider='chatgpt-web',prompt_kind='video',prompt_template='Video 6s instructions',project_settings={},composer_mode='chat',instruction_type='video_6s',text_output_id=SESSION,batch_size=1,video_prompt_text=True)
+    saved=[]
+    async def persist(concepts):
+        assert (tmp_path/'saved'/SESSION/'007.txt').read_text()=='Full video prompt'
+        saved.append(concepts)
+    async def complete(message,model,**kw):
+        assert message.startswith('007 日本語 7 Second line.')
+        assert kw['video_prompt_text'] and not kw.get('download_prompt_zip')
+        assert kw['prompt_template']=='Video 6s instructions' and kw['temporary'] is False
+        return await kw['validate_payload']({'choices':[{'message':{'content':'Full video prompt'}}]})
+    monkeypatch.setattr(gateway,'complete',complete)
+    await write_concept_batch([p],save_result=persist)
+    assert saved[0][7].video_prompt=='Full video prompt'
+    with pytest.raises(ValueError):await write_concept_batch([p,dict(p,ordinal=8)])
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['image', 'video'])
+@pytest.mark.parametrize('chosen', [None, 'GPT-5.6 Sol', 'Another Model', 'auto'])
+async def test_batch_uses_requested_model(monkeypatch, kind, chosen):
+    from agent.services import chatgpt_gateway as gateway
+    from agent.services.concept_writer import write_concept_batch
+    row = dict(payloads((1,))[0], provider='chatgpt-web', prompt_kind=kind,
+               prompt_template='Instructions', project_settings={}, model=chosen,
+               video_prompt_text=kind == 'video')
+    async def complete(message, model, **kwargs):
+        assert model == (chosen or 'GPT-5.6 Sol')
+        return 'checked'
+    monkeypatch.setattr(gateway, 'complete', complete)
+    assert await write_concept_batch([row]) == 'checked'

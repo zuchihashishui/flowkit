@@ -35,6 +35,13 @@ test('actual main-process IPC supports scene edits and queue cancellation, rejec
   try {
     const main=await mainProcess(folder);
     await main.invoke('api','PATCH','/api/videos/video-123',{title:'New title'});
+    await main.invoke('api','DELETE','/api/videos/empty-video');
+    await main.invoke('api','DELETE','/api/projects/empty-project');
+    await main.invoke('api','DELETE','/api/projects/project-123?cascade=true');
+    await main.invoke('api','DELETE','/api/videos/video-123?cascade=true');
+    await assert.rejects(main.invoke('api','DELETE','/api/projects/project-123?cascade=true&other=true'),/Unsupported/);
+    await assert.rejects(main.invoke('api','DELETE','/api/scenes/scene-123'),/Unsupported/);
+    await assert.rejects(main.invoke('api','DELETE','/api/projects/empty-project/settings'),/Unsupported/);
     await main.invoke('api','PATCH','/api/scenes/scene-123',{narrator_text:'Edited'});
     await main.invoke('api','POST','/api/desktop/jobs/cancel',{ids:['job']});
     await main.invoke('api','POST','/api/chatgpt/message',{prompt:'Hello'});
@@ -44,7 +51,7 @@ test('actual main-process IPC supports scene edits and queue cancellation, rejec
     await main.invoke('api','PUT','/api/storyboard/videos/video-123',{script_text:'Script'});
     await main.invoke('api','POST','/api/storyboard/videos/video-123/generate-media',{segment_ids:['segment'],kind:'image'});
     await main.invoke('api','POST','/api/storyboard/videos/video-123/retry-failed',{segment_ids:['segment'],kind:'image'});
-    for(const route of ['preflight','scene-media','jobs/12345678-1234-1234-1234-123456789abc/resume'])await main.invoke('api','POST','/api/assembly/'+route,{});
+    for(const route of ['preflight','scene-media','project-sources','jobs/12345678-1234-1234-1234-123456789abc/resume'])await main.invoke('api','POST','/api/assembly/'+route,{});
 
     assert(main.requests.some(r=>r.url.endsWith('/api/storyboard/videos/video-123')&&r.options.method==='PUT'));
     assert(main.requests.some(r=>r.url.endsWith('/api/scenes/scene-123')&&r.options.method==='PATCH'));
@@ -359,5 +366,15 @@ test('Text to Prompt IPC imports UTF-8 SRT and TXT and permits the atomic input 
   assert.deepEqual(Array.from(filters[0]),['txt']);assert.deepEqual(Array.from(filters[1]),['srt']);
   await main.invoke('api','POST','/api/storyboard/videos/video-123/prompt-input',{srt_content:'SRT',srt_name:'input.srt',prompt_template:'Instructions',prompt_name:'prompt.txt'});
   assert.ok(main.requests.some(r=>r.url.endsWith('/prompt-input')&&JSON.parse(r.options.body).prompt_name==='prompt.txt'));
+ }finally{await fs.rm(folder,{recursive:true,force:true});}
+});
+
+test('IPC timeout identifies route and warns against resubmitting uncertain writes',async()=>{
+ const folder=await fs.mkdtemp(path.join(os.tmpdir(),'flowkit-timeout-'));
+ try {
+  const main=await mainProcess(folder,()=>{const e=new Error('aborted');e.name='TimeoutError';throw e;});
+  await assert.rejects(main.invoke('api','PUT','/api/storyboard/videos/video-123/prompt-options',{}),/Backend timeout: PUT .*prompt-options.*limit 120s.*Refresh row\/job status/);
+  const reads=await mainProcess(folder,()=>({ok:true,text:async()=>{const e=new Error('body timed out');e.name='TimeoutError';throw e;}}));
+  await assert.rejects(reads.invoke('api','GET','/api/chatgpt/status'),/Backend timeout: GET .*chatgpt\/status.*limit 10s/);
  }finally{await fs.rm(folder,{recursive:true,force:true});}
 });

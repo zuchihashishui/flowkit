@@ -122,3 +122,63 @@ def test_reject_copy_escape_and_destination_symlink(tmp_path):
     with pytest.raises(ValueError):vf.copy(root,'audio/a.mp3',original,source)
     with pytest.raises(ValueError):vf.copy(root,'b.mp3',original,root)
     assert original.read_bytes()==b'audio'
+
+@pytest.mark.asyncio
+async def test_owned_stage_files_write_inside_video_and_legacy_stays_readable(workspace, tmp_path):
+    from agent.services import output_paths
+    from agent.services.whisperx_service import WhisperXService
+    from agent.services.srt_service import SRTService
+    project, a, b = workspace
+    ctx = {'project_id': project['id'], 'video_id': a['id']}
+    folder = Path((await vf.folders(**ctx))['directory'])
+    el = ElevenLabsBridge(store=tmp_path/'el-new.db', output=tmp_path/'legacy-el')
+    job = el.enqueue('Narration', context=ctx)
+    audio = output_paths.job_directory(el, 'elevenlabs', job['id'])/'merged.mp3'
+    audio.parent.mkdir(parents=True, exist_ok=True);audio.write_bytes(b'audio')
+    with el.db() as db:
+        db.execute('UPDATE eleven_jobs SET merged_file=? WHERE id=?', ('merged.mp3',job['id']))
+    assert el.audio_path(job['id'], 'merged') == audio
+    assert audio.is_relative_to(folder/'elevenlabs')
+    assert not (el.output/job['id']).exists()
+    wx = WhisperXService(store=tmp_path/'wx-new.db', output=tmp_path/'legacy-wx')
+    with wx.db() as db:
+        db.execute("INSERT INTO wx_jobs(id,source_id,title,state,options) VALUES('new','source','Test','COMPLETED','{}')")
+        scope.record(db, 'whisperx', 'new', ctx)
+    transcript=output_paths.job_directory(wx,'whisperx','new')/'transcript.json'
+    transcript.parent.mkdir(parents=True,exist_ok=True);transcript.write_text('{"segments":[]}')
+    assert wx.result_path('new') == transcript
+    assert transcript.is_relative_to(folder/'whisperx')
+    sr=SRTService(store=tmp_path/'srt-new.db',output=tmp_path/'legacy-srt')
+    imported=sr.import_bytes(b'{"text":"Hello"}', 'source.json', ctx)
+    assert sr.source_path(imported['id']).is_relative_to(folder/'srt/imports')
+    assert sr.source_data(imported['id']) == b'{"text":"Hello"}'
+    with sr.db() as db:
+        db.execute("INSERT INTO srt_jobs(id,state) VALUES('new','COMPLETED')")
+        scope.record(db,'srt','new',ctx)
+    subtitle=output_paths.job_directory(sr,'srt','new')/'subtitles.srt'
+    subtitle.parent.mkdir(parents=True,exist_ok=True);subtitle.write_text('saved')
+    assert sr.result_path('new') == subtitle
+    # Existing files retain stable paths even after the upgrade.
+    old=el.output/'old';old.mkdir(parents=True)
+    with el.db() as db: scope.record(db,'elevenlabs','old',ctx)
+    assert output_paths.job_directory(el,'elevenlabs','old') == old
+    other=output_paths.video_directory({'project_id':project['id'],'video_id':b['id']})
+    assert other != folder
+    with pytest.raises(ValueError):
+        output_paths.video_directory({'project_id':'wrong','video_id':a['id']})
+
+@pytest.mark.asyncio
+async def test_prompt_and_scene_media_paths_share_video_root(workspace):
+    import uuid
+    from agent.services import output_paths, prompt_batch
+    project,a,b=workspace
+    ctx={'project_id':project['id'],'video_id':a['id']}
+    root=output_paths.video_directory(ctx)
+    run=str(uuid.uuid4())
+    assert prompt_batch.session_folder(run,ctx) == root/'text_prompts'/run
+    for kind in ('image','video'):
+        path=output_paths.owned_path(desktop.ROOT/run,ctx,f'scene_board/{kind}/{run}')
+        assert path == root/'scene_board'/kind/run
+        assert output_paths.allowed(path,desktop.ROOT)
+    await crud.update_video(a['id'],title='Renamed')
+    assert output_paths.video_directory(ctx)==root

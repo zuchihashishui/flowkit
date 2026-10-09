@@ -4,7 +4,7 @@
  const $=id=>document.getElementById(id),key=c=>`${c.project_id||''}/${c.video_id||''}`;
  const raw=(method,route,body)=>window.studio.api(method,route,body);
  const listings=new Set(['/api/elevenlabs/jobs','/api/whisperx/status','/api/srt/status','/api/assembly/status']);
- const scopedWrites=new Set(['/api/elevenlabs/jobs','/api/whisperx/jobs','/api/srt/jobs','/api/srt/prepare','/api/srt/analyze','/api/assembly/source','/api/assembly/preview','/api/assembly/preflight','/api/assembly/scene-media','/api/assembly/jobs']);
+ const scopedWrites=new Set(['/api/elevenlabs/jobs','/api/whisperx/jobs','/api/srt/jobs','/api/srt/prepare','/api/srt/analyze','/api/assembly/source','/api/assembly/project-sources','/api/assembly/preview','/api/assembly/preflight','/api/assembly/scene-media','/api/assembly/jobs']);
  function requireContext(){if(!current.project_id||!current.video_id)throw Error('Select a project and video in Project and wait for them to load.');return {...current};}
  function assertCurrent(ctx){if(key(ctx)!==key(current))throw Error('The active project or video changed. Your result remains saved with its original video.');}
  async function api(method,route,body){

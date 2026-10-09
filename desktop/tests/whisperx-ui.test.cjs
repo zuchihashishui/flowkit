@@ -12,7 +12,8 @@ function setup(){
   if(url.endsWith('/status'))return {transcript_split_version:1,settings:options,imported_sources:imports,jobs:[{id:'wx1',title:'<script>bad</script>',state:'COMPLETED',phase:'COMPLETED',options,result_available:true,split_available:true,transcript_split:{video_duration_seconds:100,video_words:500,image_words:9500,warnings:[]}}]};
   if(url.includes('/preview'))return {filename:url.endsWith('/image')?'transcript_image.json':'transcript.json',language:'ja',word_count:2,segment_count:1,words:[{word:'日',start:0,end:0.2},{word:'?'}],metadata:{warnings:['One untimed word']}};
   return {ok:true};},whisperxImport:async()=>{const source={id:'imported',title:'My audio.mp3'};imports.push(source);return source;},whisperxSave:async (id,variant)=>{calls.push({save:id,variant});return {path:'transcript.json'};}};
- w.eval(fs.readFileSync(path.join(__dirname,'../ui/whisperx.js'),'utf8'));
+ w.eval(fs.readFileSync(path.join(__dirname,'../ui/data-table.js'),'utf8'));
+    w.eval(fs.readFileSync(path.join(__dirname,'../ui/whisperx.js'),'utf8'));
  return {dom,w,$,calls};
 }
 test('WhisperX UI uses merged sources, sends options, preserves draft and previews native timestamps',async()=>{
@@ -128,5 +129,35 @@ test('retry is offered only for recoverable local transcription failures and use
   assert.equal(calls.filter(c=>c.url==='/api/whisperx/jobs/failed-job/retry').length,1);
   assert.match($('wx-message').textContent,/queued again with its saved source and settings/);
   assert.equal([...$('wx-jobs').querySelectorAll('button')].filter(b=>b.textContent==='Retry job').length,0);
+ }finally{dom.window.close();}
+});
+
+test('WhisperX displays preflight status before the start request returns',async()=>{
+ const {dom,w,$}=setup();
+ try{
+  await $('wx-refresh').onclick();$('wx-source').value='source';
+  let release;const original=w.studio.api;
+  w.studio.api=(method,url,body)=>url==='/api/whisperx/jobs'?new Promise(resolve=>release=resolve):original(method,url,body);
+  const pending=$('wx-form').onsubmit({preventDefault(){}});
+  assert.match($('wx-message').textContent,/Checking WhisperX environment/);
+  assert.equal($('wx-message').closest('#wx-form'),null);
+  assert.equal($('wx-start').disabled,true);
+  release({id:'new'});await pending;assert.match($('wx-message').textContent,/queued/);
+ }finally{dom.window.close();}
+});
+
+test('live log and queue errors remain visible when narration listing fails',async()=>{
+ const {dom,w,$}=setup();
+ try{
+  const original=w.studio.api;
+  w.studio.api=async(method,url,body)=>{
+   if(url==='/api/elevenlabs/jobs')throw Error('Narration unavailable');
+   const result=await original(method,url,body);
+   if(url.endsWith('/status')){result.jobs[0].state='RUNNING';result.jobs[0].phase='STARTING';result.worker={running:true,error:'Output directory unavailable'};result.activity_log={job_id:'wx1',text:'Loading Torch…\rDownloading model 12%'};}
+   return result;
+  };
+  await $('wx-refresh').onclick();
+  assert.equal($('wx-activity').hidden,false);assert.match($('wx-live-log').textContent,/Downloading model 12%/);
+  assert.match($('wx-worker-status').textContent,/Output directory unavailable/);
  }finally{dom.window.close();}
 });

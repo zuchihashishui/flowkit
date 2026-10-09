@@ -11,12 +11,12 @@ async function bridge(initial=[],create,downloadMock,manualSubmission=false,opti
  class WS{constructor(){socket=this;this.readyState=1;}send(s){replies.push(JSON.parse(s));}close(){this.readyState=3;this.onclose();}}
  const chrome={storage:{local:{get:async()=>structuredClone(saved),set:async d=>Object.assign(saved,structuredClone(d))}},
   tabs:{get:async id=>{if(!tabs.has(id))throw Error('Missing tab');return tabs.get(id);},
-   query:async()=>[...tabs.values()],remove:async id=>{tabs.delete(id);removed(id);},
+   query:async()=>[...tabs.values()],remove:async id=>{if(options.remove)await options.remove(id);tabs.delete(id);removed(id);},
    create:async options=>{created.push(options);if(create)await create();const t={id:nextId++,url:options.url,status:'complete'};tabs.set(t.id,t);return t;},
    update:async(id,options)=>{updated.push({id,...options});if(options.url)proofs.delete(id);Object.assign(tabs.get(id),options);return tabs.get(id);},
    onRemoved:{addListener:f=>removed=f},sendMessage:async(id,m)=>{
     if(m.type==='stopSrt')return {ok:true};
-    if(m.type==='clickSrtDownload'||m.type==='clickPromptZipDownload')return downloadMock.click(m);
+    if(m.type==='clickSrtDownload'||m.type==='clickPromptZipDownload'||m.type==='continuePromptZipDownload')return downloadMock.click(m);
     if(m.type==='prepareSrt')return {ok:true};if(m.type==='ping')return options.ping?options.ping(id,{tabs,focused}):{ok:true,submissionAck:true,verifiedSend:true,promptZip:true,inputReady:true,url:tabs.get(id)?.url,textSessionProof:proofs.get(id)};if(m.type==='probe')return {streaming:false};if(m.type==='preflight')return {ok:true,data:{passed:true}};
     messages.push({id,...m});if(!manualSubmission)setImmediate(()=>listener({type:'requestSubmitted',requestId:m.requestId},{id:'ext',frameId:0,tab:{id}},()=>{}));return new Promise(resolve=>pending.set(m.requestId,resolve));}},
   runtime:{id:'ext',onMessage:{addListener:f=>listener=f},onStartup:{addListener(){}},onInstalled:{addListener(){}}},alarms:{create(){},onAlarm:{addListener(){}}}};
@@ -387,4 +387,67 @@ test('Work ZIP refuses an old content script before entering text or uploading',
  await until(()=>b.replies.some(r=>r.type==='response'&&r.requestId==='stale-page'));
  const reply=b.replies.find(r=>r.type==='response'&&r.requestId==='stale-page');
  assert.equal(reply.ok,false);assert.match(reply.error,/1.12.1/);assert.equal(b.messages.length,0);
+});
+
+test('failed text tab closure is reported and can be retried',async()=>{
+ let fail=true;
+ const b=await bridge([{id:'worker-1',tabId:1,state:'IDLE',owned:true}],undefined,undefined,false,{remove:async()=>{if(fail)throw Error('Chrome close failed');}});
+ await b.send({type:'closeIdleText',controlId:'failed'});
+ assert.equal(b.replies.at(-1).ok,false);assert.ok(b.tabs.has(1));
+ fail=false;await b.send({type:'closeIdleText',controlId:'retry'});
+ assert.equal(b.replies.at(-1).ok,true);assert.equal(b.tabs.has(1),false);
+});
+
+test('video text attaches TXT each turn in one tab, then closes before image phase',async()=>{
+ const b=await bridge();await b.send({type:'ensureTextWorkers',workerCount:1,controlId:'prepare'});
+ const options={freshTab:false,attachment:undefined,composerMode:'chat',temporary:false,model:'auto',textSessionId:'11111111-1111-1111-1111-111111111111',videoPromptText:true};
+ for(let i=0;i<2;i++){
+  const requestId='video-'+i;
+  await b.request(requestId,'worker-1',{...options,promptTemplate:i?'Video 6s':'Video 4s'});
+  await until(()=>b.messages.length===i+1);
+  const m=b.messages.at(-1);assert.equal(m.promptAttachment.text,i?'Video 6s':'Video 4s');assert.equal(m.videoPromptText,true);assert.equal(m.downloadPromptZip,false);assert.equal(m.continueConversation,i>0);
+  const tab=b.tabs.get(m.id);tab.url='https://chatgpt.com/c/video';const proof={id:options.textSessionId,proof:requestId,url:tab.url};b.proofs.set(m.id,proof);
+  b.pending.get(requestId)({ok:true,content:'Video prompt',conversation_url:tab.url,textSessionProof:proof});
+  await until(()=>b.saved.workers[0].state==='AWAITING_SAVE');await b.send({type:'commit',requestId,controlId:'save-'+i,ok:true});
+ }
+ assert.equal(b.created.length,1);const old=b.saved.workers[0].tabId;
+ await b.send({type:'closeIdleText',controlId:'phase'});assert.equal(b.tabs.has(old),false);
+ await b.request('image','worker-1',{...options,videoPromptText:false,downloadPromptZip:true,textSessionId:'22222222-2222-2222-2222-222222222222',promptTemplate:'Image'});
+ await until(()=>b.messages.length===3);assert.equal(b.created.length,2);assert.notEqual(b.messages[2].id,old);assert.equal(b.messages[2].promptAttachment.text,'Image');
+ await b.complete('image');
+});
+
+
+test('ZIP preview continuation starts a Chrome download and reports progress before returning the file',async()=>{
+ let listener,suggested,removed=false;const clicks=[];
+ const mock={api:{onDeterminingFilename:{addListener:f=>listener=f,removeListener:()=>removed=true},search:async()=>[{state:'complete',exists:true,filename:'/Downloads/'+suggested.filename}]},click:async m=>{
+  clicks.push(m.type);
+  if(m.type==='continuePromptZipDownload')listener({id:71,startTime:new Date().toISOString(),referrer:'https://chatgpt.com/c/preview',filename:'image_prompts.zip'},s=>suggested=s);
+  return {ok:true};
+ }};
+ const b=await bridge([],null,mock);await b.send({type:'ensureTextWorkers',workerCount:1,controlId:'one'});
+ await b.request('preview','worker-1',{freshTab:false,attachment:undefined,composerMode:'chat',temporary:false,textSessionId:'preview-run',promptTemplate:'Image instructions',downloadPromptZip:true});
+ await until(()=>b.messages.length===1);const m=b.messages[0];b.tabs.get(m.id).url='https://chatgpt.com/c/preview';
+ const file=await b.page({type:'downloadPromptZip',requestId:'preview'},m.id);
+ assert.equal(file.ok,true,file.error);assert.match(file.nativeDownload.path,/\/prompts.zip$/);
+ assert.deepEqual(clicks,['clickPromptZipDownload','continuePromptZipDownload']);assert.equal(removed,true);
+ const details=b.replies.filter(r=>r.type==='pool').flatMap(r=>r.workers.map(w=>w.progress?.detail||''));
+ assert.ok(details.some(d=>d.includes('waiting for a matching Chrome download')));assert.ok(details.some(d=>d.includes('download started in Chrome')));assert.ok(details.some(d=>d.includes('saved by Chrome')));
+ await b.complete('preview');
+});
+
+test('unmatched Chrome ZIP events are reported and never adopted as this batch output',async()=>{
+ let listener,suggested;const ignored=[];
+ const mock={api:{onDeterminingFilename:{addListener:f=>listener=f,removeListener(){}},search:async({id})=>{assert.equal(id,83);return[{state:'complete',exists:true,filename:'/Downloads/'+suggested.filename}];}},click:async()=>{
+  for(const [id,referrer] of [[81,''],[82,'https://chatgpt.com/c/unrelated']])listener({id,referrer,filename:'image_prompts.zip',startTime:new Date().toISOString()},value=>ignored.push(value));
+  listener({id:83,referrer:'https://chatgpt.com/c/owned',filename:'image_prompts.zip',startTime:new Date().toISOString()},value=>suggested=value);
+  return {ok:true,activation:'pointer sequence'};
+ }};
+ const b=await bridge([],null,mock);await b.send({type:'ensureTextWorkers',workerCount:1,controlId:'one'});
+ await b.request('owned','worker-1',{freshTab:false,attachment:undefined,composerMode:'chat',temporary:false,textSessionId:'owned-run',promptTemplate:'Instructions',downloadPromptZip:true});
+ await until(()=>b.messages.length===1);const m=b.messages[0];b.tabs.get(m.id).url='https://chatgpt.com/c/owned';
+ const result=await b.page({type:'downloadPromptZip',requestId:'owned'},m.id);assert.equal(result.ok,true,result.error);assert.deepEqual(ignored,[undefined,undefined]);
+ const status=await b.ui({type:'status'}),messages=status.events.map(e=>e.message);
+ assert.ok(messages.some(m=>m.includes('referrer is empty')));assert.ok(messages.some(m=>m.includes('referrer does not match')));
+ await b.complete('owned');
 });

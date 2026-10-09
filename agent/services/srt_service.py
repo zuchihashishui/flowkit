@@ -1,4 +1,6 @@
 """JSON attachments to ChatGPT, with durable SRT output before worker release."""
+from agent.services import output_paths
+
 from agent.services import workflow_scope as scope
 
 import asyncio
@@ -201,17 +203,23 @@ class SRTService:
             raise ValueError('JSON must contain a transcript object or array.')
         sid = str(uuid.uuid4())
         self.output.mkdir(parents=True, exist_ok=True)
-        (self.output / (sid + '.json')).write_bytes(data)
+        target = output_paths.owned_path(self.output / (sid + '.json'), context, 'srt/imports/' + sid + '.json')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
         title = title.replace('\\', '/').rsplit('/', 1)[-1][:200]
         with self.db() as db:
             db.execute('INSERT INTO srt_sources VALUES(?,?,?)', (sid, title, time.time()))
             scope.record(db, 'json', sid, context, sources)
+            output_paths.remember(db, 'json', sid, target)
         return {'id': sid, 'title': title}
+
+    def source_path(self, sid):
+        return output_paths.resource_path(self, 'json', sid, self.output / (sid + '.json'), 'srt/imports/' + sid + '.json')
 
     def source_data(self, source_id):
         source = next((s for s in self.sources() if s['id'] == source_id), None)
         if source:
-            return (self.output / (source_id + '.json')).read_bytes()
+            return self.source_path(source_id).read_bytes()
         data = whisperx.result_path(source_id).read_bytes()
         # Older runner outputs may have saved audio duration only in job progress.
         parsed = json.loads(data.decode('utf-8-sig'))
@@ -261,7 +269,7 @@ class SRTService:
         jid = str(uuid.uuid4())
         now = time.time()
         if plan:
-            folder = self.output / jid
+            folder = output_paths.owned_path(self.output / jid, context, 'srt/' + jid)
             folder.mkdir(parents=True, exist_ok=True)
             (folder / 'source-plan.json').write_text(json.dumps(plan, ensure_ascii=False), encoding='utf-8')
         with self.db() as db:
@@ -272,6 +280,8 @@ class SRTService:
                        (jid, source['id'], source['title'], prompt, model, timeout, 'QUEUED', None, None, now, now))
             scope.save_settings(db,'srt',jid,project_settings)
             scope.record(db, 'srt', jid, context, [scope.ref('json', source['id'])])
+            if plan:
+                output_paths.remember(db, 'srt', jid, folder)
         return {'id': jid}
 
     def update(self, jid, state, error=None, cues=None):
@@ -319,7 +329,7 @@ class SRTService:
             report = self.quality(jid)
             if report.get('status') not in ('LEGACY','PASSED') and not report.get('approved'):
                 raise ValueError('Review the SRT quality report and accept its timing exceptions before using it in the next stage.')
-        return self.output / jid / 'subtitles.srt'
+        return output_paths.job_directory(self, 'srt', jid) / 'subtitles.srt'
 
     async def process(self, job):
         if self.active_id or self.preparing:
@@ -331,14 +341,14 @@ class SRTService:
         if not claimed:
             return
         self.active_id = jid
-        folder = self.output / jid
+        folder = output_paths.job_directory(self, 'srt', jid)
         try:
             folder.mkdir(parents=True, exist_ok=True)
             file_mode = scope.load_settings(self,'srt',jid).get('srt_output') == 'download-file'
             plan_path = folder / 'source-plan.json'
             method = job.get('method', 'legacy-srt')
             plan = json.loads(plan_path.read_text(encoding='utf-8')) if method == alignment.METHOD else None
-            data = json.dumps(alignment.attachment(plan), ensure_ascii=False, separators=(',',':')).encode() if plan else (self.output / (job['source_id'] + '.json')).read_bytes()
+            data = json.dumps(alignment.attachment(plan), ensure_ascii=False, separators=(',',':')).encode() if plan else self.source_path(job['source_id']).read_bytes()
             if len(data) > MAX_JSON:
                 raise ValueError('Prepared scene-boundary attachment exceeds 16 MiB. Split this transcript.')
             def save(answer):

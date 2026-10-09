@@ -66,6 +66,68 @@ async def test_missing_python_fails_actionably(service,monkeypatch):
     assert service.job(job['id'])['state']=='FAILED'
     assert not (await service.check())['ok']
 
+
+@pytest.mark.asyncio
+async def test_output_resolution_failure_does_not_wedge_queue(service, tmp_path, monkeypatch):
+    job = service.enqueue(SOURCE_ID, OPTIONS)
+    original = module.output_paths.job_directory
+    def broken(*args):
+        raise ValueError('Output video does not belong to the project.')
+    monkeypatch.setattr(module.output_paths, 'job_directory', broken)
+    await service.step()
+    assert service.active_id is None and service.process is None
+    assert service.job(job['id'])['state'] == 'FAILED'
+    assert 'Output video' in service.job(job['id'])['error']
+    monkeypatch.setattr(module.output_paths, 'job_directory', original)
+    monkeypatch.setattr(module, 'python_bin', lambda:'/missing/python')
+    retry = service.retry(job['id'])
+    await service.step()
+    assert service.job(retry['id'])['state'] == 'FAILED'
+    assert service.active_id is None
+
+
+@pytest.mark.asyncio
+async def test_partial_stdout_is_visible_while_worker_is_still_running(service, tmp_path, monkeypatch):
+    stub_runner(tmp_path, monkeypatch, "sys.stdout.write('Downloading model 12%');sys.stdout.flush();time.sleep(30)\n")
+    job = service.enqueue(SOURCE_ID, OPTIONS)
+    task = asyncio.create_task(service.step())
+    try:
+        for _ in range(100):
+            if 'Downloading model 12%' in service.activity_log(job['id'])['text']:
+                break
+            await asyncio.sleep(.02)
+        assert service.job(job['id'])['state'] == 'RUNNING'
+        assert 'Downloading model 12%' in service.activity_log(job['id'])['text']
+    finally:
+        await service.cancel(job['id'])
+        await asyncio.wait_for(task, 3)
+
+
+@pytest.mark.asyncio
+async def test_health_responds_while_whisperx_log_read_is_slow(service, monkeypatch):
+    from httpx import AsyncClient, ASGITransport
+    from agent.main import health
+    monkeypatch.setattr(api, 'service', service)
+    service.enqueue(SOURCE_ID, OPTIONS)
+    def slow_log(jid):
+        time.sleep(1)
+        return {'job_id':jid, 'text':'Slow disk fixture'}
+    monkeypatch.setattr(service, 'activity_log', slow_log)
+    app = FastAPI()
+    app.include_router(api.router, prefix='/api')
+    app.add_api_route('/health', health)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+        started = time.monotonic()
+        pending = asyncio.create_task(client.get('/api/whisperx/status'))
+        try:
+            await asyncio.sleep(.05)
+            response = await client.get('/health')
+            assert response.status_code == 200
+            assert time.monotonic()-started < .5, 'Log I/O blocked the backend event loop'
+        finally:
+            status = await pending
+        assert status.json()['activity_log']['text'] == 'Slow disk fixture'
+
 @pytest.mark.asyncio
 async def test_cancel_stops_running_process(service,tmp_path,monkeypatch):
     stub_runner(tmp_path,monkeypatch,"time.sleep(30)\n")
@@ -273,6 +335,8 @@ def test_split_default_and_saved_settings_are_persisted_per_new_job(service):
 @pytest.mark.asyncio
 async def test_manual_retry_preserves_attempt_options_scope_and_completed_files(service,tmp_path,monkeypatch):
     from agent.services import workflow_scope as scope
+    from agent.services import output_paths
+    monkeypatch.setattr(output_paths, 'video_directory', lambda ctx: tmp_path/'project'/'video')
     ctx = {'project_id':'project-one','video_id':'video-one'}
     original = service.enqueue(SOURCE_ID,{**OPTIONS,'video_duration_seconds':65},context=ctx)
     service.update(original['id'],state='FAILED',phase='FAILED',error='CUDA unavailable')

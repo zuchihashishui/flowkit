@@ -368,3 +368,29 @@ async def test_image_motion_defaults_validation_and_frozen_job_plan(tmp_path):
     with service.db() as db:
         stored = json.loads(db.execute('SELECT plan FROM assembly_jobs WHERE id=?',(job,)).fetchone()['plan'])
     assert stored['image_motion'] == 'zoom_in'
+
+@pytest.mark.asyncio
+async def test_real_eight_second_clip_trimmed_at_7_2_then_image(tmp_path):
+    service, body, red, blue = await inputs(tmp_path)
+    clip = await clip_input(tmp_path, service, duration=8)
+    srt = await service.import_upload('srt',Upload('timing.srt',b'1\n00:00:00,000 --> 00:00:07,200\nVideo scene\n\n2\n00:00:07,200 --> 00:00:09,000\nImage scene\n'))
+    audio = await service.import_upload('audio',Upload('9s.wav',wav(9)))
+    body.update(srt_id=srt['id'],audio_id=audio['id'],visual_mode='mixed',video_ids=[clip['id']],image_ids=[blue['id']],fps=30,subtitles='off')
+    plan=service.plan(body)
+    assert plan['scenes'][0]['frames']==216
+    assert plan['scenes'][0]['clip_action']=='trim'
+    assert plan['scenes'][1]['start_frame']==216
+    jid=service.enqueue(body)['id'];await service.process(jid)
+    assert service.jobs()[0]['state']=='COMPLETED',service.jobs()[0]['error']
+    target=service.result_path(jid);info=await probe(target)
+    stream=next(s for s in info['streams'] if s['codec_type']=='video')
+    assert int(stream['nb_frames'])==270
+    assert abs(float(stream['duration'])-9)<.001
+    # Frame 215 is the last clip frame; frame 216 starts the blue image.
+    for frame,channel in [(215,1),(216,2)]:
+        pixels=await command(['ffmpeg','-v','error','-i',target,'-vf',f'select=eq(n\\,{frame}),crop=2:2:100:100','-frames:v','1','-threads','1','-f','rawvideo','-pix_fmt','rgb24','pipe:1'])
+        assert len(pixels)==12
+        assert pixels[channel]>pixels[(channel+1)%3]+100
+        assert pixels[channel]>pixels[(channel+2)%3]+100
+    raw=await command(['ffmpeg','-v','error','-i',target,'-map','0:a:0','-f','s16le','-ac','1','-ar','16000','pipe:1'])
+    assert max(abs(x[0]) for x in struct.iter_unpack('<h',raw))<=1

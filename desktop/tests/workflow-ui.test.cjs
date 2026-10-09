@@ -57,6 +57,7 @@ async function studio(sameProject=false){
   if(method==='POST')return {id:'queued'};
   throw Error('Unexpected request '+method+' '+route);
  }};
+ w.eval(fs.readFileSync(path.join(__dirname,'../ui/data-table.js'),'utf8'));
  for(const name of ['workflow','elevenlabs','whisperx','srt','assembly'])w.eval(fs.readFileSync(path.join(__dirname,'../ui/'+name+'.js'),'utf8'));
  const select=async id=>{$('video-select').value=id;w.workflow.set(context(id));await flush();};
  await select('a');
@@ -172,5 +173,53 @@ test('Create SRT skips the global review checklist and keeps project/video owner
   assert.equal(w.document.querySelector('[data-page="chatgpt"]'),null);
   assert.equal(w.document.querySelector('[data-view="chatgpt"]'),null);
   assert.equal(w.document.querySelector('script[src="chatgpt-queue.js"]'),null);
+ }finally{s.dom.window.close();}
+});
+
+function projectAssemblyReply(method, route, body){
+ const u=new URL(route,'http://local'),v=body?.video_id||u.searchParams.get('video_id');
+ const assets=[{id:'as-'+v,kind:'srt',title:'Scenes '+v},{id:'aa-'+v,kind:'audio',title:'Audio '+v},
+  {id:'ai-'+v,kind:'image',title:'001.png'},{id:'av-'+v,kind:'video',title:'002.mp4',metadata:{duration:4}}];
+ if(u.pathname==='/api/assembly/status')return {assets,jobs:[],workspace_version:1,production_version:1,mixed_media_version:1,ffmpeg:true,ffprobe:true,output_directory:'projects/shared/'+v+'/exports'};
+ if(u.pathname==='/api/assembly/project-sources')return {title:'Video '+v,srt_id:'as-'+v,audio_id:'aa-'+v,assets:assets.slice(2),mapping:{'1':'ai-'+v,'2':'av-'+v},visual_mode:'mixed',issues:[]};
+}
+
+test('Merge automatically loads exact project/video sources and output, preserves manual choices until reload',async()=>{
+ const s=await studio(true),{w,$,calls}=s;
+ try{
+  s.setReply(projectAssemblyReply);
+  w.document.querySelector('[data-view="assembly"]').hidden=false;
+  w.document.querySelector('[data-page="assembly"]').click();await flush();
+  const load=calls.find(c=>c.route==='/api/assembly/project-sources');
+  assert.equal(load.body.project_id,'shared-project');assert.equal(load.body.video_id,'a');
+  assert.equal($('va-srt').value,'asset:as-a');assert.equal($('va-audio').value,'asset:aa-a');
+  assert.equal($('va-images').selectedOptions[0].value,'ai-a');assert.equal($('va-videos').selectedOptions[0].value,'av-a');
+  assert.equal($('va-title').value,'Video a');assert.equal($('va-visual-mode').value,'mixed');
+  assert.match($('va-output-directory').textContent,/shared\/a\/exports/);
+  assert.equal($('va-render').disabled,true);
+  assert(!calls.some(c=>c.method==='POST'&&c.route==='/api/assembly/jobs'));
+  $('va-images').options[0].selected=false;$('va-images').dispatchEvent(new w.Event('change'));
+  await $('va-refresh').onclick();assert.equal($('va-images').selectedOptions.length,0);
+  await $('va-load-project').onclick();assert.equal($('va-images').selectedOptions.length,1);
+  await s.select('b');
+  assert.equal($('va-srt').value,'asset:as-b');assert.equal($('va-audio').value,'asset:aa-b');
+  assert.equal($('va-images').selectedOptions[0].value,'ai-b');
+  assert.match($('va-output-directory').textContent,/shared\/b\/exports/);
+  assert.equal($('va-title').value,'Video b');assert.equal($('va-render').disabled,true);
+ }finally{s.dom.window.close();}
+});
+
+test('late automatic source loading cannot overwrite another video or its saved draft',async()=>{
+ const s=await studio(true),{w,$}=s;let release;
+ try{
+  s.setReply((method,route,body)=>route==='/api/assembly/project-sources'&&body.video_id==='a'
+   ?new Promise(resolve=>{release=resolve;}) :projectAssemblyReply(method,route,body));
+  w.document.querySelector('[data-view="assembly"]').hidden=false;
+  w.document.querySelector('[data-page="assembly"]').click();await flush();assert(release);
+  await s.select('b');assert.equal($('va-srt').value,'');assert.equal($('va-render').disabled,true);
+  release(projectAssemblyReply('POST','/api/assembly/project-sources',{video_id:'a'}));await flush();
+  assert.equal($('va-srt').value,'asset:as-b');assert.equal($('va-audio').value,'asset:aa-b');
+  assert.doesNotMatch(w.localStorage.getItem('assembly-draft:shared-project/b'),/as-a|aa-a|ai-a/);
+  assert.match($('va-output-directory').textContent,/shared\/b\/exports/);
  }finally{s.dom.window.close();}
 });

@@ -10,11 +10,34 @@ import pytest
 from agent.api import desktop as d
 
 
+@pytest.mark.asyncio
+async def test_progress_filters_both_project_and_video():
+    with d.connection() as db:
+        for jid, project, video, kind, state in [
+            ('a', 'p1', 'v1', 'image', 'COMPLETED'),
+            ('b', 'p1', 'v1', 'video', 'QUEUED'),
+            ('c', 'p1', 'v1', 'image', 'NEEDS_REVIEW'),
+            ('d', 'p1', 'v2', 'image', 'RUNNING'),
+            ('e', 'p2', 'v1', 'image', 'FAILED'),
+            ('f', 'p1', 'v1', 'voice', 'COMPLETED'),
+            ('g', 'p1', None, 'image', 'FAILED'),
+        ]:
+            db.execute('INSERT INTO jobs(id,payload,state,created) VALUES(?,?,?,?)',
+                       (jid, json.dumps(dict(project_id=project,video_id=video,kind=kind)), state, 1))
+    progress = await d.flow_progress(project_id='p1', video_id='v1')
+    assert {j['id'] for j in progress['jobs']} == {'a', 'b', 'c'}
+    assert [progress[k] for k in ('active','queued','completed','failed')] == [0,1,1,1]
+    assert not (await d.flow_progress(project_id='p1', video_id='empty'))['jobs']
+    with pytest.raises(d.HTTPException):
+        await d.flow_progress(project_id='p1')
+
+
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(d, "STORE", tmp_path / "jobs.db")
     monkeypatch.setattr(d, "ROOT", tmp_path / "output")
     monkeypatch.setattr(d, "paused", False)
+    monkeypatch.setattr(d, "MEDIA_CONCURRENCY", 3)
     monkeypatch.setattr(d, "get_flow_client", lambda: SimpleNamespace(connected=True, generation_guard_status={}))
 
 
@@ -27,7 +50,9 @@ def fast_scheduler(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_three_media_overlap_and_saved_jobs_release_slots(monkeypatch):
+@pytest.mark.parametrize("limit", [3, 5])
+async def test_media_overlap_and_saved_jobs_release_slots(monkeypatch, limit):
+    monkeypatch.setattr(d, "MEDIA_CONCURRENCY", limit)
     job = d.Job(kind="image", prompt="A boat", project_id=str(uuid.uuid4()))
     await d.enqueue(d.Batch(jobs=[job] * 7))
     release = asyncio.Event()
@@ -38,7 +63,7 @@ async def test_three_media_overlap_and_saved_jobs_release_slots(monkeypatch):
         calls += 1
         active += 1
         peak = max(peak, active)
-        if active == 3:
+        if active == limit:
             three.set()
         await release.wait()
         active -= 1
@@ -52,15 +77,15 @@ async def test_three_media_overlap_and_saved_jobs_release_slots(monkeypatch):
     task = asyncio.create_task(d.run())
     try:
         await asyncio.wait_for(three.wait(), 2)
-        assert calls == 3
+        assert calls == limit
         progress = await d.flow_progress()
-        assert progress["active"] == 3 and progress["queued"] == 4
+        assert progress["active"] == limit and progress["queued"] == 7-limit
         release.set()
         async def completed():
             while any(row["state"] != "COMPLETED" for row in d.rows()):
                 await original_sleep(0)
         await asyncio.wait_for(completed(), 2)
-        assert peak == 3 and calls == 7
+        assert peak == limit and calls == 7
         assert all(json.loads(row["files"]) for row in d.rows())
     finally:
         task.cancel()

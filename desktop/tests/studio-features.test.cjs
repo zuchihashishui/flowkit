@@ -17,6 +17,7 @@ async function studio(savedProject='',multiple=false,savedVideo='') {
     {id:'c',state:'FAILED',can_resume:true,payload:{kind:'video',project_id:'p1',video_id:'v1',label:'Saved result',prompt:'A saved prompt'}},
     {id:'d',state:'NEEDS_REVIEW',payload:{kind:'image',project_id:'p1',video_id:'v1',label:'Uncertain job',prompt:'Check Flow'}}
   ].map(j => ({...j,files:j.state==='COMPLETED'?['/output/output.png']:[],created:1,error:j.state==='FAILED'?'Download failed':null}));
+  const projectRows=[{id:'p1',name:'First project'},{id:'p2',name:'Second project'}];
   const videoRows=[{id:'v1',title:'First collection',status:'DRAFT'}];
   if(multiple){videoRows.push({id:'v2',title:'Second topic',status:'DRAFT'});jobs.push({id:'second-video-job',state:'QUEUED',files:[],created:2,payload:{kind:'image',project_id:'p1',video_id:'v2',label:'Only video two',prompt:'Forest'}});}
   w.confirm = () => true; w.setInterval = () => 0;
@@ -30,7 +31,11 @@ async function studio(savedProject='',multiple=false,savedVideo='') {
       calls.push({method,route,body});
       if(route.startsWith('/api/workflow/resources'))return {resources:[]};
       if(route==='/health')return {version:'test',extension_connected:true};
-      if(route==='/api/projects')return [{id:'p1',name:'First project'},{id:'p2',name:'Second project'}];
+      if(route==='/api/projects')return structuredClone(projectRows);
+      if(method==='DELETE'&&/^\/api\/(projects|videos)\/[^/]+\?cascade=true$/.test(route)){
+        const [id]=route.split('/').at(-1).split('?');const rows=route.includes('/projects/')?projectRows:videoRows;
+        rows.splice(rows.findIndex(row=>row.id===id),1);return {ok:true,cleanup_pending:[]};
+      }
       if(route==='/api/workflow/project')return {project_id:body.project_id,video_id:videoRows.length===1?'v1':null,title:videoRows.length===1?'First collection':null,videos:structuredClone(videoRows),protocol:3};
       if(route==='/api/videos'&&method==='POST'){const row={id:'v'+(videoRows.length+1),...body,status:'DRAFT'};videoRows.push(row);return row;}
       if(route.startsWith('/api/videos/')&&method==='PATCH'){const row=videoRows.find(v=>v.id===route.split('/').at(-1));Object.assign(row,body);return row;}
@@ -191,7 +196,7 @@ test('job previews and exports stay inside Scene Board and late previews cannot 
  try{
   w.document.querySelector('[data-page="scene-board"]').click();
   await click($('all-jobs'),'Preview');
-  assert.equal($('heading').textContent,'Scene Board');assert.equal($('download-preview').hidden,false);
+  assert.equal($('heading').textContent,'Prompt to Media');assert.equal($('download-preview').hidden,false);
   assert.equal($('download-preview').querySelector('img').src,'blob:preview-0');
   await click($('all-jobs'),'Export files');assert.deepEqual(exports,['b']);
   $('close-job-details').click();assert.equal($('download-preview').hidden,true);assert.deepEqual(revoked,['blob:preview-0']);
@@ -219,5 +224,42 @@ test('Scene Board history preserves pause, saved-result resume and scoped queued
   await click($('all-jobs'),'Resume saved result');assert.match($('all-jobs').textContent,/DOWNLOADING/);
   $('cancel-filtered').click();await tick();assert.deepEqual(Array.from(calls.find(c=>c.route==='/api/desktop/jobs/cancel').body.ids),['a']);
   assert.equal(calls.some(c=>c.route==='/api/desktop/jobs'&&c.method==='POST'),false);
+ }finally{s.dom.window.close();}
+});
+
+
+test('confirmed project deletion cascades and clears the active workspace',async()=>{
+ const s=await studio('p1');
+ try{
+  let message;s.w.confirm=text=>{message=text;return false;};
+  await s.click(s.$('project-list').children[0],'Delete');
+  assert.match(message,/ALL its videos/);assert.match(message,/output files/);
+  assert.equal(s.calls.filter(c=>c.method==='DELETE').length,0);
+  s.w.confirm=()=>true;await s.click(s.$('project-list').children[0],'Delete');await tick();
+  assert.equal(s.calls.find(c=>c.method==='DELETE').route,'/api/projects/p1?cascade=true');
+  assert.equal(s.$('project-select').value,'');assert.equal(s.w.workflow.context().video_id,'');
+  assert.equal(s.$('project-list').children.length,1);assert.match(s.$('notice').textContent,/related data\/files deleted/);
+ }finally{s.dom.window.close();}
+});
+
+test('video deletion is shared by the overview and list; siblings remain selected safely',async()=>{
+ const s=await studio('p1',true,'v1');
+ try{
+  assert.equal(await s.w.deleteProductionVideo('v1'),true);
+  assert.equal(s.calls.find(c=>c.method==='DELETE').route,'/api/videos/v1?cascade=true');
+  assert.equal(s.$('project-videos').children.length,1);
+  assert.equal(s.$('project-videos').children[0].dataset.videoId,'v2');
+  assert.notEqual(s.w.workflow.context().video_id,'v1');
+  assert.equal(s.$('project-select').value,'p1');
+ }finally{s.dom.window.close();}
+});
+
+test('failed cascade leaves the selected video and project visible',async()=>{
+ const s=await studio('p1',true,'v1');
+ try{
+  const original=s.w.studio.api;
+  s.w.studio.api=async(method,...rest)=>{if(method==='DELETE')throw Error('Media has a RUNNING job.');return original(method,...rest);};
+  await assert.rejects(s.w.deleteProductionVideo('v1'),/RUNNING/);
+  assert.equal(s.w.workflow.context().video_id,'v1');assert.equal(s.$('project-videos').children.length,2);
  }finally{s.dom.window.close();}
 });

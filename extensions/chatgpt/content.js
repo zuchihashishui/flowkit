@@ -50,17 +50,20 @@
     return enabled.length===1?enabled[0]:null;
   }
 
+  const DIL_RESPONSE = '[data-dil-message-id][class*="DilResponseRoot-"]';
+
   // Modern Chat/Work markup plus the older ChatGPT assistant wrapper.
   function assistantMessages() {
-    const selector = '[data-markdown-text-style="assistant-message"], [data-message-author-role="assistant"]';
+    const selector = '[data-markdown-text-style="assistant-message"], [data-message-author-role="assistant"], ' + DIL_RESPONSE;
     return [...document.querySelectorAll(selector)]
-      .filter(el => !el.closest('[hidden], [aria-hidden="true"], [data-user-message-bubble]'))
-      // A modern markdown root nested in a legacy wrapper is one message.
-      .filter(el => !el.matches('[data-message-author-role="assistant"]') ||
-        !el.querySelector('[data-markdown-text-style="assistant-message"]'));
+      .filter(el => !el.closest('[hidden], [aria-hidden="true"], [data-user-message-bubble], [data-message-author-role="user"]'))
+      // Nested response roots describe one answer; keep the innermost root.
+      .filter(el => !el.querySelector(selector));
   }
 
   function messageKey(el) {
+    const dil = el.closest(DIL_RESPONSE);
+    if (dil) return 'message:' + dil.getAttribute('data-dil-message-id');
     const selected = el.closest('[data-chatgpt-selection-message-id]');
     if (selected) return 'message:' + selected.getAttribute('data-chatgpt-selection-message-id');
     const legacy = el.closest('[data-message-id]');
@@ -102,15 +105,17 @@
   async function selectComposerMode(mode) {
     if (!['chat', 'work'].includes(mode)) throw new Error('Invalid composer mode. Choose Chat or Work.');
     // Re-query after each render; ChatGPT may replace the entire mode group.
-    let clicked = false;
-    for (let i = 0; i < 20; i++) {
+    let attempts = 0, lastClick = -3;
+    for (let i = 0; i < 30; i++) {
       const button = composerButton(mode);
       if (button?.getAttribute('aria-pressed') === 'true') return;
       // Entering Temporary Chat can remove the mode switch entirely.
       // Positive Temporary UI is sufficient for Chat, never for Work.
       if(mode==='chat'&&!button&&!composerButton('work')&&temporaryEnabled())return;
-      if (button && !button.disabled && button.getAttribute('aria-disabled') !== 'true' && !clicked) {
-        button.click(); clicked = true;
+      if (button && !button.disabled && button.getAttribute('aria-disabled') !== 'true' && attempts < 5 && i-lastClick >= 3) {
+        attempts++;lastClick=i;
+        progress('SELECTING_MODE',{detail:`Selecting ${mode}; attempt ${attempts}/5`});
+        button.click();
       }
       await sleep(500);
     }
@@ -204,12 +209,19 @@
     clone.querySelectorAll('svg, [aria-hidden="true"], [hidden], .sr-only').forEach(n=>n.remove());
     return (clone.textContent || '').replace(/\s+/g,' ').trim();
   }
-  function modelPicker() { return [...document.querySelectorAll(modelPickerSelector)].find(visible); }
+  const modelVisible=el=>!!el&&el.getClientRects().length>0&&!el.closest('[hidden], [aria-hidden="true"]');
+  function modelPicker() {
+    const labels=[...document.querySelectorAll('[class*="ModelPickerTriggerLabel-"]')].filter(modelVisible);
+    const controls=[...new Set(labels.map(el=>el.closest('button, [role="button"]')||el))].filter(modelVisible);
+    if(controls.length===1)return controls[0];
+    if(controls.length>1)return null;
+    return [...document.querySelectorAll(modelPickerSelector)].find(modelVisible);
+  }
   function modelSelection() {
     const picker=modelPicker();
     if(!picker)return {model:'',effort:''};
     const effort=picker.getAttribute('data-selected-reasoning-effort') || '';
-    const name=picker.querySelector('[class*="ModelPickerTriggerModelText-"], [data-selected-model-name]');
+    const name=picker.querySelector('[class*="ModelPickerTriggerModelText-"], [data-selected-model-name], [class*="ModelPickerTriggerModelGroup-"]');
     return {model:name?cleanLabel(name):cleanLabel(picker),effort};
   }
   function parseModelSelection(value) {
@@ -223,28 +235,25 @@
   }
   function modelMatches(target) {return normalizeLabel(modelSelection().model)===normalizeLabel(target.model);}
   function effortMatches(target) {return !target.effort || modelSelection().effort===target.effort;}
-  function checkModelSelection(target) {
-    if(target && (!modelMatches(target)||!effortMatches(target)))throw Error('Requested model / reasoning effort could not be verified. No prompt was sent.');
-  }
   async function selectModel(value) {
     const target=parseModelSelection(value);
     if(!target)return null; // No opening menus, no model or effort changes.
     if(modelMatches(target)&&effortMatches(target))return target;
     const picker=modelPicker();
     if(!picker || picker.disabled || picker.getAttribute('aria-disabled')==='true')throw Error('Cannot find an enabled Select ChatGPT model button. No prompt was sent.');
-    const previousMenus=new Set([...document.querySelectorAll('[role="menu"], [role="listbox"]')].filter(visible));
+    const previousMenus=new Set([...document.querySelectorAll('[role="menu"], [role="listbox"]')].filter(modelVisible));
     let ticks=0;
-    const wait=async()=>{if(ticks++>=20)throw Error('Model selection timed out. No prompt was sent.');await sleep(500);};
+    const wait=async()=>{if(ticks++>=20)throw Error('Model selection timed out. No prompt was sent.');await sleep(300);};
     const menus=()=>{
       const trigger=modelPicker(),controlled=trigger?.getAttribute('aria-controls');
-      return [...document.querySelectorAll('[role="menu"], [role="listbox"]')].filter(el=>visible(el)&&(el.id===controlled||!previousMenus.has(el)));
+      return [...document.querySelectorAll('[role="menu"], [role="listbox"]')].filter(el=>modelVisible(el)&&(el.id===controlled||!previousMenus.has(el)));
     };
     const options=()=>[...new Set(menus().flatMap(menu=>[...menu.querySelectorAll('[role="option"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="menuitem"], button')]))]
-      .filter(el=>visible(el)&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&!el.hasAttribute('data-disabled'));
+      .filter(el=>modelVisible(el)&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&!el.hasAttribute('data-disabled'));
     function exactOption(label) {
       const normalized=normalizeLabel(label);
       const matches=options().filter(el=>normalizeLabel(el.getAttribute('aria-label'))===normalized||normalizeLabel(cleanLabel(el))===normalized||
-        [...el.querySelectorAll('span, div')].some(child=>visible(child)&&normalizeLabel(cleanLabel(child))===normalized));
+        [...el.querySelectorAll('span, div')].some(child=>normalizeLabel(cleanLabel(child))===normalized));
       // Prefer the innermost actionable element; refuse two distinct exact choices.
       const leaves=matches.filter(el=>!matches.some(other=>other!==el&&el.contains(other)));
       if(leaves.length>1)throw Error('Multiple matching model options. No prompt was sent.');
@@ -252,23 +261,29 @@
     }
     async function open(){const p=modelPicker();if(p?.getAttribute('aria-expanded')!=='true'){p?.click();await wait();}}
     async function choose(label,verified,submenus) {
-      await open();let clicked=false,opened=new Set();
+      await open();const opened=new Set();
       while(ticks<20){
         if(verified())return;
         const option=exactOption(label);
-        if(option&&!clicked){option.click();clicked=true;}
-        else if(!clicked){
-          const submenu=options().find(el=>el.getAttribute('aria-haspopup')==='menu'&&submenus.includes(normalizeLabel(cleanLabel(el)))&&!opened.has(el));
-          if(submenu){opened.add(submenu);submenu.click();}
+        if(option){option.click();await sleep(300);return;}
+        else {
+          for(const name of submenus){
+            if(opened.has(name))continue;
+            const submenu=exactOption(name);
+            // Instant is the model-family entry in the two-level picker.
+            // Some layouts expose it as a regular menu item without haspopup.
+            if(submenu&&(name==='instant'||submenu.getAttribute('aria-haspopup')==='menu')){
+              opened.add(name);submenu.click();break;
+            }
+          }
         }
         await wait();
       }
-      throw Error('Requested option "'+label+'" was not found or did not activate. No prompt was sent.');
+      throw Error('Requested option "'+label+'" '+('was not found. Visible options: '+options().map(cleanLabel).join(' | ').slice(0,500))+'. No prompt was sent.');
     }
     try{
-      if(!modelMatches(target))await choose(target.model,()=>modelMatches(target),['model','models']);
+      if(!modelMatches(target))await choose(target.model,()=>modelMatches(target),['instant','model','models','more models','legacy models']);
       if(!effortMatches(target))await choose(effortLabels[target.effort],()=>effortMatches(target),['reasoning effort','effort','thinking effort']);
-      checkModelSelection(target);
       return target;
     }finally{
       // Close only this picker, not an unrelated menu on the page.
@@ -295,20 +310,23 @@
     return !el.closest('[hidden], [aria-hidden="true"]') && getComputedStyle(el).display!=='none' && getComputedStyle(el).visibility!=='hidden';
   }
   function responseScope(latest) {
-    const scope=latest?.closest('[data-chatgpt-search-unit-key$=":assistant"], [data-content-search-unit-key$=":assistant"], [data-turn-key], article[data-testid^="conversation-turn"], [data-testid^="conversation-turn-"], [data-message-author-role="assistant"]');
-    if(!scope?.matches('[data-chatgpt-search-unit-key$=":assistant"], [data-content-search-unit-key$=":assistant"]'))return scope;
-    // The supplied Temporary layout puts turn-action-controls outside the
-    // search unit. Ascend only within this answer, never into another turn.
+    if(!latest)return null;
+    const scope=latest.closest('[data-chatgpt-search-unit-key$=":assistant"], [data-content-search-unit-key$=":assistant"], [data-turn-key], article[data-testid^="conversation-turn"], [data-testid^="conversation-turn-"], [data-message-author-role="assistant"]') || latest;
+    // DIL and legacy toolbars can be siblings of the response root or its
+    // wrapper. Only ascend through containers holding this one assistant answer.
+    const roots=assistantMessages(),key=messageKey(latest);
     for(let parent=scope.parentElement,depth=0;parent&&depth<4;parent=parent.parentElement,depth++){
       if(parent.matches('body, main, html'))break;
-      const keys=new Set([...parent.querySelectorAll('[data-markdown-text-style="assistant-message"], [data-message-author-role="assistant"]')].map(messageKey));
-      if(keys.size!==1||!keys.has(messageKey(latest)))break;
-      if(parent.querySelector('.turn-action-controls button[aria-label="Copy"], .turn-action-controls button[aria-label="Rate response"], .turn-action-controls button[aria-label="Regenerate response"], .turn-action-controls button[aria-label="Copy response"]'))return parent;
+      const keys=new Set(roots.filter(el=>parent.contains(el)).map(messageKey));
+      if(keys.size!==1||!keys.has(key))break;
+      if([...parent.querySelectorAll('.turn-action-controls button[aria-label="Copy"], .turn-action-controls button[aria-label="Rate response"], .turn-action-controls button[aria-label="Regenerate response"], .turn-action-controls button[aria-label="Copy response"]')].some(el=>!el.closest('pre, code, [data-message-author-role="user"], [data-chatgpt-search-unit-key$=":user"], [data-content-search-unit-key$=":user"]')&&hasVisibleState(el)))return parent;
     }
     return scope;
   }
   function generationPhase(latest) {
-    const scope=responseScope(latest) || document;
+    // A standalone DIL response may have no legacy turn wrapper. Do not
+    // let a busy preview or an older answer elsewhere block this response.
+    const scope=responseScope(latest) || latest || document;
     const status=[...scope.querySelectorAll('[role="status"], [data-testid="thinking-indicator"]')].filter(hasVisibleState).map(el=>el.textContent||'').join(' ');
     if(/\b(thinking|reasoning)\b/i.test(status))return 'THINKING';
     if(/\b(searching|running|working|using tools)\b/i.test(status))return 'USING_TOOLS';
@@ -321,7 +339,7 @@
     const scope=responseScope(latest);
     // Temporary Chat places its toolbar beside the markdown root inside an
     // assistant search unit. Never mistake a code-block Copy for completion.
-    if(scope && [...scope.querySelectorAll('[data-testid="copy-turn-action-button"], button[aria-label="Copy response"], button[aria-label="Good response"], button[aria-label="Bad response"], button[aria-label="Copy"], button[aria-label="Rate response"], button[aria-label="Regenerate response"]')].some(el=>!el.closest('pre, code, [data-markdown-text-style="assistant-message"]')&&hasVisibleState(el)))return 'response-actions';
+    if(scope && [...scope.querySelectorAll('[data-testid="copy-turn-action-button"], button[aria-label="Copy response"], button[aria-label="Good response"], button[aria-label="Bad response"], button[aria-label="Copy"], button[aria-label="Rate response"], button[aria-label="Regenerate response"]')].some(el=>!el.closest('pre, code, [data-markdown-text-style="assistant-message"], [data-message-author-role="user"], [data-chatgpt-search-unit-key$=":user"], [data-content-search-unit-key$=":user"]')&&hasVisibleState(el)))return 'response-actions';
     return '';
   }
   async function discoverModels() {
@@ -541,7 +559,8 @@
     throw new Error('Send could not start: '+detail+'. No prompt was sent.');
   }
 
-  let pendingSrtLink = null;
+  let pendingSrtLink = null, pendingZipPreview = null;
+  const previewSelector='dialog, [role="dialog"], [role="complementary"], aside';
   function findSrtLink(message, zip=false) {
     const links = [...message.querySelectorAll('a[href], button[aria-label], [role="link"], [role="button"][data-file-reference="true"], [role="button"][aria-label^="Download "]')].filter(el => {
       if (!visible(el) || el.disabled || el.closest('[aria-busy="true"], [aria-disabled="true"], [data-loading="true"]')) return false;
@@ -572,7 +591,9 @@
       // or response toolbar. A ready file is evidence only for file-output jobs;
       // generation must still stop and the response must pass the stable polls.
       const readyFile=(downloadSrt||downloadPromptZip) && !phase ? findSrtLink(latest,downloadPromptZip) : null;
-      const evidence=completionEvidence(latest) || (readyFile?.matches('[data-file-reference="true"][aria-busy="false"]') ? (downloadPromptZip?'zip-file-ready':'srt-file-ready') : '');
+      const readyFileEvidence = readyFile && (readyFile.matches('[data-file-reference="true"][aria-busy="false"]') ||
+        readyFile.matches('[data-d-component="pressable"][role="link"][tabindex]') && readyFile.closest(DIL_RESPONSE));
+      const evidence=completionEvidence(latest) || (readyFileEvidence ? (downloadPromptZip?'zip-file-ready':'srt-file-ready') : '');
       if(text!==lastText || key!==lastKey)lastChange=Date.now();
       progress(phase || (evidence?'VERIFYING_COMPLETION':'WAITING_COMPLETION'),{chars:text.length,lastChange,completionEvidence:evidence});
       if (phase || !text || !evidence) {
@@ -583,7 +604,7 @@
         if(downloadSrt||downloadPromptZip) {
           const link=findSrtLink(latest,downloadPromptZip);
           if(link){
-            pendingSrtLink={element:link,requestId:activeRequest,zip:downloadPromptZip};
+            pendingSrtLink={element:link,messageKey:key,requestId:activeRequest,zip:downloadPromptZip};
             return {content:text,hasSrtFile:downloadSrt,hasPromptZip:downloadPromptZip};
           }
           throw Error('ChatGPT finished without a downloadable '+(downloadPromptZip?'.zip':'.srt')+' link. The response remains in the tab. No new prompt was sent.');
@@ -616,10 +637,10 @@
     activeRequest=msg.requestId || 'local-request';activePhase='PREPARING';submitted=false;
     try {
       if (isStreaming()) throw new Error("ChatGPT is already generating. Wait before submitting.");
-      if(msg.downloadPromptZip&&(!msg.textSessionId||msg.composerMode!=='work'||msg.temporary!==false))throw Error('Prompt ZIP batches require Work / Temporary OFF.');
-      if(msg.textSessionId&&((msg.downloadPromptZip?(msg.temporary!==false||msg.composerMode!=='work'):(msg.temporary!==true||msg.composerMode!=='chat'))||msg.customGPT||msg.attachment))throw Error(msg.downloadPromptZip?'Text to Prompt ZIP requires Work / Temporary OFF. No text was sent.':'Text to Prompt requires Chat / Temporary ON. No text was sent.');
+      if(msg.downloadPromptZip&&(!msg.textSessionId||!['work','chat'].includes(msg.composerMode)||msg.temporary!==false))throw Error('Prompt ZIP batches require Work or Chat / Temporary OFF.');
+      if(msg.textSessionId&&(((msg.downloadPromptZip||msg.videoPromptText)?(msg.temporary!==false||!['work','chat'].includes(msg.composerMode)):(msg.temporary!==true||msg.composerMode!=='chat'))||msg.customGPT||msg.attachment))throw Error(msg.downloadPromptZip?'Text to Prompt ZIP requires Work or Chat / Temporary OFF. No text was sent.':'Text to Prompt requires Chat / Temporary ON. No text was sent.');
 
-      if(msg.promptAttachment&&(!msg.textSessionId||msg.continueConversation||msg.attachment))throw Error('Prompt TXT is allowed only on the first Text to Prompt turn. No prompt was sent.');
+      if(msg.promptAttachment&&(!msg.textSessionId||(msg.continueConversation&&!msg.videoPromptText)||msg.attachment))throw Error('Prompt TXT is allowed only on the first Text to Prompt turn. No prompt was sent.');
 
       // Start new conversation if requested
       if (msg.newConversation !== false) {
@@ -646,13 +667,12 @@
       if(!customGPT&&!continuing)await selectComposerMode(composerMode);
       if (msg.temporary){progress('ENABLING_TEMPORARY');await enableTemporaryChat();}
       progress('SELECTING_MODEL');
-      const selectedModel = continuing?null:await selectModel(customGPT?'auto':msg.model);
+      if(!continuing)await selectModel(customGPT?'auto':msg.model);
       if(!customGPT)checkComposerStillSelected(composerMode);
       if (msg.temporary === false && temporaryEnabled()) throw new Error('Temporary Chat is still active for a regular-chat request. No prompt was sent.');
-      checkModelSelection(selectedModel);
       const beforeMessages = new Set(assistantMessages().map(messageKey));
       const failure=pageFailure();if(failure)throw failure;
-      const fileFirst=!!msg.promptAttachment&&msg.downloadPromptZip===true;
+      const fileFirst=!!msg.promptAttachment&&(msg.downloadPromptZip===true||msg.videoPromptText===true);
       if(fileFirst){progress('ATTACHING_FILE');await attachFile(msg.promptAttachment,true,true);}
       progress('TYPING');
       await typeMessage(msg.userMessage);
@@ -668,7 +688,6 @@
       if (msg.temporary === false && temporaryEnabled()) throw new Error('Temporary Chat became active during setup. No prompt was sent.');
       if(continuing&&msg.textSessionId&&currentTextSessionProof()?.proof!==msg.textSessionProof)throw Error((msg.downloadPromptZip?'Work':'Temporary')+' conversation changed before sending. No text was sent.');
       if(!customGPT)checkComposerStillSelected(composerMode);
-      checkModelSelection(selectedModel);
       progress('SENDING');
       await clickSend(msg.userMessage, msg.attachment?.name||msg.promptAttachment?.name, fileFirst);
       submitted=true;
@@ -701,7 +720,7 @@
       return { ok: true, content: response?.hasPromptZip?response.content:response, nativeDownload, conversation_url: window.location.href, textSessionProof:currentTextSessionProof() };
     } catch (err) {
       return { ok: false, error: err.message, code: err.code,phase:activePhase,submitted,partialResponse:err.partialResponse };
-    } finally { activeRequest=null; }
+    } finally { activeRequest=null;pendingZipPreview=null; }
   }
 
   // ── Listen for messages from background script ───────────
@@ -715,11 +734,38 @@
     }
     if(msg.type==='clickSrtDownload'||msg.type==='clickPromptZipDownload'){
       const pending=pendingSrtLink;
-      if(!pending||!!pending.zip!==(msg.type==='clickPromptZipDownload')||pending.requestId!==msg.requestId||activeRequest!==msg.requestId||!pending.element.isConnected){
+      if(!pending||!!pending.zip!==(msg.type==='clickPromptZipDownload')||pending.requestId!==msg.requestId||activeRequest!==msg.requestId){
         sendResponse({ok:false,error:'The completed output file link is no longer available.'});return;
       }
-      pendingSrtLink=null;
-      pending.element.click();sendResponse({ok:true});return;
+      try{
+        // React can replace the file element after completion was detected.
+        const message=assistantMessages().find(el=>messageKey(el)===pending.messageKey);
+        const link=message&&findSrtLink(message,pending.zip);
+        if(!link)throw Error('The completed output file link changed or became unavailable.');
+        pendingSrtLink=null;
+        if(pending.zip){
+          const label=[link.textContent,link.getAttribute('aria-label'),link.getAttribute('data-markdown-copy-text')].join(' ');
+          const name=label.match(/[^\s/\\<>:"|?*]+\.zip\b/i)?.[0];
+          pendingZipPreview={requestId:msg.requestId,name,clicked:false,before:new Map([...document.querySelectorAll(previewSelector)].filter(visible).map(el=>[el,el.textContent]))};
+        }
+        link.click();sendResponse({ok:true,activation:'click'});
+      }catch(error){sendResponse({ok:false,error:error.message});}return;
+    }
+    if(msg.type==='continuePromptZipDownload'){
+      const pending=pendingZipPreview;
+      if(!pending||pending.requestId!==msg.requestId||activeRequest!==msg.requestId){sendResponse({ok:false,error:'ZIP download is no longer active.'});return;}
+      if(pending.clicked){sendResponse({ok:true,clicked:false,detail:'Preview Download was clicked; waiting for Chrome.'});return;}
+      // Only operate a newly opened/changed preview that names this exact ZIP.
+      // Never click an unrelated download control elsewhere in the conversation.
+      const panels=[...document.querySelectorAll(previewSelector)].filter(el=>visible(el)&&pending.name&&el.textContent.includes(pending.name)&&(!pending.before.has(el)||pending.before.get(el)!==el.textContent));
+      const candidates=[...new Set(panels.flatMap(panel=>[...panel.querySelectorAll('button, [role="button"], a[download]')]))].filter(el=>{
+        if(!visible(el)||el.disabled||el.closest('[aria-busy="true"], [aria-disabled="true"]'))return false;
+        const label=(el.getAttribute('aria-label')||el.getAttribute('title')||el.textContent||'').trim();
+        return /^(download(?: file)?|tải(?: xuống| về)?|ダウンロード)(?:$|\s)/i.test(label);
+      });
+      if(candidates.length>1){sendResponse({ok:false,error:'More than one Download button in the ZIP preview. Choose the correct file manually.'});return;}
+      if(candidates.length===1){pending.clicked=true;candidates[0].click();sendResponse({ok:true,clicked:true,detail:'Clicked Download in the ZIP preview.'});return;}
+      sendResponse({ok:true,clicked:false,detail:panels.length?'ZIP preview open; waiting for its Download button.':'Waiting for Chrome download or a ZIP preview.'});return;
     }
     if (msg.type === 'discoverModels' || msg.type === 'preflight') {
       (msg.type==='discoverModels'?discoverModels():preflight(msg)).then(data=>sendResponse({ok:true,data})).catch(e=>sendResponse({ok:false,error:e.message}));return true;

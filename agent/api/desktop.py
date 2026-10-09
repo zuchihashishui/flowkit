@@ -1,4 +1,6 @@
 """Durable desktop jobs. No automatic resubmission of uncertain generations."""
+from agent.services import output_paths
+
 import asyncio
 import json
 import logging
@@ -16,7 +18,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, model_validator
 from typing import Literal
 
-from agent.config import OUTPUT_DIR, BASE_DIR
+from agent.config import OUTPUT_DIR, BASE_DIR, FLOW_GENERATION_MAX_CONCURRENT
 from agent.models.prompt_limits import MEDIA_PROMPT_MAX_CHARS, VOICE_TEXT_MAX_CHARS
 from agent.api import flow, tts
 from agent.services.flow_client import get_flow_client
@@ -28,7 +30,7 @@ router = APIRouter(prefix="/desktop", tags=["desktop"])
 ROOT = OUTPUT_DIR / "desktop"
 STORE = BASE_DIR / "desktop_jobs.db"
 paused = False
-MEDIA_CONCURRENCY = 3
+MEDIA_CONCURRENCY = FLOW_GENERATION_MAX_CONCURRENT
 VOICE_CONCURRENCY = 1
 ACTIVE_STATES = {"RUNNING", "SUBMITTING", "DOWNLOADING"}
 
@@ -51,8 +53,12 @@ def connection():
         db.close()
 
 
-def rows():
+def rows(project_id=None, video_id=None):
     with connection() as db:
+        if project_id is not None and video_id is not None:
+            return [dict(r) for r in db.execute(
+                "SELECT * FROM jobs WHERE json_extract(payload,'$.project_id')=? AND json_extract(payload,'$.video_id')=? ORDER BY created DESC",
+                (project_id, video_id))]
         return [dict(r) for r in db.execute("SELECT * FROM jobs ORDER BY created DESC")]
 
 
@@ -63,6 +69,9 @@ def update(jid, **values):
     values["updated"] = time.time()
     with connection() as db:
         db.execute("UPDATE jobs SET " + ",".join(f"{k}=?" for k in values) + " WHERE id=?", [*values.values(), jid])
+
+    if "stage" in values:
+        logger.info("Media job %s stage=%s", jid, values["stage"])
 
 
 class Job(BaseModel):
@@ -144,6 +153,9 @@ async def enqueue_jobs(body: Batch, *, preserve_settings: bool = False):
             jid = str(uuid.uuid4())
             db.execute("INSERT INTO jobs(id,payload,state,created) VALUES(?,?,?,?)", (jid, j.model_dump_json(), "QUEUED", time.time()))
             ids.append(jid)
+    for jid, job in zip(ids, body.jobs):
+        logger.info("Media job queued job=%s project=%s video=%s segment=%s kind=%s",
+                    jid, job.project_id, job.video_id, job.segment_id, job.kind)
     return {"ids": ids}
 
 
@@ -155,13 +167,16 @@ async def list_jobs():
 
 
 @router.get("/flow-progress")
-async def flow_progress():
+async def flow_progress(project_id: str | None = None, video_id: str | None = None):
     """Safe progress summary for the Flow side panel; excludes prompts and URLs."""
     from agent.config import FLOW_GENERATION_MAX_CONCURRENT, FLOW_GENERATION_MIN_INTERVAL_S, FLOW_UNUSUAL_ACTIVITY_COOLDOWN_S
     client = get_flow_client()
     guard = getattr(client, "generation_guard_status", {})
+    if (project_id is None) != (video_id is None) or project_id == '' or video_id == '':
+        raise HTTPException(400, 'Choose both a project and a video.')
     jobs = []
-    for row in rows():
+    selected_rows = rows(project_id, video_id) if video_id is not None else rows()
+    for row in selected_rows:
         body = json.loads(row["payload"])
         if body["kind"] == "voice":
             continue
@@ -233,7 +248,7 @@ async def file(jid: str, index: int):
     if index < 0 or index >= len(files):
         raise HTTPException(404, "File not found")
     path = Path(files[index]).resolve()
-    if not path.is_relative_to(ROOT.resolve()) or not path.is_file():
+    if not output_paths.allowed(path, ROOT) or not path.is_file():
         raise HTTPException(404, "File not available")
     return FileResponse(path)
 
@@ -304,6 +319,8 @@ async def process(job):
     page_url=(body.project_settings or {}).get('google_flow_url')
     url_token=flow_page_url.set(page_url)
     provider_project_id=flow_project(page_url,body.project_id)
+    logger.info("Media job starting job=%s project=%s video=%s segment=%s kind=%s flow_project=%s",
+                jid, body.project_id, body.video_id, body.segment_id, body.kind, provider_project_id)
     remote = json.loads(job["remote"]) if job["remote"] else None
     from agent.services.browser_lifecycle import flow_started, flow_saved
     if body.kind != "voice":
@@ -341,7 +358,8 @@ async def process(job):
             else:
                 raise TimeoutError("Polling timed out. Resume to check the same video; no new generation is submitted.")
         update(jid, state="DOWNLOADING")
-        folder = ROOT / jid
+        from agent.services.output_paths import owned_path
+        folder = owned_path(ROOT / jid, {'project_id': body.project_id, 'video_id': body.video_id}, f'scene_board/{body.kind}/{jid}')
         folder.mkdir(parents=True, exist_ok=True)
         files = []
         if body.kind == "voice":
@@ -373,6 +391,8 @@ async def process(job):
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        logger.exception("Media job failed job=%s project=%s video=%s segment=%s kind=%s flow_project=%s",
+                         jid, body.project_id, body.video_id, body.segment_id, body.kind, provider_project_id)
         update(jid, state="FAILED", error=str(getattr(exc, "detail", None) or exc)[:1500])
 
     finally:

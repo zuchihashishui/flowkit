@@ -26,8 +26,14 @@ class Settings(Options):
     auto: bool = False
 
 @router.get('/status')
-async def status(project_id: str | None = None, video_id: str | None = None, unassigned: bool = False):
-    return {'transcript_split_version':1, 'settings': service.settings(), 'jobs': scope.select(scope.annotate(service, 'whisperx', service.jobs(dict(project_id=project_id, video_id=video_id, unassigned=unassigned))), project_id, video_id, unassigned), 'active_id': service.active_id, 'imported_sources': scope.select(scope.annotate(service, 'audio', service.imported_sources()), project_id, video_id, unassigned)}
+def status(project_id: str | None = None, video_id: str | None = None, unassigned: bool = False):
+    jobs = scope.select(scope.annotate(service, 'whisperx', service.jobs(dict(project_id=project_id, video_id=video_id, unassigned=unassigned))), project_id, video_id, unassigned)
+    current = next((j for j in jobs if j['state']=='RUNNING'), None) or next((j for j in jobs if j['state']=='QUEUED'), None) or (jobs[0] if jobs else None)
+    return {'transcript_split_version':1, 'settings':service.settings(), 'jobs':jobs,
+            'active_id':service.active_id, 'worker':{'running':service.loop_running, 'error':service.queue_error},
+            'activity_log':service.activity_log(current['id']) if current else None,
+            'imported_sources':scope.select(scope.annotate(service, 'audio', service.imported_sources()), project_id, video_id, unassigned)}
+
 
 @router.post('/import')
 async def import_audio(file: UploadFile = File(...), project_id: str | None = Form(None), video_id: str | None = Form(None)):

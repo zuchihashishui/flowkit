@@ -1,7 +1,11 @@
 """Durable, one-at-a-time local transcription queue. No WhisperX imports in the API."""
+from agent.services import output_paths
+
 from agent.services import workflow_scope as scope
 
 import asyncio
+import codecs
+import logging
 from contextlib import contextmanager
 import json
 import math
@@ -17,6 +21,7 @@ from agent.services.transcript_split import DEFAULT_VIDEO_SECONDS, FILES, valida
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / 'tools' / 'whisperx' / 'runner.py'
+logger = logging.getLogger(__name__)
 
 
 def python_bin():
@@ -31,6 +36,8 @@ class WhisperXService:
         self.process = None
         self.active_id = None
         self.split_locks = set()
+        self.loop_running = False
+        self.queue_error = None
 
     @contextmanager
     def db(self):
@@ -119,7 +126,7 @@ class WhisperXService:
         with self.db() as db:
             row = db.execute('SELECT * FROM wx_sources WHERE id=?', (source_id,)).fetchone()
         if row:
-            return dict(row), self.output / '_imports' / row['filename']
+            return dict(row), output_paths.resource_path(self, 'audio', source_id, self.output / '_imports' / row['filename'], 'audio/' + row['filename'])
         return self.source.job(source_id), self.source.audio_path(source_id, 'merged')
 
     async def import_audio(self, upload, context=None):
@@ -130,7 +137,8 @@ class WhisperXService:
         source_id = str(uuid.uuid4())
         folder = self.output / '_imports'
         folder.mkdir(parents=True, exist_ok=True)
-        target = folder / (source_id + extension)
+        target = output_paths.owned_path(folder / (source_id + extension), context, 'audio/' + source_id + extension)
+        target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_suffix(extension + '.part')
         size = 0
         try:
@@ -146,6 +154,7 @@ class WhisperXService:
                 db.execute('INSERT INTO wx_sources VALUES(?,?,?,?,?)',
                            (source_id, title, target.name, size, time.time()))
                 scope.record(db, 'audio', source_id, context)
+                output_paths.remember(db, 'audio', source_id, target)
             return {'id': source_id, 'title': title, 'bytes': size}
         except BaseException:
             target.unlink(missing_ok=True)
@@ -239,7 +248,7 @@ class WhisperXService:
             raise ValueError('JSON is not ready.')
         if variant != 'full' and jid in self.split_locks:
             raise ValueError('Transcript split is still being saved.')
-        path = self.output / jid / FILES[variant]
+        path = output_paths.job_directory(self, 'whisperx', jid) / FILES[variant]
         if not path.is_file():
             raise ValueError('Saved JSON is missing. Use Split saved JSON for an older completed job.' if variant != 'full' else 'Saved JSON is missing.')
         return path
@@ -268,6 +277,7 @@ class WhisperXService:
         return self.job(jid)
 
     async def check(self):
+        logger.info('WhisperX environment check starting: %s (timeout 90 seconds)', python_bin())
         process = None
         try:
             process = await asyncio.create_subprocess_exec(python_bin(), str(RUNNER), '--check',
@@ -281,6 +291,7 @@ class WhisperXService:
                         raise ValueError('Invalid FLOWKIT_CHECK response: expected an object with boolean ok.')
                     if process.returncode != 0:
                         return {'ok': False, 'python': python_bin(), 'error': f'WhisperX check exited with code {process.returncode}: {text[-2500:]}'}
+                    logger.info('WhisperX environment check completed: ok=%s', report['ok'])
                     return report
             return {'ok': False, 'python': python_bin(), 'error': text[-2500:] or 'Environment check failed.'}
         except NotImplementedError:
@@ -298,6 +309,18 @@ class WhisperXService:
                     pass  # The check may exit between returncode inspection and kill.
                 await process.wait()
 
+    def activity_log(self, jid):
+        try:
+            path = output_paths.job_directory(self, 'whisperx', jid) / 'worker.log'
+            if not path.is_file():
+                return {'job_id': jid, 'text': 'Worker log has not been created yet.'}
+            with path.open('rb') as log:
+                log.seek(max(0, path.stat().st_size - 16384))
+                text = log.read(16384).decode('utf-8', errors='replace')
+            return {'job_id': jid, 'text': text, 'path': str(path)}
+        except (OSError, ValueError) as error:
+            return {'job_id': jid, 'text': 'Cannot read worker log: ' + str(error)}
+
     async def step(self):
         if self.active_id:
             return
@@ -307,32 +330,50 @@ class WhisperXService:
             return
         jid = row['id']
         self.active_id = jid
-        directory = self.output / jid
+        log_path = None
         try:
+            self.update(jid, state='RUNNING', phase='STARTING', error=None, started=time.time(), finished=None, progress='{}')
+            logger.info('WhisperX job %s starting with %s', jid, python_bin())
+            directory = output_paths.job_directory(self, 'whisperx', jid)
             job = self.job(jid)
             directory.mkdir(parents=True, exist_ok=True)
+            log_path = directory / 'worker.log'
+            log_path.write_text('Starting WhisperX worker. Python: ' + python_bin() + '\n', encoding='utf-8')
             request = {'audio': str(self.resolve_source(job['source_id'])[1].resolve()),
                        'output': str((directory / 'transcript.json').resolve()), 'options': job['options']}
             request_file = directory / 'request.json'
             request_file.write_text(json.dumps(request), encoding='utf-8')
-            self.update(jid, state='RUNNING', phase='STARTING', error=None, started=time.time(), finished=None, progress='{}')
             env = {**os.environ, 'PYTHONUNBUFFERED': '1', 'PYTHONIOENCODING': 'utf-8'}
             self.process = await asyncio.create_subprocess_exec(python_bin(), str(RUNNER), '--request', str(request_file),
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=env, limit=1024*1024)
             if self.job(jid)['state'] == 'CANCELLED':
                 self.process.terminate()
             async def read_output():
-                with (directory / 'worker.log').open('w', encoding='utf-8') as log:
-                    async for raw in self.process.stdout:
-                        line = raw.decode('utf-8', errors='replace')
-                        log.write(line); log.flush()
-                        if line.startswith('FLOWKIT_WX '):
-                            try:
-                                data = json.loads(line[len('FLOWKIT_WX '):])
-                                if isinstance(data, dict):
-                                    self.worker_progress(jid, data)
-                            except (ValueError, KeyError):
-                                pass
+                decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
+                pending = ''
+                def consume(line):
+                    if line.startswith('FLOWKIT_WX '):
+                        try:
+                            data = json.loads(line[len('FLOWKIT_WX '):])
+                            if isinstance(data, dict):
+                                self.worker_progress(jid, data)
+                                logger.info('WhisperX job %s: %s — %s', jid, data.get('phase'), data.get('message', ''))
+                        except (ValueError, KeyError):
+                            pass
+                with log_path.open('a', encoding='utf-8') as log:
+                    while True:
+                        raw = await self.process.stdout.read(4096)
+                        text = decoder.decode(raw, final=not raw)
+                        log.write(text); log.flush()
+                        pending += text.replace('\r', '\n')
+                        while '\n' in pending:
+                            line, pending = pending.split('\n', 1)
+                            consume(line)
+                        pending = pending[-65536:]
+                        if not raw:
+                            if pending:
+                                consume(pending)
+                            break
                 return await self.process.wait()
             code = await asyncio.wait_for(read_output(), 6*3600)
             if self.job(jid)['state'] == 'CANCELLED':
@@ -359,14 +400,29 @@ class WhisperXService:
                 self.update(jid, state='INTERRUPTED', phase='INTERRUPTED', error='Backend stopped. Use Retry job to transcribe the same audio with the saved options.', finished=time.time())
             raise
         except Exception as error:
+            logger.exception('WhisperX job %s failed', jid)
+            message = f'{type(error).__name__}: {str(error) or "Transcription exceeded six hours."}'
+            if isinstance(error, NotImplementedError):
+                message = 'Windows subprocess support is unavailable. Stop the backend and restart Studio, or run python -m agent.main with GLA_RELOAD=0.'
+            if log_path:
+                try:
+                    with log_path.open('a', encoding='utf-8') as log:
+                        log.write('\nFAILED: ' + message + '\n')
+                except OSError:
+                    pass
             if self.job(jid)['state'] != 'CANCELLED':
-                self.update(jid, state='FAILED', phase='FAILED', error=str(error)[-2500:] or 'Transcription exceeded six hours.', finished=time.time())
+                self.update(jid, state='FAILED', phase='FAILED', error=message[-2500:], finished=time.time())
         finally:
-            if self.process and self.process.returncode is None:
-                self.process.kill()
-                await self.process.wait()
-            self.process = None
-            self.active_id = None
+            try:
+                if self.process and self.process.returncode is None:
+                    try:
+                        self.process.kill()
+                    except ProcessLookupError:
+                        pass
+                    await self.process.wait()
+            finally:
+                self.process = None
+                self.active_id = None
 
     async def discover(self):
         settings = self.settings()
@@ -385,16 +441,21 @@ class WhisperXService:
                     continue
 
     async def run(self):
-        with self.db() as db:
-            db.execute("UPDATE wx_jobs SET state='INTERRUPTED',phase='INTERRUPTED',finished=?,error='Backend restarted. Use Retry job to transcribe the same audio with the saved options.' WHERE state='RUNNING'", (time.time(),))
-        while True:
-            try:
-                await self.discover()
-                await self.step()
-            except Exception:
-                import logging
-                logging.getLogger(__name__).exception('WhisperX queue error')
-            await asyncio.sleep(2)
+        self.loop_running = True
+        try:
+            with self.db() as db:
+                db.execute("UPDATE wx_jobs SET state='INTERRUPTED',phase='INTERRUPTED',finished=?,error='Backend restarted. Use Retry job to transcribe the same audio with the saved options.' WHERE state='RUNNING'", (time.time(),))
+            while True:
+                try:
+                    await self.discover()
+                    await self.step()
+                    self.queue_error = None
+                except Exception as error:
+                    self.queue_error = f'{type(error).__name__}: {error}'
+                    logger.exception('WhisperX queue error')
+                await asyncio.sleep(2)
+        finally:
+            self.loop_running = False
 
 
 service = WhisperXService()

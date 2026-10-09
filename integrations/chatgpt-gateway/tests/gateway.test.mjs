@@ -339,17 +339,17 @@ test('text preparation does not clear an account rate limit',async()=>{
  try{await s.request();assert.equal((await s.post('/workers/ensure',{})).status,409);assert.equal((await s.health()).needsReview,true);assert.equal(controls,0);}finally{await s.close();}
 });
 
-test('Work ZIP batches use one reserved worker and preserve download metadata until save ACK',async()=>{
- const caps=['project-urls-v1','temporary-text-session-v1','txt-prompt-attachment-v1','serialized-submission-v1','text-worker-recovery-v1','work-prompt-zip-v1','verified-send-v1'];
+for(const mode of ['work','chat'])test(mode+' ZIP batches use one reserved worker and preserve download metadata until save ACK',async()=>{
+ const caps=['project-urls-v1','temporary-text-session-v1','txt-prompt-attachment-v1','serialized-submission-v1','text-worker-recovery-v1','work-prompt-zip-v1','chat-prompt-zip-v1','verified-send-v1'];
  const s=await setup([{id:'w1',tabId:1,state:'IDLE'}],caps),messages=[];
  s.ws.on('message',raw=>{const m=JSON.parse(raw);messages.push(m);
   if(m.type==='chat')s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:true,content:'image_prompts.zip',nativeDownload:{path:'/downloads/prompts.zip',token:'token'}}));
   else if(m.controlId)s.ws.send(JSON.stringify({type:'controlResult',controlId:m.controlId,ok:true}));
  });
- const payload={messages:[{role:'user',content:'001 First\n\n002 Second'}],workers:1,pageUrl:'https://chatgpt.com/',temporary:false,composerMode:'work',downloadPromptZip:true,textSessionId:'11111111-1111-1111-1111-111111111111',promptTemplate:'Create ZIP',timeout:1800000};
+ const payload={messages:[{role:'user',content:'001 First\n\n002 Second'}],workers:1,pageUrl:'https://chatgpt.com/',temporary:false,composerMode:mode,downloadPromptZip:true,textSessionId:'11111111-1111-1111-1111-111111111111',promptTemplate:'Create ZIP',timeout:1800000};
  try{
   assert.equal((await s.post('/workers/ensure',{workers:1})).status,200);assert.equal(messages[0].workerCount,1);
-  for(const wrong of [{workers:3},{composerMode:'chat'},{temporary:true}])assert.equal((await s.post('/v1/chat/completions',{...payload,...wrong})).status,400);
+  for(const wrong of [{workers:3},{composerMode:'invalid'},{temporary:true}])assert.equal((await s.post('/v1/chat/completions',{...payload,...wrong})).status,400);
   const result=await (await s.post('/v1/chat/completions',payload)).json();assert.equal(result.nativeDownload.token,'token');assert.equal(messages.find(m=>m.type==='chat').downloadPromptZip,true);
   assert.equal(messages.find(m=>m.type==='chat').timeout,1800000);
   assert.equal((await s.post('/v1/chat/completions',payload)).status,409);
@@ -361,4 +361,79 @@ test('Work ZIP requires the updated Send extension before preparing workers',asy
  const s=await setup([{id:'w1',tabId:1,state:'IDLE'}],['project-urls-v1','text-worker-recovery-v1','work-prompt-zip-v1']);
  let commands=0;s.ws.on('message',()=>commands++);
  try{const response=await s.post('/workers/ensure',{workers:1});assert.equal(response.status,409);assert.match((await response.json()).error,/1.12.1/);assert.equal(commands,0);}finally{await s.close();}
+});
+
+
+test('video prompt capability survives relay and submits one row with its TXT',async()=>{
+ const caps=['video-prompt-text-v1','temporary-text-session-v1','txt-prompt-attachment-v1','serialized-submission-v1'];
+ const s=await setup([{id:'w1',tabId:1,state:'IDLE'}],caps);
+ try{
+  assert.ok((await s.health()).capabilities.includes('video-prompt-text-v1'));
+  let sent;
+  s.ws.on('message',raw=>{const m=JSON.parse(raw);if(m.type==='chat'){sent=m;s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:true,content:'Video prompt'}));}});
+  const response=await s.post('/v1/chat/completions',{messages:[{role:'user',content:'001 SRT text'}],videoPromptText:true,workers:1,composerMode:'chat',temporary:false,textSessionId:'11111111-2222-3333-4444-555555555555',promptTemplate:'Video instructions'});
+  assert.equal(response.status,200);assert.equal(sent.videoPromptText,true);assert.equal(sent.promptTemplate,'Video instructions');
+ }finally{await s.close();}
+});
+test('restart ends active text requests and reservations, preserving dedicated SRT worker',async()=>{
+ const s=await setup([{id:'w1',tabId:1,state:'IDLE'}],['restart-text-v1','dedicated-srt-v1']);
+ try{
+  let active;
+  s.dedicated.worker={id:'srt-worker',kind:'srt',tabId:7,state:'RUNNING'};s.announce();
+  s.ws.on('message',raw=>{const m=JSON.parse(raw);if(m.type==='chat')active=m;if(m.type==='restartText')s.ws.send(JSON.stringify({type:'controlResult',controlId:m.controlId,ok:true}));});
+  const pending=s.request();for(let i=0;i<100&&!active;i++)await new Promise(r=>setTimeout(r,5));assert.ok(active);
+  assert.equal((await s.post('/workers/restart',{})).status,200);
+  const result=await (await pending).json();assert.equal(result.cancelled,true);
+  const h=await s.health();assert.equal(h.activeRequests,0);assert.equal(h.workers.length,0);assert.equal(h.srtWorker.tabId,7);assert.equal(h.srtWorker.state,'RUNNING');
+ }finally{await s.close();}
+});
+
+test('Start waits for overlapping cleanup, shares one restart and blocks competing text operations',async()=>{
+ const s=await setup([{id:'w1',tabId:1,state:'IDLE'}],['restart-text-v1','worker-lifecycle-v1','dedicated-srt-v1']);
+ const messages=[];
+ s.ws.on('message',raw=>messages.push(JSON.parse(raw)));
+ try{
+  s.dedicated.worker={id:'srt-worker',kind:'srt',tabId:7,state:'IDLE'};s.announce();
+  const cleanup=s.post('/workers/close',{});await waitFor(()=>messages.some(m=>m.type==='closeIdleText'));
+  const first=s.post('/workers/restart',{});await waitFor(async()=>(await s.health()).restarting);
+  const second=s.post('/workers/restart',{});
+  assert.equal((await s.health()).availableSlots,0);
+  assert.equal((await s.health()).availableSrtSlots,1);
+  const competing=await s.post('/workers/close',{});assert.equal((await competing.json()).code,'TEXT_RESTARTING');
+  assert.equal((await s.request('must not submit during restart')).status,409);
+  assert.equal(messages.filter(m=>m.type==='restartText').length,0);
+  const close=messages.find(m=>m.type==='closeIdleText');s.ws.send(JSON.stringify({type:'controlResult',controlId:close.controlId,ok:true}));
+  assert.equal((await cleanup).status,200);
+  await waitFor(()=>messages.some(m=>m.type==='restartText'));
+  const restart=messages.find(m=>m.type==='restartText');s.ws.send(JSON.stringify({type:'controlResult',controlId:restart.controlId,ok:true}));
+  assert.equal((await first).status,200);assert.equal((await second).status,200);
+  assert.equal(messages.filter(m=>m.type==='restartText').length,1);
+  assert.equal((await s.health()).restarting,false);assert.equal((await s.health()).srtWorker.tabId,7);
+ }finally{await s.close();}
+});
+
+test('restart retains extension failure detail and releases its reservation for a later Start',async()=>{
+ const s=await setup([],['restart-text-v1']);let attempts=0;
+ s.ws.on('message',raw=>{const m=JSON.parse(raw);if(m.type==='restartText'){attempts++;s.ws.send(JSON.stringify({type:'controlResult',controlId:m.controlId,ok:attempts>1,error:'Chrome tab removal failed'}));}});
+ try{
+  const failed=await s.post('/workers/restart',{});assert.equal(failed.status,409);assert.deepEqual(await failed.json(),{code:'TEXT_RESTART_FAILED',error:'Chrome tab removal failed'});
+  assert.equal((await s.health()).restarting,false);
+  assert.equal((await s.post('/workers/restart',{})).status,200);
+ }finally{await s.close();}
+});
+
+test('direct open replaces stale text reservation without restart control and can send immediately',async()=>{
+ const caps=['fresh-text-tab-v1','dedicated-srt-v1','video-prompt-text-v1','temporary-text-session-v1','txt-prompt-attachment-v1','serialized-submission-v1'];
+ const s=await setup([{id:'worker-1',tabId:1,state:'NEEDS_REVIEW'}],caps),commands=[];
+ s.dedicated.worker={id:'srt-worker',kind:'srt',tabId:7,state:'RUNNING'};s.announce();
+ s.ws.on('message',raw=>{const m=JSON.parse(raw);commands.push(m.type);
+  if(m.type==='openText'){s.workers[0]={id:'worker-1',tabId:4,state:'IDLE'};s.announce();s.ws.send(JSON.stringify({type:'controlResult',controlId:m.controlId,ok:true}));}
+  if(m.type==='chat')s.ws.send(JSON.stringify({type:'response',workerId:m.workerId,requestId:m.requestId,ok:true,content:'Video prompt'}));
+ });
+ try{
+  s.ws.send(JSON.stringify({type:'pool',protocol:2,enabled:true,workers:s.workers,srtWorker:s.dedicated.worker,capabilities:caps,inspecting:true}));await waitFor(async()=>(await s.health()).inspecting);
+  assert.equal((await s.post('/workers/open',{})).status,200);
+  const result=await s.post('/v1/chat/completions',{messages:[{role:'user',content:'001 SRT text'}],workers:1,temporary:false,composerMode:'chat',textSessionId:'11111111-2222-3333-4444-555555555555',promptTemplate:'Video instructions',videoPromptText:true});
+  assert.equal(result.status,200);assert.deepEqual(commands,['openText','chat']);assert.equal((await s.health()).srtWorker.tabId,7);
+ }finally{await s.close();}
 });

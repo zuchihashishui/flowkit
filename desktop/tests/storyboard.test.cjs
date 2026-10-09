@@ -13,10 +13,12 @@ test('script/segments/concepts flow reaches database-backed image generation wit
  const base='/api/storyboard/videos/v1';
  w.confirm=()=>true;w.setInterval=()=>0;
  w.studio={
+  openProjectPage:async()=>{},
   settings:async()=>({output:'/output',extension:'/extension',autoExport:false}),
   importScriptSource:async kind=>kind==='script'?{name:'script.txt',text:'A complete narration script.'}:{name:'segments.json',text:'[{"start_ms":0,"end_ms":8400,"text":"First idea"},{"start_ms":8400,"end_ms":15200,"text":"Second idea"}]'},
   api:async(method,route,body)=>{
    calls.push({method,route,body});
+  if(route.endsWith('/restart-text'))return {ok:true};
    if(route==='/health')return {version:'test',extension_connected:true};
    if(route==='/api/projects')return [{id:'p1',name:'Test project'}];
    if(route==='/api/workflow/project')return {project_id:'p1',video_id:'v1',title:'Narrated video',videos:[{id:'v1',title:'Narrated video'}],protocol:3};
@@ -30,6 +32,7 @@ test('script/segments/concepts flow reaches database-backed image generation wit
    if(route===base+'/segments'){
     data.segments=JSON.parse(body.content).map((s,i)=>({...s,id:'s'+(i+1),ordinal:i+1,concepts:[],active_concept:null,ready:false,media_jobs:[]}));return structuredClone(data);
    }
+   if(route===base+'/prompt-options'){data.document.prompt_options=structuredClone(body);return body;}
    if(route===base+'/generate-concepts'){
     for(const s of data.segments)if(body.segment_ids.includes(s.id))s.job={state:'QUEUED'};
     return {ids:['j1'],skipped:[]};
@@ -51,10 +54,13 @@ test('script/segments/concepts flow reaches database-backed image generation wit
   await submit('sb-document');assert.equal(data.document.script_text,'A complete narration script.');
   $('sb-import-segments').click();await tick();assert.equal($('sb-rows').children.length,2);
   assert.match($('sb-rows').textContent,/00:00:08.400/);
-  $('sb-select-none').click();const check=$('sb-rows').querySelector('[data-segment-id="s2"]');check.checked=true;check.dispatchEvent(new w.Event('change'));
+  const firstRow=$('sb-rows').firstElementChild;
+  $('sb-select-none').click();assert.equal($('sb-rows').firstElementChild,firstRow);const check=$('sb-rows').querySelector('[data-segment-id="s2"]');check.checked=true;check.focus();check.dispatchEvent(new w.Event('change'));
+  assert.equal($('sb-rows').querySelector('[data-segment-id="s2"]'),check);assert.equal(w.document.activeElement,check);assert.match($('sb-count').textContent,/1 of 2/);
   $('sb-create-concepts').click();await tick();
   const queued=calls.find(c=>c.route===base+'/generate-concepts');
   assert.deepEqual(JSON.parse(JSON.stringify(queued.body.segment_ids)),['s2']);
+  assert.equal(queued.body.model,'GPT-5.6 Sol');assert.equal(data.document.prompt_options.chatgpt_model,'GPT-5.6 Sol');assert.equal($('sb-model').disabled,false);
   assert.equal(queued.body.provider,'chatgpt-web');assert.equal(queued.body.prompt_kind,'image');
   // A simulated AI result is used only to verify UI/API wiring, not live generation.
   const s=data.segments[1];s.ready=true;s.job.state='COMPLETED';s.active_concept_id='c2';s.active_concept={id:'c2',version:1,title:'Second concept',description:'A clear composition',image_prompt:'A visual illustration',video_prompt:'A slow camera move'};s.concepts=[s.active_concept];
