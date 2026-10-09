@@ -10,30 +10,18 @@ ARCHIVE_DIR = OUTPUT_DIR / 'text_prompts'
 UUID_PATTERN = r'[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}'
 
 
-<<<<<<< HEAD
 def session_folder(session_id, context=None):
     if not isinstance(session_id, str) or not re.fullmatch(UUID_PATTERN, session_id):
         raise ValueError('Invalid prompt run identifier.')
     from agent.services.output_paths import owned_path
     return owned_path(ARCHIVE_DIR / session_id, context, 'text_prompts/' + session_id)
-=======
-def session_folder(session_id):
-    if not isinstance(session_id, str) or not re.fullmatch(UUID_PATTERN, session_id):
-        raise ValueError('Invalid prompt run identifier.')
-    return ARCHIVE_DIR / session_id
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 
 
 def read_and_save_zip(native, payloads):
     session = payloads[0].get('text_session_id') if payloads else None
-<<<<<<< HEAD
     output_id = (payloads[0].get('text_output_id') or session) if payloads else session
     folder = session_folder(output_id, payloads[0] if payloads else None)
     if any(p.get('text_session_id') != session or (p.get('text_output_id') or session)!=output_id for p in payloads):
-=======
-    folder = session_folder(session)
-    if any(p.get('text_session_id') != session for p in payloads):
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
         raise ValueError('Prompt ZIP rows must belong to the same run.')
     if not isinstance(native, dict):
         raise ValueError('No downloaded prompt ZIP was returned. Check the Work tab.')
@@ -50,11 +38,7 @@ def read_and_save_zip(native, payloads):
     records = {}
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         entries = archive.infolist()
-<<<<<<< HEAD
         if len(entries) > max(20, len(payloads)*2):
-=======
-        if len(entries) > 20:
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
             raise ValueError('Unexpected files in prompt ZIP.')
         for entry in entries:
             name = PurePosixPath(entry.filename)

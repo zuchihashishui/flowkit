@@ -23,11 +23,8 @@
   } catch (e) { if(key(scope())!==selectedKey)return; $('flow-activity-summary').textContent = 'Flow activity unavailable: ' + e.message; }
   finally { refreshing = false; if(key(scope())!==selectedKey)refresh(); }
  }
-<<<<<<< HEAD
  for(const id of ['project-select','video-select'])$(id)?.addEventListener('change',refresh);
  for(const name of ['project-changed','production-updated'])document.addEventListener(name,refresh);
-=======
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
  document.querySelector('[data-page="scene-board"]').addEventListener('click', refresh);
  setInterval(() => { if (!document.querySelector('[data-view="scene-board"]').hidden) refresh(); }, 3000);
 })();

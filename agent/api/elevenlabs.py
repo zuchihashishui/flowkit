@@ -34,7 +34,7 @@ async def status():
     return bridge.status()
 
 @router.get('/jobs')
-def jobs(project_id: str | None = None, video_id: str | None = None, unassigned: bool = False):
+async def jobs(project_id: str | None = None, video_id: str | None = None, unassigned: bool = False):
     return {'jobs': scope.select(scope.annotate(bridge, 'elevenlabs', bridge.jobs(dict(project_id=project_id, video_id=video_id, unassigned=unassigned))), project_id, video_id, unassigned), 'settings': bridge.settings()}
 
 @router.get('/jobs/{job_id}')

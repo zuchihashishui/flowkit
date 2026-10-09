@@ -38,21 +38,13 @@ class WhisperX(StrictModel):
 
 class Media(StrictModel):
     orientation: Literal['HORIZONTAL', 'VERTICAL'] = 'HORIZONTAL'
-<<<<<<< HEAD
-    image_model: str = Field(default='GEM_PIX_2', max_length=100)
-=======
     image_model: str = Field(default='', max_length=100)
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 
 
 class Assembly(StrictModel):
     size: Literal['1080p', '720p', 'vertical'] = '1080p'
     fps: Literal[24, 30, 60] = 30
-<<<<<<< HEAD
-    subtitles: Literal['burn', 'soft', 'off'] = 'off'
-=======
     subtitles: Literal['burn', 'soft', 'off'] = 'burn'
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     fit: Literal['fit', 'crop'] = 'fit'
     font: str = Field(default='Yu Gothic', min_length=1, max_length=80, pattern=r'^[\w .-]+$')
     image_motion: Literal['none', 'zoom_in', 'zoom_out'] = 'none'

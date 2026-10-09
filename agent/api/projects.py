@@ -258,16 +258,11 @@ async def update(pid: str, body: ProjectUpdate):
 
 
 @router.delete("/{pid}")
-async def delete(pid: str, cascade: bool = False):
-    if cascade:
-        from agent.services.workspace_delete import delete as delete_workspace
-        return await delete_workspace(project_id=pid)
-    repo = _get_repo()
-    if await repo.list_videos(pid):
-        raise HTTPException(409, 'This project contains videos. Keep it to preserve their relationships; only an empty project can be deleted.')
+async def delete(pid: str):
     from agent.services.workflow_scope import has_owned_resources
     if has_owned_resources(project_id=pid):
         raise HTTPException(409, 'This project owns saved sources or jobs. Keep the project to preserve their relationships.')
+    repo = _get_repo()
     if not await repo.delete_project(pid):
         raise HTTPException(404, "Project not found")
     return {"ok": True}

@@ -2,8 +2,6 @@
 
 No cookies, provider API keys or remote audio URLs pass through this service.
 """
-from agent.services import output_paths
-
 from agent.services import workflow_scope as scope
 
 import asyncio
@@ -104,7 +102,6 @@ class ElevenLabsBridge:
         self.progress = {}
         self.pending = {}
         self.active = None
-        self.merging = set()
         self.inspect_lock = asyncio.Lock()
 
     @contextmanager
@@ -418,7 +415,7 @@ class ElevenLabsBridge:
                     remaining_error = next((chunk['error'] for chunk in current['chunks'] if chunk['error']), None)
                     connection.execute('UPDATE eleven_jobs SET error=?,updated=? WHERE id=?', (remaining_error, time.time(), jid))
             if current['state'] == 'COMPLETED':
-                await self.merge_audio(jid)
+                await asyncio.to_thread(self._merge_audio, jid)
             return {'recovered': recovered, 'errors': errors, 'job': self.job(jid)}
 
     def audio_path(self, jid, index):
@@ -434,8 +431,8 @@ class ElevenLabsBridge:
                 row = connection.execute("SELECT audio_file FROM eleven_chunks WHERE job_id=? AND chunk_index=? AND state='COMPLETED'", (jid, number)).fetchone()
         if not row or not row['audio_file']:
             raise KeyError(index)
-        path = (output_paths.job_directory(self, 'elevenlabs', jid) / row['audio_file']).resolve()
-        if not output_paths.allowed(path, self.output) or not path.is_file():
+        path = (self.output / jid / row['audio_file']).resolve()
+        if not path.is_relative_to(self.output.resolve()) or not path.is_file():
             raise KeyError(index)
         return path
 
@@ -490,7 +487,7 @@ class ElevenLabsBridge:
             or (ext == '.m4a' and data[4:8] == b'ftyp'))
         if not valid_magic:
             raise ValueError('Downloaded data is not the declared audio format.')
-        directory = output_paths.job_directory(self, 'elevenlabs', jid)
+        directory = self.output / jid
         directory.mkdir(parents=True, exist_ok=True)
         target = directory / f'{index:03d}{ext}'
         temporary = directory / f'{index:03d}.{uuid.uuid4().hex}.part{ext}'
@@ -523,18 +520,11 @@ class ElevenLabsBridge:
             connection.execute('UPDATE eleven_jobs SET state=?,updated=? WHERE id=?', (state, time.time(), jid))
         return state
 
-    async def merge_audio(self, jid):
-        self.merging.add(jid)
-        try:
-            await asyncio.to_thread(self._merge_audio, jid)
-        finally:
-            self.merging.discard(jid)
-
     def _merge_audio(self, jid):
         """Optional local merge; generation remains completed if FFmpeg is absent/fails."""
         with self.db() as connection:
             rows = connection.execute('SELECT audio_file FROM eleven_chunks WHERE job_id=? ORDER BY chunk_index', (jid,)).fetchall()
-        directory = output_paths.job_directory(self, 'elevenlabs', jid)
+        directory = self.output / jid
         if len(rows) == 1:
             with self.db() as connection:
                 connection.execute('UPDATE eleven_jobs SET merged_file=? WHERE id=?', (rows[0]['audio_file'], jid))
@@ -658,7 +648,7 @@ class ElevenLabsBridge:
             self.active = None
             state = self._finish_job(job['job_id'])
         if state == 'COMPLETED':
-            await self.merge_audio(job['job_id'])
+            await asyncio.to_thread(self._merge_audio, job['job_id'])
         return True
 
     async def run(self):

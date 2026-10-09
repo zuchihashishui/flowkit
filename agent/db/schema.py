@@ -171,9 +171,6 @@ CREATE TABLE IF NOT EXISTS project_settings (
     value TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0
 );
 
--- Committed filesystem deletions that may need cleanup after a restart.
-CREATE TABLE IF NOT EXISTS workspace_deletion (id TEXT PRIMARY KEY);
-
 -- 0.7.53: keep all existing records; projects may contain multiple videos.
 DROP TRIGGER IF EXISTS one_video_per_project_insert;
 DROP TRIGGER IF EXISTS one_video_per_project_move;

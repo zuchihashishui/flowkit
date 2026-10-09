@@ -3,18 +3,9 @@
 File readiness is checked against the selected video's ownership. Storyboard
 readiness reuses the same source-revision rules as generation and assembly.
 """
-<<<<<<< HEAD
-from agent.services import output_paths
-
 import asyncio
 from collections import Counter
 import json
-import logging
-=======
-import asyncio
-from collections import Counter
-import json
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 import os
 from pathlib import Path
 import shutil
@@ -25,11 +16,6 @@ from fastapi import HTTPException
 from agent.db.schema import get_db
 from agent.services import workflow_scope as scope
 
-<<<<<<< HEAD
-logger = logging.getLogger(__name__)
-
-=======
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 STAGES = [
     ('elevenlabs', 'Narration'), ('whisperx', 'Transcript JSON'), ('srt', 'SRT / scenes'),
     ('image_prompts', 'Image prompts'), ('video_prompts', 'Video prompts'),
@@ -75,11 +61,7 @@ def resource_available(item):
         if kind == 'whisperx':
             return file_ready(wx.result_path(rid))
         if kind == 'json':
-<<<<<<< HEAD
-            return file_ready(sub.source_path(rid))
-=======
             return file_ready(sub.output / (rid + '.json'))
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
         if kind == 'srt':
             return file_ready(sub.result_path(rid, require_approved=True))
         if kind == 'asset':
@@ -260,11 +242,7 @@ async def video_overview(video, resources):
         saved = 0
         for segment in segments:
             current = [j for j in segment['media_jobs'] if j['kind'] == kind and j['state'] == 'COMPLETED' and j['current']]
-<<<<<<< HEAD
-            if any(any(output_paths.allowed(f, desktop.ROOT) and file_ready(f) for f in j['files']) for j in current):
-=======
             if any(any(Path(f).resolve().is_relative_to(desktop.ROOT.resolve()) and file_ready(f) for f in j['files']) for j in current):
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
                 saved += 1
                 saved_scene_ids.add(segment['id'])
         stages.append(stage_summary('images' if kind == 'image' else 'videos', saved,
@@ -306,11 +284,7 @@ async def video_overview(video, resources):
 
 async def overview(project_id, video_id=None):
     videos = await selected_videos(project_id, video_id)
-<<<<<<< HEAD
-    resources = await asyncio.to_thread(scope.catalog)
-=======
     resources = scope.catalog()
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     return {'protocol': 1, 'project_id': project_id, 'manual_stages': True, 'generated_at': time.time(),
             'videos': [await video_overview(video, resources) for video in videos]}
 
@@ -432,36 +406,20 @@ async def preflight(body):
         add('queue_paused', not desktop.paused, 'Google Flow queue must be resumed.')
         guard = flow.generation_guard_status
         add('rate_limit', not guard.get('cooldown_active'), 'Provider cooldown is active; submissions wait until it expires.', warn=True)
-<<<<<<< HEAD
-    owned = scope.select(await asyncio.to_thread(scope.catalog), **ctx)
-=======
     owned = scope.select(scope.catalog(), **ctx)
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     if stage in {'whisperx', 'srt'}:
         accepted = {'elevenlabs', 'audio'} if stage == 'whisperx' else {'whisperx', 'json'}
         candidates = [r for r in owned if r['resource_kind'] in accepted]
         sid, kind = body.get('source_id'), body.get('source_kind')
         if sid:
             candidates = [r for r in candidates if r['id'] == sid and (not kind or r['resource_kind'] == kind)]
-<<<<<<< HEAD
-        available = await asyncio.to_thread(lambda: [r for r in candidates if resource_available(r)])
-=======
         available = [r for r in candidates if resource_available(r)]
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
         add('source', bool(available), 'The selected source is saved and belongs to this video.' if available else 'Choose a saved ' + ('merged/imported audio' if stage == 'whisperx' else 'transcript JSON') + ' belonging to this video.')
         if not sid and len(available) > 1:
             add('source_selection', False, 'Several sources are available. Choose the intended version explicitly before submitting.', warn=True)
     if stage == 'whisperx':
         try:
-<<<<<<< HEAD
-            # The check owns its 90-second timeout and subprocess cleanup.
-            # A shorter outer timeout cancelled cold Torch imports before a job existed.
-            info = await wx.check()
-            if not isinstance(info, dict):
-                raise ValueError('WhisperX environment check returned an invalid response.')
-=======
             info = await asyncio.wait_for(wx.check(), timeout=20)
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
             add('whisperx_environment', bool(info.get('ok')), 'WhisperX environment check passed.' if info.get('ok') else str(info.get('error') or 'WhisperX imports or dependencies are unavailable.'))
             from agent.services.production_settings import effective
             device = body.get('device') or (await effective(ctx))['whisperx']['device']
@@ -469,18 +427,7 @@ async def preflight(body):
                 add('cuda', info.get('cuda_available') is True, 'GPU transcription requires CUDA in the WhisperX environment. Choose CPU explicitly if CUDA is unavailable.')
             add('model', False, 'This check does not download a model or transcribe audio. The first model load may need network access.', warn=True)
         except asyncio.TimeoutError:
-<<<<<<< HEAD
-            add('whisperx_environment', False, 'Environment check exceeded 90 seconds. Run Check environment in WhisperX and inspect its error details.')
-        except HTTPException:
-            raise
-        except Exception as error:
-            logger.exception('WhisperX preflight environment check failed for video %s', ctx['video_id'])
-            add('whisperx_environment', False,
-                f'WhisperX environment check failed ({type(error).__name__}: {str(error) or "No error message"}). '
-                'Run Check environment in WhisperX. See backend.log for the full traceback.')
-=======
             add('whisperx_environment', False, 'Environment check exceeded 20 seconds. Run Check environment in WhisperX before starting.')
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     data = await storyboard.read_document(ctx['video_id']) if stage in {'image_prompts', 'video_prompts', 'images', 'videos', 'assembly'} else None
     direct_jobs = body.get('direct_jobs') if stage in {'images', 'videos'} else None
     if direct_jobs is not None:
@@ -543,15 +490,6 @@ async def preflight(body):
             add('visuals', generated or any(r['asset_type'] in {'image', 'video'} for r in assets), 'Load images or video clips and map every SRT scene before rendering.')
             add('assembly_plan', False, 'Select the exact audio, SRT and scene mapping, then run Check files & preview. This overview does not verify an unselected render plan.', warn=True)
     output = {'elevenlabs': el.output, 'whisperx': wx.output, 'srt': sub.output, 'assembly': assembly.output}.get(stage, desktop.ROOT)
-<<<<<<< HEAD
-    checks.extend(await asyncio.to_thread(storage_checks, output))
-    failures = [c for c in checks if c['status'] == 'fail']
-    if failures:
-        logger.warning('Production preflight blocked project=%s video=%s stage=%s failures=%s',
-                       ctx['project_id'], ctx['video_id'], stage,
-                       '; '.join(str(c['id']) + ': ' + str(c['message']) for c in failures))
-=======
     checks.extend(storage_checks(output))
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     return {**ctx, 'protocol': 1, 'stage': stage, 'manual_stages': True,
             'blocked': any(c['status'] == 'fail' for c in checks), 'checks': checks}

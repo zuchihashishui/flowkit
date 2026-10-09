@@ -165,11 +165,7 @@ async function refreshProjects() {
 async function selectProject(reload=false,deleted=false) {
   if(!deleted){
   if(!reload&&$('project-select').value===loadedProject){syncProjectContext();return;}
-<<<<<<< HEAD
   if(window.sceneBoard?.canChangeProject&&!window.sceneBoard.canChangeProject()){$('project-select').value=loadedProject;notice('Wait for the Prompt to Media action to finish before changing projects.',true);return;}
-=======
-  if(window.sceneBoard?.canChangeProject&&!window.sceneBoard.canChangeProject()){$('project-select').value=loadedProject;notice('Wait for the Scene Board action to finish before changing projects.',true);return;}
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   if(window.videoSettings&&!window.videoSettings.canChangeProject($('project-select').value)){$('project-select').value=loadedProject;return;}
   if(window.projectSettings&&!window.projectSettings.canChangeProject($('project-select').value)){$('project-select').value=loadedProject;return;}
   if(sceneSaving){$('project-select').value=loadedProject;notice('Wait for the scene to finish saving.',true);return;}
@@ -222,11 +218,7 @@ async function refreshVideos(preferred,deleted=false){
   await loadScenes(deleted);renderVideos();syncProjectContext();document.dispatchEvent(new Event('production-updated'));
 }
 async function selectVideo(id){
-<<<<<<< HEAD
   if(id!==loadedCollection&&window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){$('video-select').value=loadedCollection;notice('Wait for the Prompt to Media action to finish before changing videos.',true);return;}
-=======
-  if(id!==loadedCollection&&window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){$('video-select').value=loadedCollection;notice('Wait for the Scene Board action to finish before changing videos.',true);return;}
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   if(!discardSceneEdit())return;
   $('video-select').value=id;
   await loadScenes();renderVideos();
@@ -253,21 +245,12 @@ window.focusProductionJob=async id=>{
 window.sceneDownloads={focus:window.focusProductionJob,export:async id=>{await exportJob(id);renderJobs();},open:()=>{$('scene-downloads-title').focus({preventScroll:true});$('scene-downloads').scrollIntoView?.({block:'start'});}};
 window.refreshStudioProjects=refreshProjects;
 
-<<<<<<< HEAD
 async function loadScenes(deleted=false) {
   const id = $('video-select').value;
   if(!deleted&&id!==loadedCollection&&window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){$('video-select').value=loadedCollection;notice('Wait for the Prompt to Media action to finish before changing videos.',true);return;}
   const request = ++sceneRequest;
   if(!deleted&&window.videoSettings&&!window.videoSettings.canChangeVideo(id)){$('video-select').value=loadedCollection;return;}
   if(!deleted&&id!==loadedCollection&&window.storyboard?.canChangeVideo&&!window.storyboard.canChangeVideo(id)){$('video-select').value=loadedCollection;return;}
-=======
-async function loadScenes() {
-  const id = $('video-select').value;
-  if(id!==loadedCollection&&window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){$('video-select').value=loadedCollection;notice('Wait for the Scene Board action to finish before changing videos.',true);return;}
-  const request = ++sceneRequest;
-  if(window.videoSettings&&!window.videoSettings.canChangeVideo(id)){$('video-select').value=loadedCollection;return;}
-  if(id!==loadedCollection&&window.storyboard?.canChangeVideo&&!window.storyboard.canChangeVideo(id)){$('video-select').value=loadedCollection;return;}
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   if(loadedCollection!==id){
     detailId=null;clearDownloadPreview();
     for(const kind of ['voice']){
@@ -429,11 +412,7 @@ onForm('project-form', async () => {
 });
 onForm('edit-project', async () => { await api('PATCH', '/api/projects/' + projectId(), {name: $('edit-name').value}); await refreshProjects(); notice('Project updated.'); });
 onForm('create-video',async()=>{
-<<<<<<< HEAD
   const pid=projectId();if(window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){notice('Wait for the Prompt to Media action to finish before creating a video.',true);return;}if(!discardSceneEdit()||window.storyboard?.canChangeVideo&&!window.storyboard.canChangeVideo(''))return;
-=======
-  const pid=projectId();if(window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){notice('Wait for the Scene Board action to finish before creating a video.',true);return;}if(!discardSceneEdit()||window.storyboard?.canChangeVideo&&!window.storyboard.canChangeVideo(''))return;
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   const title=$('new-video-title').value.trim();if(!title)throw Error('Enter a video title.');
   const created=await api('POST','/api/videos',{project_id:pid,title,orientation:$('new-video-orientation').value});
   document.dispatchEvent(new CustomEvent('studio-record-created',{detail:{kind:'video'}}));
@@ -487,11 +466,7 @@ onForm('voice-form', async () => {
   await api('POST', '/api/desktop/jobs', {jobs: payload}); await refreshJobs(); notice(`${payload.length} narration job(s) queued.`);
 });
 $('project-select').onchange = () => action(selectProject);
-<<<<<<< HEAD
 $('video-select').onchange = () => action(async () => { if($('video-select').value!==loadedCollection&&window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){$('video-select').value=loadedCollection;notice('Wait for the Prompt to Media action to finish before changing videos.',true);return;} if (!discardSceneEdit()) { $('video-select').value = loadedCollection; return; } await loadScenes(); });
-=======
-$('video-select').onchange = () => action(async () => { if($('video-select').value!==loadedCollection&&window.sceneBoard?.canChangeVideo&&!window.sceneBoard.canChangeVideo()){$('video-select').value=loadedCollection;notice('Wait for the Scene Board action to finish before changing videos.',true);return;} if (!discardSceneEdit()) { $('video-select').value = loadedCollection; return; } await loadScenes(); });
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 $('refresh-projects').onclick = () => action(refreshProjects);
 $('refresh-videos').onclick=()=>action(async()=>{if(discardSceneEdit())await refreshVideos();},$('refresh-videos'));
 $('refresh-jobs').onclick = () => action(refreshJobs);

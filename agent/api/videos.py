@@ -61,19 +61,7 @@ async def update(vid: str, body: VideoUpdate):
 
 
 @router.delete("/{vid}")
-async def delete(vid: str, cascade: bool = False):
-    if cascade:
-        from agent.services.workspace_delete import delete as delete_workspace
-        return await delete_workspace(video_id=vid)
-    from agent.db.schema import get_db
-    from agent.api.desktop import connection
-    db = await get_db()
-    cursor = await db.execute('SELECT 1 FROM script_document WHERE video_id=? LIMIT 1', (vid,))
-    if await cursor.fetchone() or await _repo.list_scenes(vid):
-        raise HTTPException(409, 'This video contains a script or scenes. Only an empty video can be deleted.')
-    with connection() as media:
-        if media.execute("SELECT 1 FROM jobs WHERE json_extract(payload,'$.video_id')=? LIMIT 1", (vid,)).fetchone():
-            raise HTTPException(409, 'This video owns media jobs. Keep the video to preserve its results.')
+async def delete(vid: str):
     from agent.services.workflow_scope import has_owned_resources
     if has_owned_resources(video_id=vid):
         raise HTTPException(409, 'This video owns saved sources or jobs. Keep the video to preserve their relationships.')

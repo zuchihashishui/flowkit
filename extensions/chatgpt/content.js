@@ -31,26 +31,6 @@
   function composerScope() {
     const editor=findInput();
     return editor?.closest('[data-type="unified-composer"], [data-testid="composer"], #composer-background') || editor?.closest('form') || editor?.parentElement?.parentElement || editor?.parentElement;
-<<<<<<< HEAD
-=======
-  }
-
-  function sendButtons() {
-    const scope=composerScope();
-    if(!scope)return [];
-    return [...scope.querySelectorAll('button, [role="button"]')].filter(btn=>{
-      if(!visible(btn))return false;
-      const label=(btn.getAttribute('aria-label')||btn.getAttribute('title')||btn.textContent||'').trim();
-      if(/stop|cancel|dictat|voice/i.test(label)||btn.getAttribute('data-testid')==='stop-button')return false;
-      return btn.id==='composer-submit-button'||btn.getAttribute('data-testid')==='send-button'||/^(send(?: prompt| message)?|gửi(?: tin nhắn)?|送信)$/i.test(label)||
-        !label&&btn.matches('button[type="submit"]')&&btn.form?.contains(findInput());
-    });
-  }
-
-  function findSendButton() {
-    const enabled=sendButtons().filter(btn=>!btn.disabled&&!btn.closest('[aria-disabled="true"], [data-loading="true"], [inert]'));
-    return enabled.length===1?enabled[0]:null;
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   }
 
   function sendButtons() {
@@ -132,15 +112,10 @@
       // Entering Temporary Chat can remove the mode switch entirely.
       // Positive Temporary UI is sufficient for Chat, never for Work.
       if(mode==='chat'&&!button&&!composerButton('work')&&temporaryEnabled())return;
-<<<<<<< HEAD
       if (button && !button.disabled && button.getAttribute('aria-disabled') !== 'true' && attempts < 5 && i-lastClick >= 3) {
         attempts++;lastClick=i;
         progress('SELECTING_MODE',{detail:`Selecting ${mode}; attempt ${attempts}/5`});
         button.click();
-=======
-      if (button && !button.disabled && button.getAttribute('aria-disabled') !== 'true' && !clicked) {
-        button.click(); clicked = true;
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
       }
       await sleep(500);
     }
@@ -335,7 +310,6 @@
     return !el.closest('[hidden], [aria-hidden="true"]') && getComputedStyle(el).display!=='none' && getComputedStyle(el).visibility!=='hidden';
   }
   function responseScope(latest) {
-<<<<<<< HEAD
     if(!latest)return null;
     const scope=latest.closest('[data-chatgpt-search-unit-key$=":assistant"], [data-content-search-unit-key$=":assistant"], [data-turn-key], article[data-testid^="conversation-turn"], [data-testid^="conversation-turn-"], [data-message-author-role="assistant"]') || latest;
     // DIL and legacy toolbars can be siblings of the response root or its
@@ -346,28 +320,13 @@
       const keys=new Set(roots.filter(el=>parent.contains(el)).map(messageKey));
       if(keys.size!==1||!keys.has(key))break;
       if([...parent.querySelectorAll('.turn-action-controls button[aria-label="Copy"], .turn-action-controls button[aria-label="Rate response"], .turn-action-controls button[aria-label="Regenerate response"], .turn-action-controls button[aria-label="Copy response"]')].some(el=>!el.closest('pre, code, [data-message-author-role="user"], [data-chatgpt-search-unit-key$=":user"], [data-content-search-unit-key$=":user"]')&&hasVisibleState(el)))return parent;
-=======
-    const scope=latest?.closest('[data-chatgpt-search-unit-key$=":assistant"], [data-content-search-unit-key$=":assistant"], [data-turn-key], article[data-testid^="conversation-turn"], [data-testid^="conversation-turn-"], [data-message-author-role="assistant"]');
-    if(!scope?.matches('[data-chatgpt-search-unit-key$=":assistant"], [data-content-search-unit-key$=":assistant"]'))return scope;
-    // The supplied Temporary layout puts turn-action-controls outside the
-    // search unit. Ascend only within this answer, never into another turn.
-    for(let parent=scope.parentElement,depth=0;parent&&depth<4;parent=parent.parentElement,depth++){
-      if(parent.matches('body, main, html'))break;
-      const keys=new Set([...parent.querySelectorAll('[data-markdown-text-style="assistant-message"], [data-message-author-role="assistant"]')].map(messageKey));
-      if(keys.size!==1||!keys.has(messageKey(latest)))break;
-      if(parent.querySelector('.turn-action-controls button[aria-label="Copy"], .turn-action-controls button[aria-label="Rate response"], .turn-action-controls button[aria-label="Regenerate response"], .turn-action-controls button[aria-label="Copy response"]'))return parent;
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     }
     return scope;
   }
   function generationPhase(latest) {
-<<<<<<< HEAD
     // A standalone DIL response may have no legacy turn wrapper. Do not
     // let a busy preview or an older answer elsewhere block this response.
     const scope=responseScope(latest) || latest || document;
-=======
-    const scope=responseScope(latest) || document;
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     const status=[...scope.querySelectorAll('[role="status"], [data-testid="thinking-indicator"]')].filter(hasVisibleState).map(el=>el.textContent||'').join(' ');
     if(/\b(thinking|reasoning)\b/i.test(status))return 'THINKING';
     if(/\b(searching|running|working|using tools)\b/i.test(status))return 'USING_TOOLS';
@@ -380,11 +339,7 @@
     const scope=responseScope(latest);
     // Temporary Chat places its toolbar beside the markdown root inside an
     // assistant search unit. Never mistake a code-block Copy for completion.
-<<<<<<< HEAD
     if(scope && [...scope.querySelectorAll('[data-testid="copy-turn-action-button"], button[aria-label="Copy response"], button[aria-label="Good response"], button[aria-label="Bad response"], button[aria-label="Copy"], button[aria-label="Rate response"], button[aria-label="Regenerate response"]')].some(el=>!el.closest('pre, code, [data-markdown-text-style="assistant-message"], [data-message-author-role="user"], [data-chatgpt-search-unit-key$=":user"], [data-content-search-unit-key$=":user"]')&&hasVisibleState(el)))return 'response-actions';
-=======
-    if(scope && [...scope.querySelectorAll('[data-testid="copy-turn-action-button"], button[aria-label="Copy response"], button[aria-label="Good response"], button[aria-label="Bad response"], button[aria-label="Copy"], button[aria-label="Rate response"], button[aria-label="Regenerate response"]')].some(el=>!el.closest('pre, code, [data-markdown-text-style="assistant-message"]')&&hasVisibleState(el)))return 'response-actions';
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     return '';
   }
   async function discoverModels() {
@@ -604,12 +559,8 @@
     throw new Error('Send could not start: '+detail+'. No prompt was sent.');
   }
 
-<<<<<<< HEAD
   let pendingSrtLink = null, pendingZipPreview = null;
   const previewSelector='dialog, [role="dialog"], [role="complementary"], aside';
-=======
-  let pendingSrtLink = null;
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   function findSrtLink(message, zip=false) {
     const links = [...message.querySelectorAll('a[href], button[aria-label], [role="link"], [role="button"][data-file-reference="true"], [role="button"][aria-label^="Download "]')].filter(el => {
       if (!visible(el) || el.disabled || el.closest('[aria-busy="true"], [aria-disabled="true"], [data-loading="true"]')) return false;
@@ -640,13 +591,9 @@
       // or response toolbar. A ready file is evidence only for file-output jobs;
       // generation must still stop and the response must pass the stable polls.
       const readyFile=(downloadSrt||downloadPromptZip) && !phase ? findSrtLink(latest,downloadPromptZip) : null;
-<<<<<<< HEAD
       const readyFileEvidence = readyFile && (readyFile.matches('[data-file-reference="true"][aria-busy="false"]') ||
         readyFile.matches('[data-d-component="pressable"][role="link"][tabindex]') && readyFile.closest(DIL_RESPONSE));
       const evidence=completionEvidence(latest) || (readyFileEvidence ? (downloadPromptZip?'zip-file-ready':'srt-file-ready') : '');
-=======
-      const evidence=completionEvidence(latest) || (readyFile?.matches('[data-file-reference="true"][aria-busy="false"]') ? (downloadPromptZip?'zip-file-ready':'srt-file-ready') : '');
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
       if(text!==lastText || key!==lastKey)lastChange=Date.now();
       progress(phase || (evidence?'VERIFYING_COMPLETION':'WAITING_COMPLETION'),{chars:text.length,lastChange,completionEvidence:evidence});
       if (phase || !text || !evidence) {
@@ -657,11 +604,7 @@
         if(downloadSrt||downloadPromptZip) {
           const link=findSrtLink(latest,downloadPromptZip);
           if(link){
-<<<<<<< HEAD
             pendingSrtLink={element:link,messageKey:key,requestId:activeRequest,zip:downloadPromptZip};
-=======
-            pendingSrtLink={element:link,requestId:activeRequest,zip:downloadPromptZip};
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
             return {content:text,hasSrtFile:downloadSrt,hasPromptZip:downloadPromptZip};
           }
           throw Error('ChatGPT finished without a downloadable '+(downloadPromptZip?'.zip':'.srt')+' link. The response remains in the tab. No new prompt was sent.');
@@ -694,17 +637,10 @@
     activeRequest=msg.requestId || 'local-request';activePhase='PREPARING';submitted=false;
     try {
       if (isStreaming()) throw new Error("ChatGPT is already generating. Wait before submitting.");
-<<<<<<< HEAD
       if(msg.downloadPromptZip&&(!msg.textSessionId||!['work','chat'].includes(msg.composerMode)||msg.temporary!==false))throw Error('Prompt ZIP batches require Work or Chat / Temporary OFF.');
       if(msg.textSessionId&&(((msg.downloadPromptZip||msg.videoPromptText)?(msg.temporary!==false||!['work','chat'].includes(msg.composerMode)):(msg.temporary!==true||msg.composerMode!=='chat'))||msg.customGPT||msg.attachment))throw Error(msg.downloadPromptZip?'Text to Prompt ZIP requires Work or Chat / Temporary OFF. No text was sent.':'Text to Prompt requires Chat / Temporary ON. No text was sent.');
 
       if(msg.promptAttachment&&(!msg.textSessionId||(msg.continueConversation&&!msg.videoPromptText)||msg.attachment))throw Error('Prompt TXT is allowed only on the first Text to Prompt turn. No prompt was sent.');
-=======
-      if(msg.downloadPromptZip&&(!msg.textSessionId||msg.composerMode!=='work'||msg.temporary!==false))throw Error('Prompt ZIP batches require Work / Temporary OFF.');
-      if(msg.textSessionId&&((msg.downloadPromptZip?(msg.temporary!==false||msg.composerMode!=='work'):(msg.temporary!==true||msg.composerMode!=='chat'))||msg.customGPT||msg.attachment))throw Error(msg.downloadPromptZip?'Text to Prompt ZIP requires Work / Temporary OFF. No text was sent.':'Text to Prompt requires Chat / Temporary ON. No text was sent.');
-
-      if(msg.promptAttachment&&(!msg.textSessionId||msg.continueConversation||msg.attachment))throw Error('Prompt TXT is allowed only on the first Text to Prompt turn. No prompt was sent.');
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 
       // Start new conversation if requested
       if (msg.newConversation !== false) {
@@ -731,20 +667,12 @@
       if(!customGPT&&!continuing)await selectComposerMode(composerMode);
       if (msg.temporary){progress('ENABLING_TEMPORARY');await enableTemporaryChat();}
       progress('SELECTING_MODEL');
-<<<<<<< HEAD
       if(!continuing)await selectModel(customGPT?'auto':msg.model);
-=======
-      const selectedModel = continuing?null:await selectModel(customGPT?'auto':msg.model);
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
       if(!customGPT)checkComposerStillSelected(composerMode);
       if (msg.temporary === false && temporaryEnabled()) throw new Error('Temporary Chat is still active for a regular-chat request. No prompt was sent.');
       const beforeMessages = new Set(assistantMessages().map(messageKey));
       const failure=pageFailure();if(failure)throw failure;
-<<<<<<< HEAD
       const fileFirst=!!msg.promptAttachment&&(msg.downloadPromptZip===true||msg.videoPromptText===true);
-=======
-      const fileFirst=!!msg.promptAttachment&&msg.downloadPromptZip===true;
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
       if(fileFirst){progress('ATTACHING_FILE');await attachFile(msg.promptAttachment,true,true);}
       progress('TYPING');
       await typeMessage(msg.userMessage);
@@ -792,11 +720,7 @@
       return { ok: true, content: response?.hasPromptZip?response.content:response, nativeDownload, conversation_url: window.location.href, textSessionProof:currentTextSessionProof() };
     } catch (err) {
       return { ok: false, error: err.message, code: err.code,phase:activePhase,submitted,partialResponse:err.partialResponse };
-<<<<<<< HEAD
     } finally { activeRequest=null;pendingZipPreview=null; }
-=======
-    } finally { activeRequest=null; }
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
   }
 
   // ── Listen for messages from background script ───────────
@@ -810,7 +734,6 @@
     }
     if(msg.type==='clickSrtDownload'||msg.type==='clickPromptZipDownload'){
       const pending=pendingSrtLink;
-<<<<<<< HEAD
       if(!pending||!!pending.zip!==(msg.type==='clickPromptZipDownload')||pending.requestId!==msg.requestId||activeRequest!==msg.requestId){
         sendResponse({ok:false,error:'The completed output file link is no longer available.'});return;
       }
@@ -843,13 +766,6 @@
       if(candidates.length>1){sendResponse({ok:false,error:'More than one Download button in the ZIP preview. Choose the correct file manually.'});return;}
       if(candidates.length===1){pending.clicked=true;candidates[0].click();sendResponse({ok:true,clicked:true,detail:'Clicked Download in the ZIP preview.'});return;}
       sendResponse({ok:true,clicked:false,detail:panels.length?'ZIP preview open; waiting for its Download button.':'Waiting for Chrome download or a ZIP preview.'});return;
-=======
-      if(!pending||!!pending.zip!==(msg.type==='clickPromptZipDownload')||pending.requestId!==msg.requestId||activeRequest!==msg.requestId||!pending.element.isConnected){
-        sendResponse({ok:false,error:'The completed output file link is no longer available.'});return;
-      }
-      pendingSrtLink=null;
-      pending.element.click();sendResponse({ok:true});return;
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     }
     if (msg.type === 'discoverModels' || msg.type === 'preflight') {
       (msg.type==='discoverModels'?discoverModels():preflight(msg)).then(data=>sendResponse({ok:true,data})).catch(e=>sendResponse({ok:false,error:e.message}));return true;

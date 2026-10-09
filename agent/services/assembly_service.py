@@ -1,5 +1,5 @@
 """Local image/video assembly. Immutable inputs, SRT timeline and one FFmpeg job at a time."""
-from agent.services import workflow_scope as scope, output_paths
+from agent.services import workflow_scope as scope
 
 import asyncio
 from contextlib import contextmanager
@@ -136,19 +136,7 @@ class AssemblyService:
         return {**dict(row), 'metadata': json.loads(row['metadata'])}
 
     def path(self, asset):
-        metadata = asset['metadata'] if isinstance(asset['metadata'], dict) else json.loads(asset['metadata'])
-        if asset['kind'] == 'audio' and metadata.get('elevenlabs_source_id'):
-            from agent.services.whisperx_service import service as narration_sources
-            return narration_sources.source.audio_path(metadata['elevenlabs_source_id'], 'merged')
-        category = {'srt': 'srt', 'audio': 'audio', 'image': 'images', 'video': 'videos'}[asset['kind']]
-        return output_paths.resource_path(self, 'asset', asset['id'],
-            self.output / 'assets' / asset['filename'], category + '/imports/' + asset['filename'])
-
-    def directory(self, jid):
-        return output_paths.resource_path(self, 'assembly', jid, self.output / jid, f'exports/{jid}')
-
-    def thumbnail_path(self, asset):
-        return self.path(asset).with_name(asset['id'] + '-thumb.jpg')
+        return self.output / 'assets' / asset['filename']
 
     async def import_upload(self, kind, upload, context=None, sources=(), metadata_extra=None):
         name = (upload.filename or '').replace('\\', '/').rsplit('/', 1)[-1]
@@ -156,11 +144,9 @@ class AssemblyService:
         if suffix not in EXTENSIONS.get(kind, set()):
             raise ValueError('Unsupported input format for ' + kind + '.')
         aid = str(uuid.uuid4())
-        category = {'srt': 'srt', 'audio': 'audio', 'image': 'images', 'video': 'videos'}[kind]
-        target = output_paths.owned_path(self.output / 'assets' / (aid + suffix), context,
-            category + '/imports/' + aid + suffix)
-        folder = target.parent
+        folder = self.output / 'assets'
         folder.mkdir(parents=True, exist_ok=True)
+        target = folder / (aid + suffix)
         part = target.with_suffix('.part')
         size = 0
         try:
@@ -201,7 +187,6 @@ class AssemblyService:
             with self.db() as db:
                 db.execute('INSERT INTO assembly_assets VALUES(?,?,?,?,?,?)', (aid, kind, name[:240], target.name, json.dumps(metadata), time.time()))
                 scope.record(db, 'asset', aid, context, sources)
-                output_paths.remember(db, 'asset', aid, target)
             return self.asset(aid)
         except BaseException:
             target.unlink(missing_ok=True)
@@ -209,29 +194,6 @@ class AssemblyService:
             raise
         finally:
             part.unlink(missing_ok=True)
-
-    async def use_elevenlabs(self, source_id, context=None):
-        """Register the original merged narration without copying its bytes."""
-        from agent.services.whisperx_service import service as narration_sources
-        parent = scope.ref('elevenlabs', source_id)
-        context = scope.resolve(context, [parent])
-        job = narration_sources.source.job(source_id)
-        path = narration_sources.source.audio_path(source_id, 'merged')
-        stat = path.stat()
-        info = await probe(path)
-        streams = [s for s in info['streams'] if s['codec_type'] == 'audio']
-        duration = float(streams[0].get('duration') or info.get('format', {}).get('duration') or 0) if streams else 0
-        if not math.isfinite(duration) or duration <= 0:
-            raise ValueError('The merged narration has no readable audio duration.')
-        metadata = {'elevenlabs_source_id': source_id, 'duration': duration, 'bytes': stat.st_size}
-        existing = next((a for a in self.assets() if a['metadata'].get('elevenlabs_source_id') == source_id), None)
-        aid = existing['id'] if existing else str(uuid.uuid4())
-        with self.db() as db:
-            db.execute('INSERT OR REPLACE INTO assembly_assets VALUES(?,?,?,?,?,?)',
-                (aid, 'audio', 'ElevenLabs: ' + (job['title'] or 'Merged narration'), path.name, json.dumps(metadata), time.time()))
-            if not existing:
-                scope.record(db, 'asset', aid, context, [parent])
-        return self.asset(aid)
 
     async def use_source(self, kind, source_id, context=None):
         # IDs resolve only through existing services; no user-provided filesystem paths.
@@ -243,8 +205,6 @@ class AssemblyService:
             from agent.services.whisperx_service import service
             _, path = service.resolve_source(source_id)
             parent = scope.audio_ref(service, source_id)
-            if parent['kind'] == 'elevenlabs':
-                return await self.use_elevenlabs(source_id, context)
         class Reader:
             filename = ('subtitles-' + source_id + '.srt') if kind == 'srt' else ('narration-' + source_id + path.suffix)
             async def read(self, n):
@@ -322,12 +282,10 @@ class AssemblyService:
             raise ValueError('Install FFmpeg and FFprobe and restart Studio.')
         plan['render_version'] = 2
         jid, now = str(uuid.uuid4()), time.time()
-        folder = output_paths.owned_path(self.output / jid, context, f'exports/{jid}')
         with self.db() as db:
             db.execute('INSERT INTO assembly_jobs VALUES(?,?,?,?,?,?,?,?,?)',
                 (jid, body['title'], 'QUEUED', 'Queued', 0, json.dumps(plan, ensure_ascii=False), None, now, now))
             scope.record(db, 'assembly', jid, context, [scope.ref('asset', i) for i in dict.fromkeys([body['audio_id'],body['srt_id'],*body.get('image_ids', []),*body.get('video_ids', [])])])
-            output_paths.remember(db, 'assembly', jid, folder)
         return {'id': jid}
 
     def jobs(self, filters=None):
@@ -336,9 +294,7 @@ class AssemblyService:
             jobs = [dict(r) for r in db.execute(f'SELECT id,title,state,phase,progress,error,created,updated FROM assembly_jobs {where} ORDER BY created DESC LIMIT 500', params)]
         from agent.services import render_cache
         for job in jobs:
-            folder = self.directory(job['id'])
-            job['saved_scenes'] = len(render_cache.read(folder))
-            job['output_path'] = str(folder / 'video.mp4')
+            job['saved_scenes'] = len(render_cache.read(self.output/job['id']))
             job['can_resume'] = job['state'] in {'FAILED','CANCELLED','INTERRUPTED'}
         return jobs
 
@@ -352,7 +308,7 @@ class AssemblyService:
             row = db.execute('SELECT state FROM assembly_jobs WHERE id=?', (jid,)).fetchone()
         if not row or row['state'] != 'COMPLETED':
             raise ValueError('The rendered MP4 is not available yet.')
-        return self.directory(jid) / 'video.mp4'
+        return self.output / jid / 'video.mp4'
 
     async def cancel(self, jid):
         with self.db() as db:
@@ -375,7 +331,7 @@ class AssemblyService:
         checked = await check(self, plan)
         if checked['blocked']:
             raise ValueError('Preflight failed: ' + '; '.join(m for c in checked['checks'] if c['status']=='ERROR' for m in c['messages']))
-        folder = self.directory(jid)
+        folder = self.output / jid
         folder.mkdir(parents=True, exist_ok=True)
         frames_dir = folder / 'frames'
         frames_dir.mkdir(exist_ok=True)
@@ -481,13 +437,6 @@ class AssemblyService:
             raise ValueError('Rendered MP4 is missing the expected video or audio stream.')
         if abs(float(info['format']['duration'])-plan['duration']) > max(.2, 2/plan['fps']):
             raise ValueError('Rendered duration does not match the narration.')
-        # Validate the video stream itself: container duration alone can hide a
-        # missing/extra scene frame behind a longer narration or subtitle track.
-        expected_frames = sum(c['frames'] for c in plan['scenes'])
-        if int(video.get('nb_frames', 0)) != expected_frames:
-            raise ValueError('Rendered video frame count does not match the SRT timeline.')
-        if abs(float(video.get('duration', 0))-expected_frames/plan['fps']) > 1/plan['fps']:
-            raise ValueError('Rendered video stream duration does not match its expected frames.')
         (folder/'video.part.mp4').replace(folder/'video.mp4')
         shutil.rmtree(frames_dir)
         shutil.rmtree(folder/'clips', ignore_errors=True)
@@ -508,10 +457,9 @@ class AssemblyService:
         except Exception as e:
             self.update(jid, state='FAILED', phase='Failed', error=str(e) or 'Rendering timed out after 6 hours.')
         finally:
-            folder = self.directory(jid)
-            (folder/'video.part.mp4').unlink(missing_ok=True)
-            shutil.rmtree(folder/'frames', ignore_errors=True)
-            for part in (folder/'clips').glob('*.part.mp4'):
+            (self.output/jid/'video.part.mp4').unlink(missing_ok=True)
+            shutil.rmtree(self.output/jid/'frames', ignore_errors=True)
+            for part in (self.output/jid/'clips').glob('*.part.mp4'):
                 part.unlink(missing_ok=True)
 
     async def run(self):

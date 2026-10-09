@@ -25,11 +25,7 @@ class Plan(Scoped):
     fps: Literal[24, 30, 60] = 30
     fit: Literal['fit', 'crop'] = 'fit'
     image_motion: Literal['none', 'zoom_in', 'zoom_out'] = 'none'
-<<<<<<< HEAD
-    subtitles: Literal['burn', 'soft', 'off'] = 'off'
-=======
     subtitles: Literal['burn', 'soft', 'off'] = 'burn'
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
     font: str = Field(default='Yu Gothic', min_length=1, max_length=80, pattern=r'^[\w .-]+$')
 
 class Source(Scoped):
@@ -38,32 +34,7 @@ class Source(Scoped):
 
 @router.get('/status')
 async def status(project_id: str | None = None, video_id: str | None = None, unassigned: bool = False):
-<<<<<<< HEAD
-    output_directory = None
-    if project_id and video_id and not unassigned:
-        from agent.services.video_files import folders
-        await context(project_id, video_id)
-        output_directory = (await folders(project_id, video_id))['folders']['exports']
-    return {'workspace_version': 1, 'output_directory': output_directory, 'production_version': 1, 'mixed_media_version': 1, 'image_motion_version': 1, 'assets': scope.select(scope.annotate(service, 'asset', service.assets()), project_id, video_id, unassigned), 'jobs': scope.select(scope.annotate(service, 'assembly', service.jobs(dict(project_id=project_id, video_id=video_id, unassigned=unassigned))), project_id, video_id, unassigned), 'ffmpeg': bool(shutil.which('ffmpeg')), 'ffprobe': bool(shutil.which('ffprobe'))}
-
-
-class ProjectSources(Scoped):
-    visual_mode: Literal['images', 'mixed'] = 'mixed'
-
-
-@router.post('/project-sources')
-async def project_sources(body: ProjectSources):
-    from agent.services.assembly_sources import load_project_sources
-    try:
-        ctx = await context(body.project_id, body.video_id)
-        if not ctx.get('video_id'):
-            raise ValueError('Select a project and video first.')
-        return await load_project_sources(service, ctx, body.visual_mode)
-    except (ValueError, OSError) as e:
-        raise HTTPException(409, str(e)) from e
-=======
     return {'production_version': 1, 'mixed_media_version': 1, 'image_motion_version': 1, 'assets': scope.select(scope.annotate(service, 'asset', service.assets()), project_id, video_id, unassigned), 'jobs': scope.select(scope.annotate(service, 'assembly', service.jobs(dict(project_id=project_id, video_id=video_id, unassigned=unassigned))), project_id, video_id, unassigned), 'ffmpeg': bool(shutil.which('ffmpeg')), 'ffprobe': bool(shutil.which('ffprobe'))}
->>>>>>> ae804f6f6558557cae163f49f007427697ddd2af
 
 @router.post('/import/{kind}')
 async def import_file(kind: Literal['srt', 'audio', 'image', 'video'], file: UploadFile = File(...), project_id: str | None = Form(None), video_id: str | None = Form(None)):
@@ -129,8 +100,8 @@ async def clip(aid: UUID):
 @router.get('/images/{aid}/thumbnail')
 async def thumbnail(aid: UUID):
     try:
-        asset = service.asset(str(aid), 'image')
-        return FileResponse(service.thumbnail_path(asset), media_type='image/jpeg')
+        service.asset(str(aid), 'image')
+        return FileResponse(service.output/'assets'/(str(aid)+'-thumb.jpg'), media_type='image/jpeg')
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
 
