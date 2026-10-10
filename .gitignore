@@ -8,6 +8,7 @@ node_modules/
 *.db-shm
 output/
 .env
-tests
 
 .venv-whisperx/
+
+test-results/
